@@ -5,7 +5,7 @@ import itertools
 import networkx as nx
 from networkx.algorithms import dag
 
-import quantlib.graphs.graphs
+import quantlib.editing.graphs.graphs
 
 
 class scope_name_workaround(object):
@@ -102,8 +102,8 @@ class ONNXGraph(object):
         for i_op, opnode in enumerate(self.jit_graph.nodes()):
 
             # populate kernel partition of the computational graph
-            opnode_id = 'O' + quantlib.graphs.graphs.__NODE_ID_FORMAT__.format(i_op)
-            opnodes_dict[opnode_id] = quantlib.graphs.graphs.nodes.ONNXNode(opnode)
+            opnode_id = 'O' + quantlib.editing.graphs.graphs.__NODE_ID_FORMAT__.format(i_op)
+            opnodes_dict[opnode_id] = quantlib.editing.graphs.graphs.nodes.ONNXNode(opnode)
 
             # populate memory partition of the computational graph
             # I might encouter the same data node ('torch._C.Value') again in
@@ -116,9 +116,9 @@ class ONNXGraph(object):
                 try:  # the data node has already been discovered
                     datanode_id = datanode_2_onnx_id[datanode_name]
                 except KeyError:
-                    datanode_id = 'D' + quantlib.graphs.graphs.__NODE_ID_FORMAT__.format(next(datanode_id_gen))
+                    datanode_id = 'D' + quantlib.editing.graphs.graphs.__NODE_ID_FORMAT__.format(next(datanode_id_gen))
                     datanode_2_onnx_id[datanode_name] = datanode_id
-                    datanodes_dict[datanode_id] = quantlib.graphs.graphs.nodes.ONNXNode(in_datanode)
+                    datanodes_dict[datanode_id] = quantlib.editing.graphs.graphs.nodes.ONNXNode(in_datanode)
                 arcs.append((datanode_id, opnode_id))
 
             for out_datanode in opnode.outputs():
@@ -126,14 +126,14 @@ class ONNXGraph(object):
                 try:  # the data node has already been discovered
                     datanode_id = datanode_2_onnx_id[datanode_name]
                 except KeyError:
-                    datanode_id = 'D' + quantlib.graphs.graphs.__NODE_ID_FORMAT__.format(next(datanode_id_gen))
+                    datanode_id = 'D' + quantlib.editing.graphs.graphs.__NODE_ID_FORMAT__.format(next(datanode_id_gen))
                     datanode_2_onnx_id[datanode_name] = datanode_id
-                    datanodes_dict[datanode_id] = quantlib.graphs.graphs.nodes.ONNXNode(out_datanode)  # get_datanode_attributes(out_datanode)
+                    datanodes_dict[datanode_id] = quantlib.editing.graphs.graphs.nodes.ONNXNode(out_datanode)  # get_datanode_attributes(out_datanode)
                 arcs.append((opnode_id, datanode_id))
 
         self.nx_graph = nx.DiGraph()
-        self.nx_graph.add_nodes_from(set(opnodes_dict.keys()), bipartite=quantlib.graphs.graphs.__KERNEL_PARTITION__)
-        self.nx_graph.add_nodes_from(set(datanodes_dict.keys()), bipartite=quantlib.graphs.graphs.__MEMORY_PARTITION__)
+        self.nx_graph.add_nodes_from(set(opnodes_dict.keys()), bipartite=quantlib.editing.graphs.graphs.__KERNEL_PARTITION__)
+        self.nx_graph.add_nodes_from(set(datanodes_dict.keys()), bipartite=quantlib.editing.graphs.graphs.__MEMORY_PARTITION__)
         self.nx_graph.add_edges_from(set(arcs))
 
         self.nodes_dict = {**opnodes_dict, **datanodes_dict}
@@ -151,13 +151,13 @@ class PyTorchGraph(object):
         assert '' not in {G.nodes[n]['scope'] for n in G.nodes}, "Argument graph {} has unscoped nodes.".format(G)
 
         g = nx.get_node_attributes(G, 'scope')
-        opnodes   = {scope for n, scope in g.items() if G.nodes[n]['bipartite'] == quantlib.graphs.graphs.__KERNEL_PARTITION__}
-        datanodes = {scope for n, scope in g.items() if G.nodes[n]['bipartite'] == quantlib.graphs.graphs.__MEMORY_PARTITION__}
+        opnodes   = {scope for n, scope in g.items() if G.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__}
+        datanodes = {scope for n, scope in g.items() if G.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__MEMORY_PARTITION__}
         arcs      = {arc for arc in map(lambda a: (g[a[0]], g[a[-1]]), G.edges)}
 
         self.nx_graph = nx.DiGraph()
-        self.nx_graph.add_nodes_from(opnodes, bipartite=quantlib.graphs.graphs.__KERNEL_PARTITION__)
-        self.nx_graph.add_nodes_from(datanodes, bipartite=quantlib.graphs.graphs.__MEMORY_PARTITION__)
+        self.nx_graph.add_nodes_from(opnodes, bipartite=quantlib.editing.graphs.graphs.__KERNEL_PARTITION__)
+        self.nx_graph.add_nodes_from(datanodes, bipartite=quantlib.editing.graphs.graphs.__MEMORY_PARTITION__)
         self.nx_graph.add_edges_from(arcs)
 
         # remove data nodes which are used internaly to a PyTorch `nn.Module` (i.e., as "working memory");
@@ -171,9 +171,9 @@ class PyTorchGraph(object):
 
         onnx_scope_2_pytorch_id = {}
         for n in dag.topological_sort(self.nx_graph):
-            if self.nx_graph.nodes[n]['bipartite'] == quantlib.graphs.graphs.nodes.__KERNEL_PARTITION__:
+            if self.nx_graph.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.nodes.__KERNEL_PARTITION__:
                 node_id = 'O' + __NODE_ID_FORMAT__.format(next(opnode_id_gen))
-            elif self.nx_graph.nodes[n]['bipartite'] == quantlib.graphs.graphs.__MEMORY_PARTITION__:
+            elif self.nx_graph.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__MEMORY_PARTITION__:
                 node_id = 'D' + __NODE_ID_FORMAT__.format(next(datanode_id_gen))
             onnx_scope_2_pytorch_id[n] = node_id
 
@@ -185,20 +185,20 @@ class PyTorchGraph(object):
         datanodes_dict = {}
 
         # populate kernel partition of the computational graph
-        for n in {n for n in self.nx_graph if self.nx_graph.nodes[n]['bipartite'] == quantlib.graphs.graphs.__KERNEL_PARTITION__}:
+        for n in {n for n in self.nx_graph if self.nx_graph.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__}:
             onnx_scope = self.pytorch_id_2_onnx_scope[n]
-            if 'torch.view' in onnx_scope:  # TODO: mind quantlib/graphs/grrules/__init__.py:L16
-                obj = quantlib.graphs.graphs.ViewFlattenNd()
+            if 'torch.view' in onnx_scope:  # TODO: mind quantlib.editing.graphs/grrules/__init__.py:L16
+                obj = quantlib.editing.graphs.graphs.ViewFlattenNd()
             else:
                 obj = PyTorchGraph.get_pytorch_module_by_name(net, onnx_scope)
-            opnodes_dict[n] = quantlib.graphs.graphs.PyTorchNode(obj)
+            opnodes_dict[n] = quantlib.editing.graphs.graphs.PyTorchNode(obj)
 
         # populate memory partition of the computational graph
         onnx_scope_2_onnx_id = {v: k for k, v in nx.get_node_attributes(G, 'scope').items()}
-        for n in {n for n in self.nx_graph.nodes if self.nx_graph.nodes[n]['bipartite'] == quantlib.graphs.graphs.__MEMORY_PARTITION__}:
+        for n in {n for n in self.nx_graph.nodes if self.nx_graph.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__MEMORY_PARTITION__}:
             onnx_scope = self.pytorch_id_2_onnx_scope[n]
             obj = onnxgraph.nodes_dict[onnx_scope_2_onnx_id[onnx_scope]].nobj
-            datanodes_dict[n] = quantlib.graphs.graphs.PyTorchNode(obj)
+            datanodes_dict[n] = quantlib.editing.graphs.graphs.PyTorchNode(obj)
 
         self.nodes_dict = {**opnodes_dict, **datanodes_dict}
 
@@ -208,8 +208,8 @@ class PyTorchGraph(object):
     @staticmethod
     def find_internal_datanodes(G):
 
-        opnodes   = {n for n in G.nodes if G.nodes[n]['bipartite'] == quantlib.graphs.graphs.__KERNEL_PARTITION__}
-        datanodes = {n for n in G if G.nodes[n]['bipartite'] == quantlib.graphs.graphs.__MEMORY_PARTITION__}
+        opnodes   = {n for n in G.nodes if G.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__}
+        datanodes = {n for n in G if G.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__MEMORY_PARTITION__}
 
         internal_datanodes = []
         for datanode in datanodes:

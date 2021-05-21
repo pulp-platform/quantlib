@@ -5,12 +5,12 @@ import math
 import torch
 import torch.nn as nn
 
-import quantlib.graphs as qg
-from quantlib.graphs.grrules.dporules import DPORule
-from quantlib.graphs.grrules import Seeker
-from quantlib.graphs.graphs import __KERNEL_PARTITION__, __NODE_ID_FORMAT__, PyTorchNode
+import quantlib.editing.graphs as qg
+from quantlib.editing.graphs.grrules.dporules import DPORule
+from quantlib.editing.graphs.grrules import Seeker
+from quantlib.editing.graphs.graphs import __KERNEL_PARTITION__, __NODE_ID_FORMAT__, PyTorchNode
 
-import quantlib.algorithms as qa
+import quantlib.editing.algorithms as qa
 
 from .folding import foldsteinqconvbnste, foldconvbnste, foldsteinqconvbn
 

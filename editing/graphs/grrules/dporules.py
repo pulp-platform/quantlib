@@ -2,7 +2,7 @@ import networkx as nx
 import itertools
 
 from .seeker import Seeker
-import quantlib.graphs.graphs
+import quantlib.editing.graphs.graphs
 
 
 __all__ = [
@@ -107,7 +107,7 @@ class ManualRescopingRule(DPORule):
 
         # create a copy of the match (sub-)graph, but whose nodes have a new scope; its nodes are assigned different IDs to avoid conflicting IDs when gluing to G
         JI = nx.relabel_nodes(HI, {vHI: vHI.replace('__tmp__', '') for vHI in set(HI.nodes)}, copy=True)
-        nx.set_node_attributes(JI, {vJI: new_scope for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == quantlib.graphs.graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: new_scope for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__)}, 'scope')
 
         return JI
 
@@ -199,17 +199,17 @@ class AutoRescopingRule(DPORule):
     def core(self, HI):
 
         # automatically detect the scope of the operations involved (should be unique!)
-        scopes = {HI.nodes[vHI]['scope'] for vHI in set(HI.nodes) if (HI.nodes[vHI]['bipartite'] == quantlib.graphs.graphs.__KERNEL_PARTITION__)}
+        scopes = {HI.nodes[vHI]['scope'] for vHI in set(HI.nodes) if (HI.nodes[vHI]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__)}
         try:
             scopes.remove('')
         except KeyError:
             pass
-        assert len(scopes) == 1  # up to now, quantlib's `nn.Module`s traces have included at least one correctly scoped operation... maybe we could suggest the user to apply a `ManualRescopingRule` when this does not happen?
+        assert len(scopes) == 1  # up to now, quantlib.editing.s `nn.Module`s traces have included at least one correctly scoped operation... maybe we could suggest the user to apply a `ManualRescopingRule` when this does not happen?
         new_scope = list(scopes)[0]
 
         # create a copy of the match (sub-)graph, but whose nodes have a new scope; its nodes are assigned different IDs to avoid conflicting IDs when gluing to G
         JI = nx.relabel_nodes(HI, {vHI: vHI.replace('__tmp__', '') for vHI in set(HI.nodes)}, copy=True)
-        nx.set_node_attributes(JI, {vJI: new_scope for vJI in JI.nodes if (JI.nodes[vJI]['bipartite'] == quantlib.graphs.graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: new_scope for vJI in JI.nodes if (JI.nodes[vJI]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__)}, 'scope')
 
         return JI
 

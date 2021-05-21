@@ -3,8 +3,8 @@ from networkx.algorithms import bipartite
 import tempfile
 from datetime import datetime
 
-import quantlib.graphs.graphs
-import quantlib.graphs.utils
+import quantlib.editing.graphs.graphs
+import quantlib.editing.graphs.utils
 
 
 __FAILURE__ = False
@@ -65,7 +65,7 @@ class Editor(object):
         self.qlgraph = qlgraph
 
         if onlykernel:
-            G = bipartite.projected_graph(self.qlgraph.nx_graph, {n for n in self.qlgraph.nx_graph.nodes if self.qlgraph.nx_graph.nodes[n]['bipartite'] == quantlib.graphs.graphs.__KERNEL_PARTITION__})
+            G = bipartite.projected_graph(self.qlgraph.nx_graph, {n for n in self.qlgraph.nx_graph.nodes if self.qlgraph.nx_graph.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__})
         else:
             G = self.qlgraph.nx_graph
         nodes_dict = {k: v for k, v in self.qlgraph.nodes_dict.items() if k in G.nodes}
@@ -159,7 +159,7 @@ class Editor(object):
 
     def _take_snapshot(self):
         filename = datetime.now().strftime("%H:%M:%S_{}_{}".format(len(self._history._undo), type(self._history._undo[-1].rho)))
-        quantlib.graphs.utils.draw_graph(self.G, self._cache_dir.name, filename)  # take a snapshot of the edited graph
+        quantlib.editing.graphs.utils.draw_graph(self.G, self._cache_dir.name, filename)  # take a snapshot of the edited graph
 
 # 1. label graph nodes (node label is usually computed as the aggregation of 1.partition and 2.type, but see COMMENT below)
 # 2. define a graph rewriting rule (GRR)

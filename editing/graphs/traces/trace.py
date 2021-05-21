@@ -1,8 +1,8 @@
 import networkx as nx
 import os
 
-import quantlib.graphs.graphs
-import quantlib.graphs.utils
+import quantlib.editing.graphs.graphs
+import quantlib.editing.graphs.utils
 
 
 __TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
@@ -12,13 +12,13 @@ def trace_module(library, algorithm, mod, dummy_input):
 
     # trace graph
     mod.eval()
-    onnxgraph = quantlib.graphs.graphs.ONNXGraph(mod, dummy_input)
+    onnxgraph = quantlib.editing.graphs.graphs.ONNXGraph(mod, dummy_input)
     G = onnxgraph.nx_graph
 
     # locate interface nodes
     node_2_partition = nx.get_node_attributes(G, 'bipartite')
     for n in {n for n, onnxnode in onnxgraph.nodes_dict.items() if onnxnode.nobj in set(onnxgraph.jit_graph.inputs()) | set(onnxgraph.jit_graph.outputs())}:
-        node_2_partition[n] = quantlib.graphs.graphs.__CONTXT_PARTITION__
+        node_2_partition[n] = quantlib.editing.graphs.graphs.__CONTXT_PARTITION__
     nx.set_node_attributes(G, node_2_partition, 'partition')
 
     # store traces and graph picture
@@ -26,7 +26,7 @@ def trace_module(library, algorithm, mod, dummy_input):
     if not os.path.isdir(trace_dir):
         os.makedirs(trace_dir, exist_ok=True)
     nx.write_gpickle(G, os.path.join(trace_dir, 'networkx'))
-    quantlib.graphs.utils.draw_graph(G, trace_dir, 'graphviz')
+    quantlib.editing.graphs.utils.draw_graph(G, trace_dir, 'graphviz')
 
 
 ####################################
@@ -77,7 +77,7 @@ def trace_pytorch_modules():
     ################
     algorithm = 'ViewFlatten'
 
-    mod_ViewFlattenNd = quantlib.graphs.graphs.ViewFlattenNd()
+    mod_ViewFlattenNd = quantlib.editing.graphs.graphs.ViewFlattenNd()
     dummy_input = torch.ones(_batch_size, _n_input_channels, _dim1, _dim2, _dim3)
     trace_module(library, algorithm, mod_ViewFlattenNd, dummy_input)
 
