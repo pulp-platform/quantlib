@@ -5,8 +5,8 @@ import itertools
 import networkx as nx
 from networkx.algorithms import dag
 
-import quantlib.editing.graphs.graphs
-
+ #import quantlib.editing.graphs.graphs
+from . import *
 
 class scope_name_workaround(object):
     # this is a necessary "context manager" object for PyTorch >= 1.4

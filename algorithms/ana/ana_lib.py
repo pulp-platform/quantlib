@@ -1,12 +1,12 @@
 import torch
 from . import ana_uniform
-import ana_uniform_cuda
+#import ana_uniform_cuda
 from . import ana_triangular
-import ana_triangular_cuda
+#import ana_triangular_cuda
 from . import ana_normal
-import ana_normal_cuda
+#import ana_normal_cuda
 from . import ana_logistic
-import ana_logistic_cuda
+#import ana_logistic_cuda
 
 
 all = [
