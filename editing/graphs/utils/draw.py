@@ -3,7 +3,7 @@ import networkx as nx
 import graphviz as gv
 
 #import quantlib.graphs.graphs
-from ..graphs import graphs
+from ...graphs import graphs
 
 GVNodeAppearance = namedtuple('GVNodeAppearance', ['fontsize', 'shape', 'height', 'width', 'color', 'fillcolor'])
 
@@ -11,10 +11,10 @@ GVNodeAppearance = namedtuple('GVNodeAppearance', ['fontsize', 'shape', 'height'
 def _get_styles():
 
     _styles = {
-        graphs.__KERNEL_PARTITION__:
+        graphs.Bipartite.KERNEL:
             GVNodeAppearance(fontsize='8', shape='circle', height='2.0', width='2.0',
                              color='cornflowerblue', fillcolor='cornflowerblue'),
-        graphs.__MEMORY_PARTITION__:
+        graphs.Bipartite.MEMORY:
             GVNodeAppearance(fontsize='8', shape='square', height='1.2', width='1.2',
                              color='brown2', fillcolor='brown2')
     }

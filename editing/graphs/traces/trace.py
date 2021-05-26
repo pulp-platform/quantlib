@@ -20,7 +20,7 @@ def trace_module(library, algorithm, mod, dummy_input):
     # locate interface nodes
     node_2_partition = nx.get_node_attributes(G, 'bipartite')
     for n in {n for n, onnxnode in onnxgraph.nodes_dict.items() if onnxnode.nobj in set(onnxgraph.jit_graph.inputs()) | set(onnxgraph.jit_graph.outputs())}:
-        node_2_partition[n] = graphs.__CONTXT_PARTITION__
+        node_2_partition[n] = graphs.Bipartite.CONTXT
     nx.set_node_attributes(G, node_2_partition, 'partition')
 
     # store traces and graph picture

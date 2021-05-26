@@ -56,7 +56,7 @@ class AddIONodeRule(HelperRule):
         type = graphs.HelperInput.__name__ if self._io == 'I' else graphs.HelperOutput.__name__
 
         self.RK = nx.DiGraph()
-        self.RK.add_nodes_from(set([''.join(['R-term/', 'H', self._io])]), bipartite=graphs.__KERNEL_PARTITION__, type=type)
+        self.RK.add_nodes_from(set([''.join(['R-term/', 'H', self._io])]), bipartite=graphs.Bipartite.KERNEL, type=type)
 
         self._counter = itertools.count()
 
@@ -68,7 +68,7 @@ class AddIONodeRule(HelperRule):
         m = graphs.HelperInput() if self._io == 'I' else graphs.HelperOutput()
         vJI_2_ptnode = {vJI: graphs.PyTorchNode(m)}
 
-        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.Bipartite.KERNEL)}, 'scope')
 
         return JI, vJI_2_ptnode
 
@@ -130,7 +130,7 @@ class RemoveIONodeRule(HelperRule):
 
         # the I/O operation will serve as an "anchor"; from it, I will be able to (implicitly) generate and apply the graph rewriting rule on-the-fly
         self.LK = nx.DiGraph()
-        self.LK.add_nodes_from(set([''.join(['L-term/', 'H', self._io])]), bipartite=graphs.__KERNEL_PARTITION__, type=type)
+        self.LK.add_nodes_from(set([''.join(['L-term/', 'H', self._io])]), bipartite=graphs.Bipartite.KERNEL, type=type)
 
         self.seeker = Seeker(self.LK)
 
@@ -234,7 +234,7 @@ class AddPrecisionTunnelRule(HelperRule):
 
         # the idempotent operation will serve as an "anchor"; from it, I will be able to (implicitly) generate and apply the graph rewriting rule on-the-fly
         self.Kin = nx.DiGraph()
-        self.Kin.add_nodes_from(set([''.join(['K-term/', 'HPTin'])]), bipartite=graphs.__KERNEL_PARTITION__, type=type)
+        self.Kin.add_nodes_from(set([''.join(['K-term/', 'HPTin'])]), bipartite=graphs.Bipartite.KERNEL, type=type)
 
         self.seeker = Seeker(self.Kin)
 
@@ -255,7 +255,7 @@ class AddPrecisionTunnelRule(HelperRule):
             JI = nx.compose(JI, Iin_clone)
             JI.add_edge(u, v)
 
-        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.Bipartite.KERNEL)}, 'scope')
 
         # compute the connections of the new nodes to the old nodes
         E_I2JI = {(vI, vJI) for vI, vJI in vH_2_vJI_PTin.items()}
@@ -346,7 +346,7 @@ class RemovePrecisionTunnelRule(HelperRule):
 
         # the input to the precision tunnel will serve as an "anchor"; once I locate such a node, I will be able to (implicitly) generate and apply the graph rewriting rule on-the-fly
         self.LK = nx.DiGraph()
-        self.LK.add_nodes_from(set([''.join(['L-term/', 'HPTin'])]), bipartite=graphs.__KERNEL_PARTITION__, type=graphs.HelperInputPrecisionTunnel(1.0).__class__.__name__)
+        self.LK.add_nodes_from(set([''.join(['L-term/', 'HPTin'])]), bipartite=graphs.Bipartite.KERNEL, type=graphs.HelperInputPrecisionTunnel(1.0).__class__.__name__)
 
         self.seeker = Seeker(self.LK)
 

@@ -1,11 +1,21 @@
 import re
 import torch
+from enum import Enum, unique
 
+@unique
+class Bipartite(Enum):
+    KERNEL = 0
+    MEMORY = 1
+    CONTXT = 2
 
-__KERNEL_PARTITION__ = 0
-__MEMORY_PARTITION__ = 1
-__CONTXT_PARTITION__ = 2
+@unique
+class DataPartition(Enum):
+    INPUT = 0
+    OUTPUT = 1
+    PARAMETER = 2
+    OTHER = 3
 
+    
 __NODE_ID_FORMAT__ = '{:06d}'
 
 

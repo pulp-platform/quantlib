@@ -107,7 +107,7 @@ class ManualRescopingRule(DPORule):
 
         # create a copy of the match (sub-)graph, but whose nodes have a new scope; its nodes are assigned different IDs to avoid conflicting IDs when gluing to G
         JI = nx.relabel_nodes(HI, {vHI: vHI.replace('__tmp__', '') for vHI in set(HI.nodes)}, copy=True)
-        nx.set_node_attributes(JI, {vJI: new_scope for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: new_scope for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.Bipartite.KERNEL)}, 'scope')
 
         return JI
 
@@ -199,7 +199,7 @@ class AutoRescopingRule(DPORule):
     def core(self, HI):
 
         # automatically detect the scope of the operations involved (should be unique!)
-        scopes = {HI.nodes[vHI]['scope'] for vHI in set(HI.nodes) if (HI.nodes[vHI]['bipartite'] == graphs.__KERNEL_PARTITION__)}
+        scopes = {HI.nodes[vHI]['scope'] for vHI in set(HI.nodes) if (HI.nodes[vHI]['bipartite'] == graphs.Bipartite.KERNEL)}
         try:
             scopes.remove('')
         except KeyError:
@@ -209,7 +209,7 @@ class AutoRescopingRule(DPORule):
 
         # create a copy of the match (sub-)graph, but whose nodes have a new scope; its nodes are assigned different IDs to avoid conflicting IDs when gluing to G
         JI = nx.relabel_nodes(HI, {vHI: vHI.replace('__tmp__', '') for vHI in set(HI.nodes)}, copy=True)
-        nx.set_node_attributes(JI, {vJI: new_scope for vJI in JI.nodes if (JI.nodes[vJI]['bipartite'] == graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: new_scope for vJI in JI.nodes if (JI.nodes[vJI]['bipartite'] == graphs.Bipartite.KERNEL)}, 'scope')
 
         return JI
 
