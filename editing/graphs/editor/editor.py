@@ -73,6 +73,7 @@ class Editor(object):
         output_nodes = [key for key, value in nx.get_node_attributes(self.qlgraph.nx_graph, 'dataPartition').items() if value == graphs.DataPartition.OUTPUT]
                 
         if onlykernel:
+            
             input_op_nodes = set()
             output_op_nodes = set()
 

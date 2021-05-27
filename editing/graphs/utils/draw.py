@@ -11,10 +11,10 @@ GVNodeAppearance = namedtuple('GVNodeAppearance', ['fontsize', 'shape', 'height'
 def _get_styles():
 
     _styles = {
-        graphs.Bipartite.KERNEL:
+        graphs.Bipartite.KERNEL.name:
             GVNodeAppearance(fontsize='8', shape='circle', height='2.0', width='2.0',
                              color='cornflowerblue', fillcolor='cornflowerblue'),
-        graphs.Bipartite.MEMORY:
+        graphs.Bipartite.MEMORY.name:
             GVNodeAppearance(fontsize='8', shape='square', height='1.2', width='1.2',
                              color='brown2', fillcolor='brown2')
     }
@@ -32,7 +32,7 @@ def draw_graph(G, save_dir, filename, node_2_label=None):
     # build GraphViz graph
     gvG = gv.Digraph(comment=filename)
     for n, p in nx.get_node_attributes(G, 'bipartite').items():
-        gvG.node(n, node_2_label[n], **partition_2_style[p]._asdict(), style='filled')
+        gvG.node(n, node_2_label[n], **partition_2_style[p.name]._asdict(), style='filled')
     for e in G.edges:
         gvG.edge(e[0], e[1])
 
