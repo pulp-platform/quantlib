@@ -5,6 +5,7 @@ from typing import List
 
 
 __all__ = [
+    'NotFilter',
     'OrFilter',
     'AndFilter',
     'NameFilter',
@@ -23,11 +24,27 @@ class Filter(object):
     def __call__(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
         return self.find(nodes_list)
 
+    def __neg__(self):
+        return NotFilter(self)
+
     def __and__(self, other):
         return AndFilter(self, other)
 
     def __or__(self, other):
         return OrFilter(self, other)
+
+
+class NotFilter(Filter):
+
+    def __init__(self, filter_: Filter):
+        super(NotFilter, self).__init__()
+        self._filter = filter_
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        return list(set(nodes_list).difference(set(self._filter(nodes_list))))
+
+    def __repr__(self):
+        return "".join(["(-", repr(self._filter), ")"])
 
 
 class OrFilter(Filter):
