@@ -60,6 +60,10 @@ class LightweightEditor(object):
         self._in_session = False  # put a lock on the history by preventing editing actions
         self._rho        = None   # current ``LightweightRule``
 
+    @property
+    def graph(self) -> LightweightGraph:
+        return self._graph
+
     def startup(self):
         self._in_session = True
 
