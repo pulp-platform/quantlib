@@ -74,6 +74,7 @@ class ONNXGraph(object):
 
         with scope_name_workaround():
             self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, propagate=True, _retain_param_name=True)
+            # self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, _retain_param_name=True)
 
         # At this point, I have a handle on a `torch._C.Graph` object; its
         # components are `torch._C.Node` objects, which are abstractions for
