@@ -167,6 +167,7 @@ torch::Tensor uniform_backward_cuda_dispatch(
     auto grad_out = torch::zeros_like(x_in);
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
+    // see PyTorch's ATen ("A TENsor") library; the full path from PyTorch GitHub repo's main is `aten/src/ATen/Dispatch.h`
     AT_DISPATCH_FLOATING_TYPES(
         x_in.type(),
         "uniform_backward_cuda",
