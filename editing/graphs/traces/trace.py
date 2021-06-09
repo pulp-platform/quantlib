@@ -5,7 +5,8 @@ import quantlib.editing.graphs.graphs
 import quantlib.editing.graphs.utils
 
 
-__TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
+# __TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
+__TRACES_LIBRARY__ = os.path.join(os.path.expanduser('~'), 'Desktop', 'QuantLab', 'quantlib', 'editing', 'graphs', 'traces', '.libtraces')
 
 
 def trace_module(library, algorithm, mod, dummy_input):
@@ -131,7 +132,7 @@ def trace_quantlib_modules():
     dummy_input = torch.ones((_batch_size, _n_input_channels))
     trace_module(library, algorithm, mod_ANAActivation, dummy_input)
 
-    mod_ANALinear = qa.ana.ANALinear(quantizer_spec, noise_type, _n_input_channels, _n_output_channels)
+    mod_ANALinear = qa.ana.ANALinear(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, bias=False)
     dummy_input = torch.ones((_batch_size, _n_input_channels))
     trace_module(library, algorithm, mod_ANALinear, dummy_input)
 
