@@ -3,8 +3,8 @@ from networkx.classes.filters import show_nodes, hide_edges
 import itertools
 
 from .seeker import Seeker
-import quantlib.editing.graphs.graphs
-
+#import graphs
+from .. import graphs
 
 __all__ = [
     'AddInputNodeRule',
@@ -53,22 +53,22 @@ class AddIONodeRule(HelperRule):
     def __init__(self, io):
 
         self._io = io  # either 'I' or 'O'
-        type = quantlib.editing.graphs.graphs.HelperInput.__name__ if self._io == 'I' else quantlib.editing.graphs.graphs.HelperOutput.__name__
+        type = graphs.HelperInput.__name__ if self._io == 'I' else graphs.HelperOutput.__name__
 
         self.RK = nx.DiGraph()
-        self.RK.add_nodes_from(set([''.join(['R-term/', 'H', self._io])]), bipartite=quantlib.editing.graphs.graphs.__KERNEL_PARTITION__, type=type)
+        self.RK.add_nodes_from(set([''.join(['R-term/', 'H', self._io])]), bipartite=graphs.Bipartite.KERNEL, type=type)
 
         self._counter = itertools.count()
 
     def core(self):
 
-        vJI = ''.join(['H', self._io, quantlib.editing.graphs.graphs.__NODE_ID_FORMAT__.format(next(self._counter))])
+        vJI = ''.join(['H', self._io, graphs.__NODE_ID_FORMAT__.format(next(self._counter))])
         JI = nx.relabel_nodes(self.RK, {vRK: vJI for vRK in set(self.RK.nodes)}, copy=True)
 
-        m = quantlib.editing.graphs.graphs.HelperInput() if self._io == 'I' else quantlib.editing.graphs.graphs.HelperOutput()
-        vJI_2_ptnode = {vJI: quantlib.editing.graphs.graphs.PyTorchNode(m)}
+        m = graphs.HelperInput() if self._io == 'I' else graphs.HelperOutput()
+        vJI_2_ptnode = {vJI: graphs.PyTorchNode(m)}
 
-        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.Bipartite.KERNEL)}, 'scope')
 
         return JI, vJI_2_ptnode
 
@@ -126,11 +126,11 @@ class RemoveIONodeRule(HelperRule):
     def __init__(self, io):
 
         self._io = io  # either 'I' or 'O'
-        type = quantlib.editing.graphs.graphs.HelperInput.__name__ if self._io == 'I' else quantlib.editing.graphs.graphs.HelperOutput.__name__
+        type = graphs.HelperInput.__name__ if self._io == 'I' else graphs.HelperOutput.__name__
 
         # the I/O operation will serve as an "anchor"; from it, I will be able to (implicitly) generate and apply the graph rewriting rule on-the-fly
         self.LK = nx.DiGraph()
-        self.LK.add_nodes_from(set([''.join(['L-term/', 'H', self._io])]), bipartite=quantlib.editing.graphs.graphs.__KERNEL_PARTITION__, type=type)
+        self.LK.add_nodes_from(set([''.join(['L-term/', 'H', self._io])]), bipartite=graphs.Bipartite.KERNEL, type=type)
 
         self.seeker = Seeker(self.LK)
 
@@ -234,7 +234,7 @@ class AddPrecisionTunnelRule(HelperRule):
 
         # the idempotent operation will serve as an "anchor"; from it, I will be able to (implicitly) generate and apply the graph rewriting rule on-the-fly
         self.Kin = nx.DiGraph()
-        self.Kin.add_nodes_from(set([''.join(['K-term/', 'HPTin'])]), bipartite=quantlib.editing.graphs.graphs.__KERNEL_PARTITION__, type=type)
+        self.Kin.add_nodes_from(set([''.join(['K-term/', 'HPTin'])]), bipartite=graphs.Bipartite.KERNEL, type=type)
 
         self.seeker = Seeker(self.Kin)
 
@@ -245,8 +245,8 @@ class AddPrecisionTunnelRule(HelperRule):
         vH_2_vJI_PTin = {vH: vH.replace('O', 'HPTin') for vH in set(H.nodes).intersection(set(Iin.nodes))}
         vH_2_vJI_PTout = {vH: vH.replace('O', 'HPTout') for vH in set(H.nodes).intersection(set(Iout.nodes))}
         JI = nx.relabel_nodes(H, {**vH_2_vJI_PTin, **vH_2_vJI_PTout}, copy=True)
-        nx.set_node_attributes(JI, {vJI: quantlib.editing.graphs.graphs.HelperInputPrecisionTunnel.__name__ for vJI in set(vH_2_vJI_PTin.values())}, 'type')
-        nx.set_node_attributes(JI, {vJI: quantlib.editing.graphs.graphs.HelperOutputPrecisionTunnel.__name__ for vJI in set(vH_2_vJI_PTout.values())}, 'type')
+        nx.set_node_attributes(JI, {vJI: graphs.HelperInputPrecisionTunnel.__name__ for vJI in set(vH_2_vJI_PTin.values())}, 'type')
+        nx.set_node_attributes(JI, {vJI: graphs.HelperOutputPrecisionTunnel.__name__ for vJI in set(vH_2_vJI_PTout.values())}, 'type')
 
         # replicate the "anchor" idempotent operation along each connection
         vJI_PTout_2_vJI_PTclone = {vJI: vJI.replace('HPTout', 'HPTclone') for vJI in set(vH_2_vJI_PTout.values())}
@@ -255,7 +255,7 @@ class AddPrecisionTunnelRule(HelperRule):
             JI = nx.compose(JI, Iin_clone)
             JI.add_edge(u, v)
 
-        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__)}, 'scope')
+        nx.set_node_attributes(JI, {vJI: '' for vJI in set(JI.nodes) if (JI.nodes[vJI]['bipartite'] == graphs.Bipartite.KERNEL)}, 'scope')
 
         # compute the connections of the new nodes to the old nodes
         E_I2JI = {(vI, vJI) for vI, vJI in vH_2_vJI_PTin.items()}
@@ -266,10 +266,10 @@ class AddPrecisionTunnelRule(HelperRule):
         # register the technical specs of the new ops
         vJI_2_ptnode = {}
         for vJI in set(JI.nodes):
-            if JI.nodes[vJI]['type'] == quantlib.editing.graphs.graphs.HelperInputPrecisionTunnel.__name__:
-                ptnode = quantlib.editing.graphs.graphs.PyTorchNode(quantlib.editing.graphs.graphs.HelperInputPrecisionTunnel(eps))
-            elif JI.nodes[vJI]['type'] == quantlib.editing.graphs.graphs.HelperOutputPrecisionTunnel.__name__:
-                ptnode = quantlib.editing.graphs.graphs.PyTorchNode(quantlib.editing.graphs.graphs.HelperOutputPrecisionTunnel(eps))
+            if JI.nodes[vJI]['type'] == graphs.HelperInputPrecisionTunnel.__name__:
+                ptnode = graphs.PyTorchNode(graphs.HelperInputPrecisionTunnel(eps))
+            elif JI.nodes[vJI]['type'] == graphs.HelperOutputPrecisionTunnel.__name__:
+                ptnode = graphs.PyTorchNode(graphs.HelperOutputPrecisionTunnel(eps))
             else:
                 ptnode = nodes_dict[next(iter(set(Iin.nodes)))]  # since the idempotent operation already exists, I just need a pointer to it
             vJI_2_ptnode[vJI] = ptnode
@@ -346,7 +346,7 @@ class RemovePrecisionTunnelRule(HelperRule):
 
         # the input to the precision tunnel will serve as an "anchor"; once I locate such a node, I will be able to (implicitly) generate and apply the graph rewriting rule on-the-fly
         self.LK = nx.DiGraph()
-        self.LK.add_nodes_from(set([''.join(['L-term/', 'HPTin'])]), bipartite=quantlib.editing.graphs.graphs.__KERNEL_PARTITION__, type=quantlib.editing.graphs.graphs.HelperInputPrecisionTunnel(1.0).__class__.__name__)
+        self.LK.add_nodes_from(set([''.join(['L-term/', 'HPTin'])]), bipartite=graphs.Bipartite.KERNEL, type=graphs.HelperInputPrecisionTunnel(1.0).__class__.__name__)
 
         self.seeker = Seeker(self.LK)
 
@@ -380,7 +380,7 @@ class RemovePrecisionTunnelRule(HelperRule):
             VHin = set(g.keys())
             assert len(VHin) == 1
             VHout = set(G.successors(next(iter(VHin))))
-            assert all([G.nodes[vH]['type'] == quantlib.editing.graphs.graphs.HelperOutputPrecisionTunnel.__name__ for vH in VHout])
+            assert all([G.nodes[vH]['type'] == graphs.HelperOutputPrecisionTunnel.__name__ for vH in VHout])
 
             epss_in = {nodes_dict[next(iter(VHin))].nobj.eps_in}
             epss_out = {nodes_dict[vH].nobj.eps_out for vH in VHout}

@@ -8,7 +8,7 @@ import torch.nn as nn
 import quantlib.editing.graphs as qg
 from quantlib.editing.graphs.grrules.dporules import DPORule
 from quantlib.editing.graphs.grrules import Seeker
-from quantlib.editing.graphs.graphs import __KERNEL_PARTITION__, __NODE_ID_FORMAT__, PyTorchNode
+from quantlib.editing.graphs.graphs import Bipartite.KERNEL, __NODE_ID_FORMAT__, PyTorchNode
 
 import quantlib.editing.algorithms as qa
 
@@ -66,7 +66,7 @@ class FoldSTEINQConvBNSTETypeARule(DPORule):  # w/o max pooling
 
         # Here, graph is only operation nodes
         # Necessary for seeker
-        nx.set_node_attributes(self.L, {vL: __KERNEL_PARTITION__ for vL in set(self.L.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.L, {vL: Bipartite.KERNEL for vL in set(self.L.nodes)}, 'bipartite')
         nx.set_node_attributes(self.L, {**K_types, **LK_types}, 'type')
 
         # define the context (sub-)graph K [K-term]
@@ -80,7 +80,7 @@ class FoldSTEINQConvBNSTETypeARule(DPORule):  # w/o max pooling
         # define the replacement (sub-)graph R\K ["gluing" R\K to K yields the graph R, i.e., the R-term]
         self.RK = nx.DiGraph()
         self.RK.add_edges_from({(u, v) for u, v in zip(RK_node_IDs[:-1], RK_node_IDs[1:])})
-        nx.set_node_attributes(self.RK, {vRK: __KERNEL_PARTITION__ for vRK in set(self.RK.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.RK, {vRK: Bipartite.KERNEL for vRK in set(self.RK.nodes)}, 'bipartite')
         nx.set_node_attributes(self.RK, RK_types, 'type')
 
         # define the arcs that go from the vertices of K to those of R\K, and viceversa
@@ -252,7 +252,7 @@ class FoldSTEINQConvBNSTETypeBRule(DPORule):  # w/o max pooling
         L_node_IDs = [K_node_IDs[0]] + LK_node_IDs + [K_node_IDs[-1]]
         self.L = nx.DiGraph()
         self.L.add_edges_from({(u, v) for u, v in zip(L_node_IDs[:-1], L_node_IDs[1:])})
-        nx.set_node_attributes(self.L, {vL: __KERNEL_PARTITION__ for vL in set(self.L.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.L, {vL: Bipartite.KERNEL for vL in set(self.L.nodes)}, 'bipartite')
         nx.set_node_attributes(self.L, {**K_types, **LK_types}, 'type')
 
         # define the context (sub-)graph K [K-term]
@@ -266,7 +266,7 @@ class FoldSTEINQConvBNSTETypeBRule(DPORule):  # w/o max pooling
         # define the replacement (sub-)graph R\K ["gluing" R\K to K yields the graph R, i.e., the R-term]
         self.RK = nx.DiGraph()
         self.RK.add_edges_from({(u, v) for u, v in zip(RK_node_IDs[:-1], RK_node_IDs[1:])})
-        nx.set_node_attributes(self.RK, {vRK: __KERNEL_PARTITION__ for vRK in set(self.RK.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.RK, {vRK: Bipartite.KERNEL for vRK in set(self.RK.nodes)}, 'bipartite')
         nx.set_node_attributes(self.RK, RK_types, 'type')
 
         # define the arcs that go from the vertices of K to those of R\K, and viceversa
@@ -420,7 +420,7 @@ class FoldConvBNSTERule(DPORule):
         L_node_IDs = [K_node_IDs[0]] + LK_node_IDs + [K_node_IDs[-1]]
         self.L = nx.DiGraph()
         self.L.add_edges_from({(u, v) for u, v in zip(L_node_IDs[:-1], L_node_IDs[1:])})
-        nx.set_node_attributes(self.L, {vL: __KERNEL_PARTITION__ for vL in set(self.L.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.L, {vL: Bipartite.KERNEL for vL in set(self.L.nodes)}, 'bipartite')
         nx.set_node_attributes(self.L, {**K_types, **LK_types}, 'type')
 
         # define the context (sub-)graph K [K-term]
@@ -434,7 +434,7 @@ class FoldConvBNSTERule(DPORule):
         # define the replacement (sub-)graph R\K ["gluing" R\K to K yields the graph R, i.e., the R-term]
         self.RK = nx.DiGraph()
         self.RK.add_edges_from({(u, v) for u, v in zip(RK_node_IDs[:-1], RK_node_IDs[1:])})
-        nx.set_node_attributes(self.RK, {vRK: __KERNEL_PARTITION__ for vRK in set(self.RK.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.RK, {vRK: Bipartite.KERNEL for vRK in set(self.RK.nodes)}, 'bipartite')
         nx.set_node_attributes(self.RK, RK_types, 'type')
 
         # define the arcs that go from the vertices of K to those of R\K, and viceversa
@@ -573,7 +573,7 @@ class FoldSTEINQConvBNRule(DPORule):
         L_node_IDs = [K_node_IDs[0]] + LK_node_IDs + [K_node_IDs[-1]]
         self.L = nx.DiGraph()
         self.L.add_edges_from({(u, v) for u, v in zip(L_node_IDs[:-1], L_node_IDs[1:])})
-        nx.set_node_attributes(self.L, {vL: __KERNEL_PARTITION__ for vL in set(self.L.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.L, {vL: Bipartite.KERNEL for vL in set(self.L.nodes)}, 'bipartite')
         nx.set_node_attributes(self.L, {**K_types, **LK_types}, 'type')
 
         # define the context (sub-)graph K [K-term]
@@ -587,7 +587,7 @@ class FoldSTEINQConvBNRule(DPORule):
         # define the replacement (sub-)graph R\K ["gluing" R\K to K yields the graph R, i.e., the R-term]
         self.RK = nx.DiGraph()
         self.RK.add_edges_from({(u, v) for u, v in zip(RK_node_IDs[:-1], RK_node_IDs[1:])})
-        nx.set_node_attributes(self.RK, {vRK: __KERNEL_PARTITION__ for vRK in set(self.RK.nodes)}, 'bipartite')
+        nx.set_node_attributes(self.RK, {vRK: Bipartite.KERNEL for vRK in set(self.RK.nodes)}, 'bipartite')
         nx.set_node_attributes(self.RK, RK_types, 'type')
 
         # define the arcs that go from the vertices of K to those of R\K, and viceversa
