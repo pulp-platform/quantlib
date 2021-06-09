@@ -1,10 +1,16 @@
-from collections import namedtuple
-from networkx.algorithms import bipartite
+import itertools
 import tempfile
+from collections import namedtuple
 from datetime import datetime
+from networkx.algorithms import bipartite
+import networkx as nx
 
-import quantlib.editing.graphs.graphs
-import quantlib.editing.graphs.utils
+# import graphs
+# import utils
+
+from .. import graphs
+from .. import utils
+import quantlib.editing.graphs as qg
 
 
 __FAILURE__ = False
@@ -64,10 +70,29 @@ class Editor(object):
 
         self.qlgraph = qlgraph
 
+        self._input_nodes  = None
+        self._output_nodes = None
+
+        input_datanodes  = {n for n, dp in nx.get_node_attributes(self.qlgraph.nx_graph, 'data_partition').items() if dp == graphs.DataPartition.INPUT}
+        output_datanodes = {n for n, dp in nx.get_node_attributes(self.qlgraph.nx_graph, 'data_partition').items() if dp == graphs.DataPartition.OUTPUT}
+
         if onlykernel:
-            G = bipartite.projected_graph(self.qlgraph.nx_graph, {n for n in self.qlgraph.nx_graph.nodes if self.qlgraph.nx_graph.nodes[n]['bipartite'] == quantlib.editing.graphs.graphs.__KERNEL_PARTITION__})
+
+            input_opnodes  = set(itertools.chain.from_iterable([set([s for s in self.qlgraph.nx_graph.successors(n)]) for n in input_datanodes]))
+            output_opnodes = set(itertools.chain.from_iterable([set([p for p in self.qlgraph.nx_graph.predecessors(n)]) for n in output_datanodes]))
+
+            self._input_nodes  = input_opnodes
+            self._output_nodes = output_opnodes
+
+            G = bipartite.projected_graph(self.qlgraph.nx_graph, {n for n in self.qlgraph.nx_graph.nodes if self.qlgraph.nx_graph.nodes[n]['bipartite'] == graphs.Bipartite.KERNEL})
+
         else:
+
+            self._input_nodes  = input_datanodes
+            self._output_nodes = output_datanodes
+
             G = self.qlgraph.nx_graph
+
         nodes_dict = {k: v for k, v in self.qlgraph.nodes_dict.items() if k in G.nodes}
 
         self._history = History(G, nodes_dict)
@@ -105,6 +130,7 @@ class Editor(object):
         self._in_session = True
 
     def shutdown(self):
+        self._rho = None
         self._in_session = False
         self._apply_changes_to_graph()
         self._cache_dir.cleanup()
@@ -152,6 +178,16 @@ class Editor(object):
             else:
                 print("Editor object <{}> is not in an editing session.".format(self))
 
+    def add_io_handles(self):
+
+        if isinstance(self.qlgraph, graphs.PyTorchGraph):
+            self.startup()
+            self.set_grr(qg.grrules.AddInputNodeRule())
+            self.edit(gs=self.seek(VIs=[[n] for n in self._input_nodes]))
+            self.set_grr(qg.grrules.AddOutputNodeRule())
+            self.edit(gs=self.seek(VIs=[[n] for n in self._output_nodes]))
+            self.pause()
+
     def _apply_changes_to_graph(self):
 
         self.qlgraph.nx_graph = self.G
@@ -159,7 +195,7 @@ class Editor(object):
 
     def _take_snapshot(self):
         filename = datetime.now().strftime("%H:%M:%S_{}_{}".format(len(self._history._undo), type(self._history._undo[-1].rho)))
-        quantlib.editing.graphs.utils.draw_graph(self.G, self._cache_dir.name, filename)  # take a snapshot of the edited graph
+        utils.draw_graph(self.G, self._cache_dir.name, filename)  # take a snapshot of the edited graph
 
 # 1. label graph nodes (node label is usually computed as the aggregation of 1.partition and 2.type, but see COMMENT below)
 # 2. define a graph rewriting rule (GRR)

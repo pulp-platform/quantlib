@@ -3,8 +3,8 @@ import torch.nn as nn
 from functools import partial
 
 from .rules import LightweightRule
-import quantlib.algorithms as qa
-
+#import quantlib.algorithms as qa
+from .... import algorithms as qa
 from .filters import Filter
 from typing import Union
 

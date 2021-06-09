@@ -1,12 +1,24 @@
 import re
 import torch
+from enum import IntEnum, unique
 
-
-__KERNEL_PARTITION__ = 0
-__MEMORY_PARTITION__ = 1
-__CONTXT_PARTITION__ = 2
 
 __NODE_ID_FORMAT__ = '{:06d}'
+
+
+@unique
+class Bipartite(IntEnum):
+    KERNEL = 0
+    MEMORY = 1
+    CONTXT = 2
+
+
+@unique
+class DataPartition(IntEnum):
+    INPUT     = 0
+    OUTPUT    = 1
+    PARAMETER = 2
+    OTHER     = 3
 
 
 class QuantLabNode(object):

@@ -15,8 +15,8 @@ class Seeker(object):
         for vH, vT in g.items():
 
             is_same_partition = G.nodes[vH]['bipartite'] == T.nodes[vT]['bipartite']
-            is_same_type = G.nodes[vH]['type'] == T.nodes[vT]['type']
-            is_ok = is_same_partition and is_same_type  # computational graphs are node-labelled graphs, where node types act as labels
+            is_same_type      = G.nodes[vH]['type']      == T.nodes[vT]['type']
+            is_ok             = is_same_partition and is_same_type  # computational graphs are node-labelled graphs, where node types act as labels
 
             if not is_ok:
                 break
@@ -36,7 +36,7 @@ class Seeker(object):
         
         # G is the whole network graph, T is the template to be matched
         matcher = isomorphism.DiGraphMatcher(G, self.T)
-        
+
         # Return list of all occurences of the non-attributed template
         # This means only the number of nodes + interconnections are matched
         isomorphisms = list(matcher.subgraph_isomorphisms_iter())
