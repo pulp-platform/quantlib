@@ -5,8 +5,8 @@ import itertools
 import networkx as nx
 from networkx.algorithms import dag
 
- #import graphs
 from .. import graphs
+
 
 class scope_name_workaround(object):
     # this is a necessary "context manager" object for PyTorch >= 1.4
@@ -73,8 +73,8 @@ class ONNXGraph(object):
         _set_opset_version(11)  # opset_version9 does not support `round` ONNX operator (even though docs for PyTorch 1.5.0 suggests so)
 
         with scope_name_workaround():
-            self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, propagate=True, _retain_param_name=True)
-            # self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, _retain_param_name=True)
+            # self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, propagate=True, _retain_param_name=True)
+            self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, _retain_param_name=True)
 
         # At this point, I have a handle on a `torch._C.Graph` object; its
         # components are `torch._C.Node` objects, which are abstractions for
@@ -189,20 +189,20 @@ class PyTorchGraph(object):
 
                 # SCHEREMO: identify node attributes - each data node is either input (in the sense of the network input, not the compute graph inputs), output, parameter or other
                 # Most probably other is equivalent to intermediate feature map, but this requires further checking
-                if (n in onnxgraph_inputs):
-                    attr = graphs.DataPartition.INPUT
-                elif (n in onnxgraph_outputs):
-                    attr = graphs.DataPartition.OUTPUT
-                elif (n in onnxgraph_parameters):
-                    attr = graphs.DataPartition.PARAMETER
-                else:
-                    attr  = graphs.DataPartition.OTHER
-                    
-                data_partition_dict[n] = attr
+                # if (n in onnxgraph_inputs):
+                #     attr = graphs.DataPartition.INPUT
+                # elif (n in onnxgraph_outputs):
+                #     attr = graphs.DataPartition.OUTPUT
+                # elif (n in onnxgraph_parameters):
+                #     attr = graphs.DataPartition.PARAMETER
+                # else:
+                #     attr = graphs.DataPartition.OTHER
+                #
+                # data_partition_dict[n] = attr
                 node_id = 'D' + __NODE_ID_FORMAT__.format(next(datanode_id_gen))
             onnx_scope_2_pytorch_id[n] = node_id
 
-        nx.set_node_attributes(self.nx_graph, data_partition_dict, 'dataPartition')
+        # nx.set_node_attributes(self.nx_graph, data_partition_dict, 'dataPartition')
         nx.relabel_nodes(self.nx_graph, onnx_scope_2_pytorch_id, copy=False)
         self.pytorch_id_2_onnx_scope = {v: k for k, v in onnx_scope_2_pytorch_id.items()}
         

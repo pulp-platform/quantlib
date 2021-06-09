@@ -7,10 +7,9 @@ from datetime import datetime
 # import graphs
 # import utils
 
-from ...graphs import graphs
-from ...graphs import utils
+from .. import graphs
+from .. import utils
 
-from ... import graphs as qg
 
 __FAILURE__ = False
 __SUCCESS__ = True
@@ -69,27 +68,27 @@ class Editor(object):
 
         self.qlgraph = qlgraph
 
-        input_nodes = [key for key, value in nx.get_node_attributes(self.qlgraph.nx_graph, 'dataPartition').items() if value == graphs.DataPartition.INPUT]
-        output_nodes = [key for key, value in nx.get_node_attributes(self.qlgraph.nx_graph, 'dataPartition').items() if value == graphs.DataPartition.OUTPUT]
+        # input_nodes = [key for key, value in nx.get_node_attributes(self.qlgraph.nx_graph, 'dataPartition').items() if value == graphs.DataPartition.INPUT]
+        # output_nodes = [key for key, value in nx.get_node_attributes(self.qlgraph.nx_graph, 'dataPartition').items() if value == graphs.DataPartition.OUTPUT]
                 
         if onlykernel:
-            input_op_nodes = set()
-            output_op_nodes = set()
-
-            for key in input_nodes:
-                input_op_nodes.update(set(self.qlgraph.nx_graph[key].keys()))
-            for key in output_nodes:
-                output_op_nodes.update(set(self.qlgraph.nx_graph.predecessors(key)))
-
-            editor_input_nodes = [[key] for key in list(input_op_nodes) ]
-            editor_output_nodes = [[key] for key in list(output_op_nodes) ]
+            # input_op_nodes = set()
+            # output_op_nodes = set()
+            #
+            # for key in input_nodes:
+            #     input_op_nodes.update(set(self.qlgraph.nx_graph[key].keys()))
+            # for key in output_nodes:
+            #     output_op_nodes.update(set(self.qlgraph.nx_graph.predecessors(key)))
+            #
+            # editor_input_nodes = [[key] for key in list(input_op_nodes) ]
+            # editor_output_nodes = [[key] for key in list(output_op_nodes) ]
 
             G = bipartite.projected_graph(self.qlgraph.nx_graph, {n for n in self.qlgraph.nx_graph.nodes if self.qlgraph.nx_graph.nodes[n]['bipartite'] == graphs.Bipartite.KERNEL})
 
         else:
 
-            editor_input_nodes = [[key] for key in input_nodes]
-            editor_output_nodes = [[key] for key in output_nodes]
+            # editor_input_nodes = [[key] for key in input_nodes]
+            # editor_output_nodes = [[key] for key in output_nodes]
             
             G = self.qlgraph.nx_graph
 
@@ -101,14 +100,14 @@ class Editor(object):
         self._graphviz = graphviz
         self._cache_dir = None
 
-        self.startup()
-        if editor_input_nodes:
-            self.set_grr(qg.grrules.AddInputNodeRule())
-            self.edit(gs=self.seek(VIs=editor_input_nodes))
-        if editor_output_nodes:
-            self.set_grr(qg.grrules.AddOutputNodeRule())
-            self.edit(gs=self.seek(VIs=editor_output_nodes))
-        self.shutdown()
+        # self.startup()
+        # if editor_input_nodes:
+        #     self.set_grr(qg.grrules.AddInputNodeRule())
+        #     self.edit(gs=self.seek(VIs=editor_input_nodes))
+        # if editor_output_nodes:
+        #     self.set_grr(qg.grrules.AddOutputNodeRule())
+        #     self.edit(gs=self.seek(VIs=editor_output_nodes))
+        # self.shutdown()
         
     @property
     def G(self):
@@ -166,6 +165,7 @@ class Editor(object):
 
             for g in gs:
 
+                print(len(gs), g)
                 try:
                     G_new, nodes_dict_new = self._rho.apply(self.G, self.nodes_dict, g)  # derivation
                     self._history.push(Commit(self._rho, g, G_new, nodes_dict_new))

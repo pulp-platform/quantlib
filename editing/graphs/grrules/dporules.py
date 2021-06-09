@@ -2,7 +2,7 @@ import networkx as nx
 import itertools
 
 from .seeker import Seeker
-from ..graphs import graphs as graphs
+from .. import graphs
 
 
 __all__ = [
