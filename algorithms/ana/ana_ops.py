@@ -129,19 +129,18 @@ class ANALinear(ANAModule):
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
 
-    def forward(self, input):
-
+    @property
+    def weight_maybe_quant(self):
         weight = self.weight / self.eps
-
         weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
                              self.fnoise.mi, self.fnoise.sigma,
                              self.bnoise.mi, self.bnoise.sigma,
                              self.training)
+        return weight
 
-        weight = weight * self.eps
-
-        return F.linear(input, weight, self.bias)
+    def forward(self, input):
+        return F.linear(input, self.weight_maybe_quant * self.eps, self.bias)
 
 
 class _ANAConvNd(ANAModule):
@@ -194,6 +193,16 @@ class _ANAConvNd(ANAModule):
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
 
+    @property
+    def weight_maybe_quant(self):
+        weight = self.weight / self.eps
+        weight = self.ana_op(weight,
+                             self.quant_levels, self.thresholds,
+                             self.fnoise.mi, self.fnoise.sigma,
+                             self.bnoise.mi, self.bnoise.sigma,
+                             self.training)
+        return weight
+
 
 class ANAConv1d(_ANAConvNd):
     def __init__(self, quantizer_spec, noise_type,
@@ -210,18 +219,7 @@ class ANAConv1d(_ANAConvNd):
         )
 
     def forward(self, input):
-
-        weight = self.weight / self.eps
-
-        weight = self.ana_op(weight,
-                             self.quant_levels, self.thresholds,
-                             self.fnoise.mi, self.fnoise.sigma,
-                             self.bnoise.mi, self.bnoise.sigma,
-                             self.training)
-
-        weight = weight * self.eps
-
-        return F.conv1d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return F.conv1d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
 class ANAConv2d(_ANAConvNd):
@@ -239,18 +237,7 @@ class ANAConv2d(_ANAConvNd):
         )
 
     def forward(self, input):
-
-        weight = self.weight / self.eps
-
-        weight = self.ana_op(weight,
-                             self.quant_levels, self.thresholds,
-                             self.fnoise.mi, self.fnoise.sigma,
-                             self.bnoise.mi, self.bnoise.sigma,
-                             self.training)
-
-        weight = weight * self.eps
-
-        return F.conv2d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return F.conv2d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
 class ANAConv3d(_ANAConvNd):
@@ -268,15 +255,4 @@ class ANAConv3d(_ANAConvNd):
         )
 
     def forward(self, input):
-
-        weight = self.weight / self.eps
-
-        weight = self.ana_op(weight,
-                             self.quant_levels, self.thresholds,
-                             self.fnoise.mi, self.fnoise.sigma,
-                             self.bnoise.mi, self.bnoise.sigma,
-                             self.training)
-
-        weight = weight * self.eps
-
-        return F.conv3d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return F.conv3d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)

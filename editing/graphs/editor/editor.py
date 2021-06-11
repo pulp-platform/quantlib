@@ -163,10 +163,11 @@ class Editor(object):
                     self._history.push(Commit(self._rho, g, G_new, nodes_dict_new))
                     status = __SUCCESS__
 
-                except Exception:
+                except Exception as e:
                     print("An issue arose while applying rule {} to graph <{}> at point: ".format(type(self._rho), self.G))
                     for vH, vL in g.items():
                         print("\t", vH, vL)
+                    print(e)
                     status = __FAILURE__
 
                 if (status == __SUCCESS__) and self._graphviz:

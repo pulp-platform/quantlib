@@ -8,9 +8,9 @@ import torch.nn as nn
 import quantlib.editing.graphs as qg
 from quantlib.editing.graphs.grrules.dporules import DPORule
 from quantlib.editing.graphs.grrules import Seeker
-from quantlib.editing.graphs.graphs import Bipartite.KERNEL, __NODE_ID_FORMAT__, PyTorchNode
+from quantlib.editing.graphs.graphs.nodes import Bipartite, __NODE_ID_FORMAT__, PyTorchNode
 
-import quantlib.editing.algorithms as qa
+import quantlib.algorithms as qa
 
 from .folding import foldsteinqconvbnste, foldconvbnste, foldsteinqconvbn
 

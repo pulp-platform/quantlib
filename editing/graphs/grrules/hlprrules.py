@@ -293,9 +293,10 @@ class AddPrecisionTunnelRule(HelperRule):
         Iout = I.subgraph(VIout)
 
         # create the precision tunnel
-        n = nodes_dict[next(iter(VIin))].nobj.num_levels
-        m = nodes_dict[next(iter(VIin))].nobj.abs_max_value.item()  # TODO: only `STEActivation` nodes have `abs_max_value` attribute! try to homogenise this in the future
-        eps = (2 * m) / (n - 1)
+        eps = nodes_dict[next(iter(VIin))].nobj.eps
+        # n = nodes_dict[next(iter(VIin))].nobj.num_levels
+        # m = nodes_dict[next(iter(VIin))].nobj.abs_max_value.item()  # TODO: only `STEActivation` nodes have `abs_max_value` attribute! try to homogenise this in the future
+        # eps = (2 * m) / (n - 1)
         JI, vJI_2_ptnode, E_I2JI, E_JI2I = self.core(H, Iin, Iout, eps, nodes_dict)
 
         # link the substitute (sub-)graph J\I to the interface (sub-)graph I
