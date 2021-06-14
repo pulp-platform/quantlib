@@ -27,3 +27,8 @@ class Controller(object):
         validation pass of current epoch.
         """
         pass
+
+    def step_pre_batch(self, *args, **kwargs):
+        """Update the network's quantization-related structures before the
+        forward pass of the current mini-batch"""
+        pass
