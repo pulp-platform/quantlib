@@ -50,7 +50,6 @@ class PACT_UnsignedAct(torch.nn.Module):
     def __init__(
             self,
             n_levels=256,
-            clip_hi=1.,
             init_clip='max',
             learn_clip=True,
             act_kind='relu',
@@ -82,15 +81,15 @@ class PACT_UnsignedAct(torch.nn.Module):
         assert act_kind in ['relu', 'relu6', 'leaky_relu'], "Invalid argument act_kind: {}; expected 'relu', 'relu6' or 'leaky_relu'".format(act_kind)
         assert init_clip in ['max', 'std'], "Invalid argument init_clip: {}; expected 'max' or 'std".format(init_clip)
         self.n_levels = n_levels
-        self.clip_hi = torch.nn.Parameter(torch.Tensor((clip_hi,)), requires_grad=learn_clip)
+        self.clip_hi = torch.nn.Parameter(torch.Tensor((1.,)), requires_grad=learn_clip)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'high':self.clip_hi}
         self.act_kind = act_kind
         self.init_clip = init_clip
         self.nb_std = nb_std
+        self.leaky = leaky
         # this is switched on/off by the PACT_ActController
         self.started = False
-        self.leaky = leaky
 
         # these are only used to gather statistics
         self.max          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
@@ -313,7 +312,7 @@ class PACT_Conv2d(nn.Conv2d):
             if t.numel() == 1:
                 t = torch.reshape(t, (1,))
                 t = torch.cat(self.out_channels*[t])
-            t = torch.reshape(self.out_channels, 1, 1, 1)
+            t = torch.reshape(t, (self.out_channels, 1, 1, 1))
         return t
 
     def get_eps_w(self):
@@ -337,7 +336,7 @@ class PACT_Conv2d(nn.Conv2d):
             w = PACT_QuantFunc.apply(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=True)
         else:
             w = self.weight
-        return nn.functional.Conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
     @classmethod
     def from_conv2d(cls, c : nn.Conv2d, **kwargs):
@@ -351,7 +350,6 @@ class PACT_Conv2d(nn.Conv2d):
                    groups=c.groups,
                    bias=(c.bias is not None),
                    padding_mode=c.padding_mode,
-                   device=c.device,
                    **kwargs)
 
 
@@ -422,7 +420,7 @@ class PACT_Conv1d(nn.Conv1d):
             if t.numel() == 1:
                 t = torch.reshape(t, (1,))
                 t = torch.cat(self.out_channels*[t])
-            t = torch.reshape(self.out_channels, 1, 1)
+            t = torch.reshape(t, (self.out_channels, 1, 1))
         return t
 
     def get_eps_w(self):
@@ -446,8 +444,21 @@ class PACT_Conv1d(nn.Conv1d):
             w = PACT_QuantFunc(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=True)
         else:
             w = self.weight
-        return nn.functional.Conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
+    @classmethod
+    def from_conv1d(cls, c : nn.Conv1d, **kwargs):
+        # kwargs should be arguments to PACT_Conv2d
+        return cls(in_channels=c.in_channels,
+                   out_channels=c.out_channels,
+                   kernel_size=c.kernel_size,
+                   stride=c.stride,
+                   padding=c.padding,
+                   dilation=c.dilation,
+                   groups=c.groups,
+                   bias=(c.bias is not None),
+                   padding_mode=c.padding_mode,
+                   **kwargs)
 
 class PACT_Linear(nn.Linear):
     def __init__(self,
@@ -502,7 +513,7 @@ class PACT_Linear(nn.Linear):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
                 t = torch.reshape(t, (1,))
-                t = torch.cat(self.out_features * t)
+                t = torch.cat(self.out_features * [t])
         return t
 
     def get_eps_w(self):
@@ -533,4 +544,4 @@ class PACT_Linear(nn.Linear):
         return cls(in_features=l.in_features,
                    out_features=l.out_features,
                    bias=(l.bias is not None),
-                   device=l.device)
+                   **kwargs)
