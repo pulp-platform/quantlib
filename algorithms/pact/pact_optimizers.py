@@ -39,7 +39,7 @@ class PACT_OptimizerFactory:
             # its name and qualname attributes - the perfect crime...
             PACT_Opt.__name__ = rep
             PACT_Opt.__qualname__ = rep
-            self.created_classes[rep] = NewOpt
+            self.created_classes[rep] = PACT_Opt
             return PACT_Opt
 
 fac = PACT_OptimizerFactory()
