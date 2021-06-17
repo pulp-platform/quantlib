@@ -4,6 +4,8 @@ from ..controller import Controller
 from .pact_ops import PACT_UnsignedAct, PACT_AsymmetricAct, PACT_Conv1d, PACT_Conv2d
 from typing import Union
 
+__all__ = ['PACT_ActController', 'PACT_LinearController']
+
 
 # Coefficients generated with this code:
 # https://colab.research.google.com/drive/1IH8TwCfkvcMkHx4tHldMNgsvBIgCpTeM?usp=sharing
@@ -57,6 +59,7 @@ class PACT_ActController(Controller):
         def set_learn_clip(val : bool):
             for m in self.modules:
                 for p in m.clipping_params.values():
+                    # TODO check if m.symm...
                     p.requires_grad = val
 
         if epoch in self.schedule.keys():
@@ -109,7 +112,7 @@ class PACT_ActController(Controller):
                     min_val = m.running_mean.data - m.nb_std * torch.sqrt(m.running_var.data)
             except AttributeError:
                 pass
-        
+
         for k, b in m.clipping_params.items():
             if k == 'high':
                 b.data = max_val
@@ -126,9 +129,10 @@ class PACT_ActController(Controller):
 
 class PACT_LinearController(Controller):
     """
-    Controller for PACT Conv classes:
+    Controller for PACT Linear classes:
       - PACT_Conv2d
       - PACT_Conv1d
+      - PACT_Linear
     """
 
     def __init__(self, modules : list, schedule : dict, verbose : bool = False):

@@ -18,6 +18,8 @@
 
 import torch
 
+__all__ = ['PACT_QuantFunc', 'AlmostSymmQuantFunc']
+
 # PACT activation: https://arxiv.org/pdf/1805.06085.pdf
 class PACT_QuantFunc(torch.autograd.Function):
     r"""PACT (PArametrized Clipping acTivation) quantization function (asymmetric), using a floor function.
