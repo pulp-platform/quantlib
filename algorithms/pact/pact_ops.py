@@ -339,6 +339,21 @@ class PACT_Conv2d(nn.Conv2d):
             w = self.weight
         return nn.functional.Conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
+    @classmethod
+    def from_conv2d(cls, c : nn.Conv2d, **kwargs):
+        # kwargs should be arguments to PACT_Conv2d
+        return cls(in_channels=c.in_channels,
+                   out_channels=c.out_channels,
+                   kernel_size=c.kernel_size,
+                   stride=c.stride,
+                   padding=c.padding,
+                   dilation=c.dilation,
+                   groups=c.groups,
+                   bias=(c.bias is not None),
+                   padding_mode=c.padding_mode,
+                   device=c.device,
+                   **kwargs)
+
 
 class PACT_Conv1d(nn.Conv1d):
     def __init__(
@@ -476,7 +491,7 @@ class PACT_Linear(nn.Linear):
         self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip)
         clip_hi = torch.tensor(1.)
         clip_hi = self.expand_bounds(clip_hi)
-        self.clip_hi = nn.Parameter(clip_hi, requires_grad=learn_clip)
+        self.clip_hi = nn.Parameter(clip_hi, requires_grad=learn_clip and not symm_wts)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
@@ -512,3 +527,10 @@ class PACT_Linear(nn.Linear):
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)
+
+    @classmethod
+    def from_linear(cls, l : nn.Linear, **kwargs):
+        return cls(in_features=l.in_features,
+                   out_features=l.out_features,
+                   bias=(l.bias is not None),
+                   device=l.device)
