@@ -25,13 +25,13 @@ class PACT_OptimizerFactory:
                 def __init__(self, net, pact_decay, *opt_args, **opt_kwargs):
                     pact_filter = TypeFilter(*_PACT_CLASSES)
                     net_nodes = LightweightGraph.build_nodes_list(net)
-                    learnable_clip_params = [b for n in net_nodes for b in n.module.clipping_params.values() if b.requires_grad]
+                    learnable_clip_params = [b for n in pact_filter(net_nodes) for b in n.module.clipping_params.values() if b.requires_grad]
                     # initialize the base class with configured weight decay for the
                     # clipping parameters and any other supplied parameters
                     base.__init__(self,
                                   [{'params':learnable_clip_params,
                                     'weight_decay': pact_decay},
-                                   {'params':[p for p in net.parameters() if p.requires_grad and p not in learnable_clip_params]}],
+                                   {'params':[p for p in net.parameters() if p.requires_grad and all(pp is not p for pp in learnable_clip_params)]}],
                                   *opt_args,
                                   **opt_kwargs)
 
