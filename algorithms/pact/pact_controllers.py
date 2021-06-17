@@ -64,7 +64,7 @@ class PACT_ActController(Controller):
 
         if epoch in self.schedule.keys():
             cmd = self.schedule[epoch]
-            self.log("Epoch {} - running command {}".format(cmd))
+            self.log("Epoch {} - running command {}".format(epoch, cmd))
             if cmd == 'verbose_on':
                 self.verbose = True
                 self.log("Verbose Mode Enabled!")
@@ -159,7 +159,7 @@ class PACT_LinearController(Controller):
     def step_pre_training(self, epoch : int, *args, **kwargs):
         if epoch in self.schedule.keys():
             cmd = self.schedule[epoch]
-            self.log("Epoch {} - running command {}".format(cmd))
+            self.log("Epoch {} - running command {}".format(epoch, cmd))
             if cmd == 'verbose_on':
                 self.verbose = True
                 self.log("Verbose Mode Enabled!")

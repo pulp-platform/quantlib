@@ -28,10 +28,12 @@ class PACT_OptimizerFactory:
                     learnable_clip_params = [b for n in pact_filter(net_nodes) for b in n.module.clipping_params.values() if b.requires_grad]
                     # initialize the base class with configured weight decay for the
                     # clipping parameters and any other supplied parameters
+                    other_params = [p for p in net.parameters() if p.requires_grad and all(pp is not p for pp in learnable_clip_params)]
+                    #print("training these params with options:", other_params, " ", opt_kwargs)
                     base.__init__(self,
                                   [{'params':learnable_clip_params,
                                     'weight_decay': pact_decay},
-                                   {'params':[p for p in net.parameters() if p.requires_grad and all(pp is not p for pp in learnable_clip_params)]}],
+                                   {'params':other_params}],
                                   *opt_args,
                                   **opt_kwargs)
 

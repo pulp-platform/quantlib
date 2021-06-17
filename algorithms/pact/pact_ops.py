@@ -113,12 +113,9 @@ class PACT_UnsignedAct(torch.nn.Module):
         :rtype:  :py:class:`torch.Tensor`
 
         """
-        # in statistics collection mode, the activation works like a relu/relu6/leaky_relu
+        # in statistics collection mode, the activation works like a
+        # relu/relu6/leaky_relu
         if not self.started:
-            if self.quantize == 'per_channel':
-                reduce_dims = tuple(range(1, len(x.shape)))
-            else:
-                reduce_dims = tuple(range(len(x.shape)))
             if self.act_kind == 'relu':
                 x = torch.nn.functional.relu(x)
             elif self.act_kind == 'relu6':
@@ -126,12 +123,12 @@ class PACT_UnsignedAct(torch.nn.Module):
             elif self.act_kind == 'leaky_relu':
                 x = torch.nn.functional.leaky_relu(x, self.leaky)
             with torch.no_grad():
-                cur_max = torch.amax(x, dim=reduce_dims)
-                cur_min = torch.amin(x, dim=reduce_dims)
+                cur_max = torch.max(x)
+                cur_min = torch.min(x)
                 self.max.data[:] = torch.maximum(self.max.data, cur_max)
                 self.min.data[:] = torch.minimum(self.min.data, cur_min)
-                self.running_mean.data[:] = 0.9 * self.running_mean.data + 0.1 * torch.mean(x, dim=reduce_dims)
-                self.running_var.data[:] = 0.9 * self.running_var.data  + 0.1 * torch.std(x, dim=reduce_dims)**2
+                self.running_mean.data[:] = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
+                self.running_var.data[:] = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
             return x
         # in normal mode, PACT_UnsignedAct uses the PACT_QuantFunc
         else:
