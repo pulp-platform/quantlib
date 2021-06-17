@@ -80,13 +80,12 @@ class NameFilter(Filter):
 
 
 class TypeFilter(Filter):
-
-    def __init__(self, type_: type):
+    def __init__(self, *types: type):
         super(TypeFilter, self).__init__()
-        self._type = type_
+        self._types = types
 
     def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
-        return list(filter(lambda n: n.type_ == self._type, nodes_list))
+        return list(filter(lambda n: n.type_ in self._types, nodes_list))
 
     @property
     def _type_str(self):
