@@ -18,7 +18,9 @@
 
 import torch
 
-__all__ = ['PACT_QuantFunc', 'AlmostSymmQuantFunc']
+__all__ = ['PACT_QuantFunc',
+           'AlmostSymmQuantFunc',
+           'PACT_Quantize']
 
 # PACT activation: https://arxiv.org/pdf/1805.06085.pdf
 class PACT_QuantFunc(torch.autograd.Function):
@@ -66,13 +68,13 @@ class PACT_QuantFunc(torch.autograd.Function):
         # we quantize also clip_lo, beta. for beta it's "cosmetic", for clip_lo it is
         # substantial, because also clip_lo will be represented as a wholly integer number
         # down the line
-        clip_lo_quant = (clip_lo.item() / (eps+delta)).floor() * eps
-        clip_hi_quant  = (clip_hi.item() / (eps+delta)).floor() * eps
+        clip_lo_quant = (clip_lo / (eps+delta)).floor() * eps
+        clip_hi_quant  = (clip_hi / (eps+delta)).floor() * eps
         where_input_nonclipped = (input >= clip_lo_quant) * (input < clip_hi_quant)
         where_input_lo = (input < clip_lo_quant)
         where_input_hi = (input >= clip_hi_quant)
         ctx.save_for_backward(where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient)
-        return ((input.clamp(clip_lo_quant.item(), clip_hi_quant.item()) / (eps+delta)).floor()) * eps
+        return ((input.clamp(clip_lo_quant, clip_hi_quant) / (eps+delta)).floor()) * eps
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -86,25 +88,27 @@ class PACT_QuantFunc(torch.autograd.Function):
         grad_upper = torch.where(where_input_hi, grad_output, zero).sum().expand(1)
         # beta is the lower bound; making it larger will make the output smaller
         grad_lower  = torch.where(where_input_lo, grad_output, zero).sum().expand(1)
-        return grad_input, None, grad_lower, grad_upper
+        return grad_input, None, grad_lower, grad_upper, None, None
 
-# to
+# a wrapper for PACT_QuantFunc to allow kwargs
+def PACT_Quantize(x, eps, clip_lo, clip_hi, delta=0, clip_gradient=False):
+    return PACT_QuantFunc.apply(x, eps, clip_lo, clip_hi, delta, clip_gradient)
+
 class AlmostSymmQuantFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx, clip_lo, n_levels):
-        torch._assert(clip_lo < 0, "Big problem: lower_bound passed to AlmostSymmQuantFunc is not negative!!! Everything will break!")
+        torch._assert(torch.all(clip_lo < 0), "Big problem: lower_bound passed to AlmostSymmQuantFunc is not negative!!! Everything will break!")
         if n_levels % 2 == 0:
-            clip_hi = -clip_lo * (n_levels-2)/n_levels
+            scale = torch.tensor(-(n_levels-2)/n_levels, device=clip_lo.device)
         else:
-            clip_hi = -clip_lo
-        ctx.save_for_backward(n_levels)
+            scale = torch.tensor(-1., device=clip_lo.device)
+        clip_hi = scale * clip_lo
+        ctx.save_for_backward(scale)
         return clip_hi
 
     @staticmethod
     def backward(ctx, grad_output):
-        n_levels = ctx.saved_variables
-        if n_levels % 2 == 0:
-            grad_lo = -grad_output * (n_levels-2)/n_levels
-        else:
-            grad_lo = -grad_output
+        scale = ctx.saved_variables
+        grad_lo = scale * grad_output
+
         return grad_lo, None

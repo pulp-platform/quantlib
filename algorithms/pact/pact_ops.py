@@ -16,7 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .pact_functions import PACT_QuantFunc, AlmostSymmQuantFunc
+from .pact_functions import PACT_Quantize, AlmostSymmQuantFunc
 import torch
 from torch import nn
 
@@ -28,8 +28,10 @@ __all__ = [
     'PACT_AsymmetricAct',
     'PACT_Conv2d',
     'PACT_Conv1d',
-    'PACT_Linear'
+    'PACT_Linear',
+    'PACT_Quantize'
 ]
+
 
 class PACT_UnsignedAct(torch.nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.
@@ -134,7 +136,7 @@ class PACT_UnsignedAct(torch.nn.Module):
         else:
             eps = self.get_eps()
             # TODO why clip_hi+eps???
-            return PACT_QuantFunc.apply(x, eps, 0, self.clip_hi, clip_gradient=True) # clip_gradient=True keeps NEMO compatibility
+            return PACT_Quantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, clip_gradient=torch.tensor(True, device=self.clip_hi.device)) # clip_gradient=True keeps NEMO compatibility
 
 
 class PACT_AsymmetricAct(torch.nn.Module):
@@ -241,7 +243,7 @@ class PACT_AsymmetricAct(torch.nn.Module):
         # in normal mode, PACT_UnsignedAct uses
         else:
             eps = self.get_eps()
-            return PACT_QuantFunc.apply(x, eps, self.clip_lo, self.clip_beta + eps)
+            return PACT_Quantize(x, eps, self.clip_lo, self.clip_beta + eps)
 
 class PACT_Conv2d(nn.Conv2d):
     def __init__(
@@ -282,13 +284,14 @@ class PACT_Conv2d(nn.Conv2d):
         self.n_levels = n_levels
         self.quantize = quantize
         self.init_clip = init_clip
+        self.learn_clip = learn_clip
         # this member indicates that quantization is enabled
         self.started = False
         self.symm_wts = symm_wts
         self.nb_std = nb_std
         clip_lo = torch.tensor(-1.)
         # clip_lo & clip_hi should have dimension (out_channels, 1, 1, 1) in case of per-channel quantization.
-        # The PACTController will take care of managing them according to the configuration (per-channel, per
+        # The PACTController will take care of managing them according to the configuration (per-channel, per-layer)
         clip_lo = self.expand_bounds(clip_lo)
         self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip)
         clip_hi = torch.tensor(1.)
@@ -327,10 +330,10 @@ class PACT_Conv2d(nn.Conv2d):
     def forward(self, x):
         if self.started:
             if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo)
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACT_QuantFunc.apply(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=True)
+            w = PACT_Quantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -435,10 +438,10 @@ class PACT_Conv1d(nn.Conv1d):
     def forward(self, x):
         if self.started:
             if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo)
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACT_QuantFunc(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=True)
+            w = PACT_QuantFunc(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -486,6 +489,7 @@ class PACT_Linear(nn.Linear):
         assert init_clip in ['max', 'std', 'sawb'], "Invalid option init_clip: {}; expected 'max', 'std' or 'sawb'"
 
         super(PACT_Linear, self).__init__(in_features, out_features, **kwargs)
+        self.n_levels = n_levels
         self.quantize = quantize
         self.init_clip = init_clip
         self.learn_clip = learn_clip
@@ -511,6 +515,7 @@ class PACT_Linear(nn.Linear):
             if t.numel() == 1:
                 t = torch.reshape(t, (1,))
                 t = torch.cat(self.out_features * [t])
+            t = t.reshape((self.out_features, 1))
         return t
 
     def get_eps_w(self):
@@ -528,10 +533,10 @@ class PACT_Linear(nn.Linear):
     def forward(self, x):
         if self.started:
             if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo)
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACT_QuantFunc.apply(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=True)
+            w = PACT_Quantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)

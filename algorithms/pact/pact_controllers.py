@@ -10,7 +10,7 @@ __all__ = ['PACT_ActController', 'PACT_LinearController']
 # Coefficients generated with this code:
 # https://colab.research.google.com/drive/1IH8TwCfkvcMkHx4tHldMNgsvBIgCpTeM?usp=sharing
 # first entry is c1, second is c2 with alpha_w^* = c1 * sqrt(Ew2) - c2 * Ew1
-__sawb_asymm_lut = {
+_sawb_asymm_lut = {
     2: [1.708, 0.403],
     3: [4.712, 3.621],
     4: [8.536, 7.931],
@@ -72,7 +72,7 @@ class PACT_ActController(Controller):
                 self.verbose = False
             elif cmd == 'start':
                 for m in self.modules:
-                    m.reset_clip_bounds(m.init_clip)
+                    self.reset_clip_bounds(m, m.init_clip)
                     m.started = True
                 self.log("Started Quantization!")
             elif cmd == 'freeze':
@@ -214,22 +214,22 @@ class PACT_LinearController(Controller):
             #TODO this doesn't really make sense. this way, the lower bound is initialized to -mean-nb_std*std.
             # if mean is 0 (which it should approximately be...) that's fine but if not, it's not really a proper
             # mean + std initialization.
-            max_val = m.running_mean + m.nb_std * torch.sqrt(m.running_var)
+            max_val = w.mean(dim=reduce_dims) + w.std(dim=reduce_dims) * m.nb_std
             # 'std' initialization is inherently symmetrical, so use the "almost_symmetrical" quantization anyway
             min_mal, max_val = almost_symm_quant(max_val, m.n_levels)
         elif method == 'sawb':
             # mean absolute weights: E[|W|] - either channel-wise or over the whole tensor depending on reduce_dims
             # when using SAWB
-            e_w_abs = torch.mean(m.weight.data.abs(), dim=reduce_dims)
+            e_w_abs = m.weight.data.abs().mean(dim=reduce_dims)
             e_w2 = torch.mean(m.weight.data**2, dim=reduce_dims)
             n_bits = int(np.log2(m.n_levels))
             assert int(2**n_bits) == m.n_levels, "SAWB not supported for n_levels={} - must be power of 2!".format(m.n_levels)
-            coeffs = __sawb_asymm_lut[n_bits]
-            alpha = coeffs[0] * torch.sqrt(e_w2) - coeffs[1] * e_w_abs
+            coeffs = _sawb_asymm_lut[n_bits]
+            alpha = coeffs[0] * e_w2.sqrt() - coeffs[1] * e_w_abs
             min_val, max_val = almost_symm_quant(alpha, m.n_levels)
 
-        m.max.data = m.expand_bounds(max_val)
-        m.min.data = m.expand_bounds(min_val)
+        m.clip_hi.data = m.expand_bounds(max_val)
+        m.clip_lo.data = m.expand_bounds(min_val)
 
     def log(self, msg : str):
         if self.verbose:
