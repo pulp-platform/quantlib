@@ -68,26 +68,35 @@ class PACT_QuantFunc(torch.autograd.Function):
         # we quantize also clip_lo, beta. for beta it's "cosmetic", for clip_lo it is
         # substantial, because also clip_lo will be represented as a wholly integer number
         # down the line
+        # 'pc' indicates we are doing per-channel quantization - this is not
+        # very elegant
         clip_lo_quant = (clip_lo / (eps+delta)).floor() * eps
         clip_hi_quant  = (clip_hi / (eps+delta)).floor() * eps
         where_input_nonclipped = (input >= clip_lo_quant) * (input < clip_hi_quant)
         where_input_lo = (input < clip_lo_quant)
         where_input_hi = (input >= clip_hi_quant)
-        ctx.save_for_backward(where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient)
+        ctx.save_for_backward(where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient, clip_lo)
         return ((input.clamp(clip_lo_quant, clip_hi_quant) / (eps+delta)).floor()) * eps
 
     @staticmethod
     def backward(ctx, grad_output):
         # see Hubara et al., Section 2.3
-        where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient = ctx.saved_variables
+        where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient, clip_lo = ctx.saved_variables
         zero = torch.zeros(1).to(where_input_nonclipped.device)
         if clip_gradient:
             grad_input = torch.where(where_input_nonclipped, grad_output, zero)
         else:
             grad_input = grad_output
-        grad_upper = torch.where(where_input_hi, grad_output, zero).sum().expand(1)
+        reduce_dims = tuple(range(len(clip_lo.shape)))
+        if len(clip_lo.shape) > 1:
+            # this works only for weights due to activations' batch dimensions,
+            # but we don't support per-channel quantization of activations so
+            # it's OK
+            reduce_dims = reduce_dims[1:]
+
+        grad_upper = torch.where(where_input_hi, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
         # beta is the lower bound; making it larger will make the output smaller
-        grad_lower  = torch.where(where_input_lo, grad_output, zero).sum().expand(1)
+        grad_lower  = torch.where(where_input_lo, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
         return grad_input, None, grad_lower, grad_upper, None, None
 
 # a wrapper for PACT_QuantFunc to allow kwargs
@@ -97,18 +106,23 @@ def PACT_Quantize(x, eps, clip_lo, clip_hi, delta=0, clip_gradient=False):
 class AlmostSymmQuantFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx, clip_lo, n_levels):
-        torch._assert(torch.all(clip_lo < 0), "Big problem: lower_bound passed to AlmostSymmQuantFunc is not negative!!! Everything will break!")
+        #print("clip_lo: ", clip_lo)
+        #print("clip_lo shape: ", clip_lo.shape)
+        #print("max clip_lo: ", clip_lo.max())
+        torch._assert(torch.all(clip_lo <= 0), "Big problem: clip_lo passed to AlmostSymmQuantFunc is not negative!!! Everything will break!")
+
         if n_levels % 2 == 0:
             scale = torch.tensor(-(n_levels-2)/n_levels, device=clip_lo.device)
         else:
             scale = torch.tensor(-1., device=clip_lo.device)
+
         clip_hi = scale * clip_lo
         ctx.save_for_backward(scale)
         return clip_hi
 
     @staticmethod
     def backward(ctx, grad_output):
-        scale = ctx.saved_variables
+        #print("grad_output: ", grad_output)
+        scale, = ctx.saved_variables
         grad_lo = scale * grad_output
-
         return grad_lo, None

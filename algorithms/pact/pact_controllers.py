@@ -59,7 +59,6 @@ class PACT_ActController(Controller):
         def set_learn_clip(val : bool):
             for m in self.modules:
                 for p in m.clipping_params.values():
-                    # TODO check if m.symm...
                     p.requires_grad = val
 
         if epoch in self.schedule.keys():
@@ -67,26 +66,26 @@ class PACT_ActController(Controller):
             self.log("Epoch {} - running command {}".format(epoch, cmd))
             if cmd == 'verbose_on':
                 self.verbose = True
-                self.log("Verbose Mode Enabled!")
+                self.log("Verbose mode enabled!")
             elif cmd == 'verbose_off':
                 self.verbose = False
             elif cmd == 'start':
                 for m in self.modules:
                     self.reset_clip_bounds(m, m.init_clip)
                     m.started = True
-                self.log("Started Quantization!")
+                self.log("Started activation quantization!")
             elif cmd == 'freeze':
                 set_learn_clip(False)
-                self.log("Froze Clipping Parameters!")
+                self.log("Froze clipping parameters!")
             elif cmd == 'thaw':
                 # 'thaw' means enable learning for clipping parameters
                 set_learn_clip(True)
-                self.log("Unfroze Clipping Parameters!")
+                self.log("Unfroze clipping parameters!")
             else:
                 assert cmd == 'stop', "Invalid PACT_ActController command at epoch {}: {}".format(epoch, cmd)
                 for m in self.modules:
                     m.started = False
-                self.log("Stopped Quantization!")
+                self.log("Stopped quantization!")
 
     def reset_clip_bounds(self, m : Union[PACT_UnsignedAct, PACT_AsymmetricAct], method : str = None):
         if not method:
@@ -153,6 +152,14 @@ class PACT_LinearController(Controller):
                     # However, we also update the upper clipping bound for layers where 'symm_wts' and 'learn_clip'
                     # here so it reflects the value that is used in forward propagation.
                     elif m.learn_clip and m.symm_wts:
+                        # if we learn symmetric weight bounds, it can happen
+                        # that the lower bound is pushed past 0. In this step,
+                        # we make sure that the lower bound stays smaller or
+                        # equal to zero.
+                        if torch.any(m.clip_lo.data>0):
+                            self.log("Found a clip_lo that was >0: {}".format(m.clip_lo.data))
+                            self.log("Clamping to -0.01!")
+                        m.clip_lo.data = torch.minimum(torch.zeros_like(m.clip_lo.data)-0.01, m.clip_lo.data)
                         _, max_val = almost_symm_quant(-m.clip_lo.data, m.n_levels)
                         m.clip_hi.data = max_val
 
@@ -162,14 +169,14 @@ class PACT_LinearController(Controller):
             self.log("Epoch {} - running command {}".format(epoch, cmd))
             if cmd == 'verbose_on':
                 self.verbose = True
-                self.log("Verbose Mode Enabled!")
+                self.log("Verbose mode enabled!")
             elif cmd == 'verbose_off':
                 self.verbose = False
             elif cmd == 'start':
                 for m in self.modules:
                     self.reset_clip_bounds(m)
                     m.started = True
-                self.log("Started Quantization!")
+                self.log("Started quantization!")
             elif cmd == 'freeze':
                 for m in self.modules:
                     for b in m.clipping_params.values():
@@ -185,7 +192,7 @@ class PACT_LinearController(Controller):
                 assert cmd == 'stop', "Invalid PACT_ConvController command at epoch {}: {}".format(epoch, cmd)
                 for m in self.modules:
                     m.started = False
-                self.log("Stopped Quantization!")
+                self.log("Stopped quantization!")
 
     def step_pre_validation(self, epoch : int, *args, **kwargs):
         # always before validation, update the clipping parameters as is done before each batch, so the changes from

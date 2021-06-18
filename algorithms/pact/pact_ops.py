@@ -191,7 +191,7 @@ class PACT_AsymmetricAct(torch.nn.Module):
         assert init_clip in ['max', 'std'], "Invalid argument init_clip: {}; expected 'max' or 'std".format(init_clip)
         self.n_levels = n_levels
         self.clip_lo = torch.nn.Parameter(torch.Tensor((clip_lo,)), requires_grad=learn_clip)
-        self.clip_hi  = torch.nn.Parameter(torch.Tensor((clip_hi,)),  requires_grad=learn_clip)
+        self.clip_hi  = torch.nn.Parameter(torch.Tensor((clip_hi,)),  requires_grad=learn_clip and (not symm))
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
         self.act_kind = act_kind
@@ -243,7 +243,12 @@ class PACT_AsymmetricAct(torch.nn.Module):
         # in normal mode, PACT_UnsignedAct uses
         else:
             eps = self.get_eps()
-            return PACT_Quantize(x, eps, self.clip_lo, self.clip_beta + eps)
+            if self.learn_clip and self.symm:
+                clip_upper = PACT_AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+            else:
+                clip_upper = self.clip_hi
+            #TODO: why was this clip_hi+eps??
+            return PACT_Quantize(x, eps, self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
 
 class PACT_Conv2d(nn.Conv2d):
     def __init__(
