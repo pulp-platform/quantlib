@@ -5,8 +5,11 @@ from typing import List
 
 
 __all__ = [
+    'NotFilter',
     'OrFilter',
     'AndFilter',
+    'VarOrFilter',
+    'VarAndFilter',
     'NameFilter',
     'TypeFilter',
 ]
@@ -23,11 +26,27 @@ class Filter(object):
     def __call__(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
         return self.find(nodes_list)
 
+    def __neg__(self):
+        return NotFilter(self)
+
     def __and__(self, other):
         return AndFilter(self, other)
 
     def __or__(self, other):
         return OrFilter(self, other)
+
+
+class NotFilter(Filter):
+
+    def __init__(self, filter_: Filter):
+        super(NotFilter, self).__init__()
+        self._filter = filter_
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        return list(set(nodes_list).difference(set(self._filter(nodes_list))))
+
+    def __repr__(self):
+        return "".join(["(-", repr(self._filter), ")"])
 
 
 class OrFilter(Filter):
@@ -45,6 +64,42 @@ class OrFilter(Filter):
 
     def __repr__(self):
         return "".join(["(", repr(self._filter_a), " | ", repr(self._filter_b), ")"])
+
+
+class VarOrFilter(Filter):
+
+    def __init__(self, *filters: Filter):
+        assert len(filters) > 1
+        super(VarOrFilter, self).__init__()
+        self._filters = filters
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        filtered_nodes = []
+        for f in self._filters:
+            filtered_nodes += f(nodes_list)
+        filtered_nodes = set(filtered_nodes) # remove duplicates
+        return list(filtered_nodes)
+
+    def __repr__(self):
+        return "".join(["("] + [repr(f)+" | " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])
+
+
+class VarAndFilter(Filter):
+
+    def __init__(self, *filters):
+        assert len(filters) > 1
+        super(VarAndFilter, self).__init__()
+        self._filters = filters
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        filtered_nodes = nodes_list
+        for f in self._filters:
+            filtered_nodes = f(filtered_nodes)
+        return filtered_nodes
+
+    def __repr__(self):
+        return "".join(["("] + [repr(f)+" & " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])
+
 
 
 class AndFilter(Filter):
@@ -80,12 +135,13 @@ class NameFilter(Filter):
 
 
 class TypeFilter(Filter):
-    def __init__(self, *types: type):
+
+    def __init__(self, type_: type):
         super(TypeFilter, self).__init__()
-        self._types = types
+        self._type = type_
 
     def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
-        return list(filter(lambda n: n.type_ in self._types, nodes_list))
+        return list(filter(lambda n: n.type_ == self._type, nodes_list))
 
     @property
     def _type_str(self):

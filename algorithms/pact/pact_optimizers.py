@@ -4,7 +4,7 @@ from torch.optim import Adam, SGD, Adagrad
 import inspect
 
 from . import pact_ops
-from quantlib.editing.lightweight.rules.filters import TypeFilter
+from quantlib.editing.lightweight.rules.filters import TypeFilter, VarOrFilter
 from quantlib.editing.lightweight.graph import LightweightGraph
 
 __all__ = ['PACT_Adam', 'PACT_SGD', 'PACT_Adagrad']
@@ -23,7 +23,7 @@ class PACT_OptimizerFactory:
         else:
             class PACT_Opt(base):
                 def __init__(self, net, pact_decay, *opt_args, **opt_kwargs):
-                    pact_filter = TypeFilter(*_PACT_CLASSES)
+                    pact_filter = VarOrFilter(*[TypeFilter(t) for t in _PACT_CLASSES])
                     net_nodes = LightweightGraph.build_nodes_list(net)
                     learnable_clip_params = [b for n in pact_filter(net_nodes) for b in n.module.clipping_params.values() if b.requires_grad]
                     # initialize the base class with configured weight decay for the
