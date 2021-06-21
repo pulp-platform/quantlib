@@ -1,19 +1,23 @@
 import torch
 import numpy as np
 from ..controller import Controller
-from .pact_ops import PACT_UnsignedAct, PACT_AsymmetricAct, PACT_Conv1d, PACT_Conv2d
+from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d
 from typing import Union
 
-__all__ = ['PACT_ActController', 'PACT_LinearController']
+
+__all__ = [
+    'PACTActController',
+    'PACTLinearController',
+]
 
 
 # Coefficients generated with this code:
 # https://colab.research.google.com/drive/1IH8TwCfkvcMkHx4tHldMNgsvBIgCpTeM?usp=sharing
 # first entry is c1, second is c2 with alpha_w^* = c1 * sqrt(Ew2) - c2 * Ew1
 _sawb_asymm_lut = {
-    2: [1.708, 0.403],
-    3: [4.712, 3.621],
-    4: [8.536, 7.931],
+    2: [ 1.708,  0.403],
+    3: [ 4.712,  3.621],
+    4: [ 8.536,  7.931],
     5: [12.251, 12.201],
     6: [14.858, 15.296],
     7: [20.552, 22.297],
@@ -30,23 +34,24 @@ def almost_symm_quant(max_val, n_levels):
     max_val = min_val + (n_levels-1)*eps
     return min_val, max_val
 
-class PACT_ActController(Controller):
+
+class PACTActController(Controller):
     """
     Controller for PACT activation classes:
-      - PACT_UnsignedAct
-      - PACT_AsymmetricAct
+      - PACTUnsignedAct
+      - PACTAsymmetricAct
     The controller takes a schedule telling it to enable/disable quantization
     at given epochs. Starting quantization entails setting the `quantize` flags
     to `True` and setting the initial clipping values based on the `init_clip` value.
     """
     def __init__(self, modules : list, schedule : dict, verbose : bool = False):
-        super(PACT_ActController, self).__init__()
-        assert all(isinstance(m, (PACT_AsymmetricAct, PACT_UnsignedAct)) for m in modules), "Non-activation modules passed to PACT_ActController!"
+        super(PACTActController, self).__init__()
+        assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
         self.modules = modules
         self.schedule = {int(k):v.lower() for k,v in schedule.items()}
         self.verbose = verbose
 
-    def step_pre_training(self, epoch : int, *args, **kwargs):
+    def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
         """
         Executed before every training epoch. If the current epoch is in the schedule, perform the indicated action:
         - 'start': start quantization - set the clipping bound(s) according to the method set as `init_clip` and set
@@ -82,12 +87,12 @@ class PACT_ActController(Controller):
                 set_learn_clip(True)
                 self.log("Unfroze clipping parameters!")
             else:
-                assert cmd == 'stop', "Invalid PACT_ActController command at epoch {}: {}".format(epoch, cmd)
+                assert cmd == 'stop', "Invalid PACTActController command at epoch {}: {}".format(epoch, cmd)
                 for m in self.modules:
                     m.started = False
                 self.log("Stopped quantization!")
 
-    def reset_clip_bounds(self, m : Union[PACT_UnsignedAct, PACT_AsymmetricAct], method : str = None):
+    def reset_clip_bounds(self, m : Union[PACTUnsignedAct, PACTAsymmetricAct], method : str = None):
         if not method:
             method = m.init_clip
         if method == 'max':
@@ -122,25 +127,24 @@ class PACT_ActController(Controller):
 
     def log(self, msg : str):
         if self.verbose:
-            print("[PACT_ActController]   ", msg)
+            print("[PACTActController]   ", msg)
 
 
-
-class PACT_LinearController(Controller):
+class PACTLinearController(Controller):
     """
     Controller for PACT Linear classes:
-      - PACT_Conv2d
-      - PACT_Conv1d
-      - PACT_Linear
+      - PACTConv2d
+      - PACTConv1d
+      - PACTLinear
     """
 
     def __init__(self, modules : list, schedule : dict, verbose : bool = False):
-        super(PACT_LinearController, self).__init__()
+        super(PACTLinearController, self).__init__()
         self.modules = modules
         self.schedule = {int(k):v.lower() for k,v in schedule.items()}
         self.verbose = verbose
 
-    def step_pre_batch(self, *args, **kwargs):
+    def step_pre_training_batch(self, *args, **kwargs):
         with torch.no_grad():
             for m in self.modules:
                 if (not m.frozen) and m.started:
@@ -163,7 +167,7 @@ class PACT_LinearController(Controller):
                         _, max_val = almost_symm_quant(-m.clip_lo.data, m.n_levels)
                         m.clip_hi.data = max_val
 
-    def step_pre_training(self, epoch : int, *args, **kwargs):
+    def step_pre_training_epoch(self, epoch : int, *args, **kwargs):
         if epoch in self.schedule.keys():
             cmd = self.schedule[epoch]
             self.log("Epoch {} - running command {}".format(epoch, cmd))
@@ -189,19 +193,18 @@ class PACT_LinearController(Controller):
                         b.requires_grad = m.learn_clip and not (k=='high' and m.symm_wts)
                     m.frozen = False
             else:
-                assert cmd == 'stop', "Invalid PACT_ConvController command at epoch {}: {}".format(epoch, cmd)
+                assert cmd == 'stop', "Invalid PACTLinearController command at epoch {}: {}".format(epoch, cmd)
                 for m in self.modules:
                     m.started = False
                 self.log("Stopped quantization!")
 
-    def step_pre_validation(self, epoch : int, *args, **kwargs):
+    def step_pre_validation(self, epoch: int, *args, **kwargs):
         # always before validation, update the clipping parameters as is done before each batch, so the changes from
         # the last batch of an epoch are reflected in the clipping params.
-        self.step_pre_batch()
-
+        self.step_pre_training_batch()
 
     # resetting clip bounds is almost identical between the different convolutions
-    def reset_clip_bounds(self, m : Union[PACT_Conv2d, PACT_Conv1d]):
+    def reset_clip_bounds(self, m: Union[PACTConv2d, PACTConv1d]):
         method = m.init_clip
         w = m.weight.data
         if m.quantize == 'per_channel':
@@ -240,4 +243,4 @@ class PACT_LinearController(Controller):
 
     def log(self, msg : str):
         if self.verbose:
-            print("[PACT_ConvController]   ", msg)
+            print("[PACTLinearController]   ", msg)

@@ -38,7 +38,7 @@ class INQController(Controller):
     def load_state_dict(self, state_dict):
         self.__dict__.update(state_dict)
 
-    def step_pre_training(self, epoch, optimizer=None, tb_writer=None):
+    def step_pre_training_epoch(self, epoch, optimizer=None, tb_writer=None):
         """Call this each epoch before training loop."""
         if epoch in self.schedule.keys():
             self.fraction = self.schedule[epoch]

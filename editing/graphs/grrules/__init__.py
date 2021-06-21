@@ -3,13 +3,12 @@ from collections import OrderedDict
 from .seeker import Seeker
 from .dporules import *
 from .hlprrules import *
-
-import quantlib.editing.graphs.traces
+from .. import traces
 
 
 def load_rescoping_rules(modules=None):
 
-    libtraces = quantlib.editing.graphs.traces.load_traces_library(modules=modules)
+    libtraces = traces.load_traces_library(modules=modules)
 
     librules = OrderedDict()
     for mod_name, (L, K) in libtraces.items():

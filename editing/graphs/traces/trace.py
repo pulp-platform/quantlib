@@ -1,24 +1,28 @@
 import networkx as nx
 import os
 
-import quantlib.editing.graphs.graphs
-import quantlib.editing.graphs.utils
+# import graphs
+# import quantlib.editing.graphs.utils
+
+from quantlib.editing.graphs import graphs
+from quantlib.editing.graphs import utils
 
 
 __TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
+# __TRACES_LIBRARY__ = os.path.join(os.path.expanduser('~'), 'Desktop', 'QuantLab', 'quantlib', 'editing', 'graphs', 'traces', '.libtraces')
 
 
 def trace_module(library, algorithm, mod, dummy_input):
 
     # trace graph
     mod.eval()
-    onnxgraph = quantlib.editing.graphs.graphs.ONNXGraph(mod, dummy_input)
+    onnxgraph = graphs.ONNXGraph(mod, dummy_input)
     G = onnxgraph.nx_graph
 
     # locate interface nodes
     node_2_partition = nx.get_node_attributes(G, 'bipartite')
     for n in {n for n, onnxnode in onnxgraph.nodes_dict.items() if onnxnode.nobj in set(onnxgraph.jit_graph.inputs()) | set(onnxgraph.jit_graph.outputs())}:
-        node_2_partition[n] = quantlib.editing.graphs.graphs.__CONTXT_PARTITION__
+        node_2_partition[n] = graphs.Bipartite.CONTXT
     nx.set_node_attributes(G, node_2_partition, 'partition')
 
     # store traces and graph picture
@@ -26,7 +30,7 @@ def trace_module(library, algorithm, mod, dummy_input):
     if not os.path.isdir(trace_dir):
         os.makedirs(trace_dir, exist_ok=True)
     nx.write_gpickle(G, os.path.join(trace_dir, 'networkx'))
-    quantlib.editing.graphs.utils.draw_graph(G, trace_dir, 'graphviz')
+    utils.draw_graph(G, trace_dir, 'graphviz')
 
 
 ####################################
@@ -77,7 +81,7 @@ def trace_pytorch_modules():
     ################
     algorithm = 'ViewFlatten'
 
-    mod_ViewFlattenNd = quantlib.editing.graphs.graphs.ViewFlattenNd()
+    mod_ViewFlattenNd = graphs.ViewFlattenNd()
     dummy_input = torch.ones(_batch_size, _n_input_channels, _dim1, _dim2, _dim3)
     trace_module(library, algorithm, mod_ViewFlattenNd, dummy_input)
 
@@ -118,6 +122,34 @@ def trace_quantlib_modules():
     # mod_INQConv3d = qa.inq.INQConv3d(_n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
     # dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2, _dim3))
     # trace_module(library, algorithm, mod_INQConv3d, dummy_input)
+
+    #########
+    ## ANA ##
+    #########
+    algorithm = 'ANA'
+
+    quantizer_spec = {'nbits': 2, 'signed': True, 'balanced': True, 'eps': 1.0}
+    noise_type     = 'uniform'
+
+    mod_ANAActivation = qa.ana.ANAActivation(quantizer_spec, noise_type)
+    dummy_input = torch.ones((_batch_size, _n_input_channels))
+    trace_module(library, algorithm, mod_ANAActivation, dummy_input)
+
+    mod_ANALinear = qa.ana.ANALinear(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels))
+    trace_module(library, algorithm, mod_ANALinear, dummy_input)
+
+    mod_ANAConv1d = qa.ana.ANAConv1d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1))
+    trace_module(library, algorithm, mod_ANAConv1d, dummy_input)
+
+    mod_ANAConv2d = qa.ana.ANAConv2d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2))
+    trace_module(library, algorithm, mod_ANAConv2d, dummy_input)
+
+    mod_ANAConv3d = qa.ana.ANAConv3d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2, _dim3))
+    trace_module(library, algorithm, mod_ANAConv3d, dummy_input)
 
 
 if __name__ == '__main__':

@@ -87,11 +87,11 @@ def measure(anamod, forward_inputs, backward_inputs, n_iters=10):
     return forward_measurements, backward_measurements
 
 
-def profile(anamod, N=tuple([10**i for i in range(3, 6)]), n_iters=10):
+def profile(anamod, N=tuple([10**i for i in range(3, 6)]), n_iters=100):
     import numpy as np
 
     print("Performance report for {} version".format('GPU' if anamod.fnoise.sigma.is_cuda else 'CPU'))
-    print("Input size \t Forward \t\t\t\t\t\t | Backward")
+    print("Input size \t | Forward \t\t\t\t | Backward")
 
     for input_size in N:
         forward_inputs, backward_inputs = generate_inputs(input_size, anamod.quant_levels.data, anamod.eps.data, distribution='Dirac', n_iters=n_iters, is_cuda=anamod.fnoise.sigma.data.is_cuda)
@@ -104,7 +104,7 @@ def profile(anamod, N=tuple([10**i for i in range(3, 6)]), n_iters=10):
         backward_mu = np.mean(backward_perf)
         backward_std = np.std(backward_perf)
 
-        print("{:10d} \t {:10.3f}us +/- {:10.3f}us \t | {:10.3f}us +/- {:10.3f}us".format(input_size, forward_mu, forward_std, backward_mu, backward_std))
+        print("{:10d} \t | {:10.3f}us +/- {:10.3f}us \t | {:10.3f}us +/- {:10.3f}us".format(input_size, forward_mu, forward_std, backward_mu, backward_std))
 
 
 def check_functional_equivalence(anamod_gpu, anamod_cpu, tolerance=1e-6):
@@ -165,7 +165,7 @@ def get_ana_module(module_dict, quantizer_spec, noise_type,
     anamod = module_dict['ANAActivation'](quantizer_spec, noise_type)
     anamod.set_fnoise(fmu, fsigma)
     anamod.set_bnoise(bmu, bsigma)
-    if cuda:
+    if cuda and torch.cuda.is_available():
         anamod.cuda()
 
     return anamod

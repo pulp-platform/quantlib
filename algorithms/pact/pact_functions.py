@@ -18,12 +18,16 @@
 
 import torch
 
-__all__ = ['PACT_QuantFunc',
-           'AlmostSymmQuantFunc',
-           'PACT_Quantize']
+
+__all__ = [
+    'PACTQuantFunc',
+    'AlmostSymmQuantFunc',
+    'PACTQuantize',
+]
+
 
 # PACT activation: https://arxiv.org/pdf/1805.06085.pdf
-class PACT_QuantFunc(torch.autograd.Function):
+class PACTQuantFunc(torch.autograd.Function):
     r"""PACT (PArametrized Clipping acTivation) quantization function (asymmetric), using a floor function.
 
         Implements a :py:class:`torch.autograd.Function` for quantizing weights in :math:`Q` bits using an asymmetric PACT-like strategy (original
@@ -101,17 +105,18 @@ class PACT_QuantFunc(torch.autograd.Function):
         grad_lower  = torch.where(where_input_lo, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
         return grad_input, None, grad_lower, grad_upper, None, None
 
-# a wrapper for PACT_QuantFunc to allow kwargs
-def PACT_Quantize(x, eps, clip_lo, clip_hi, delta=0, clip_gradient=False):
-    return PACT_QuantFunc.apply(x, eps, clip_lo, clip_hi, delta, clip_gradient)
+
+# a wrapper for PACTQuantFunc to allow kwargs
+def PACTQuantize(x, eps, clip_lo, clip_hi, delta=0, clip_gradient=False):
+    return PACTQuantFunc.apply(x, eps, clip_lo, clip_hi, delta, clip_gradient)
+
 
 class AlmostSymmQuantFunc(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, clip_lo, n_levels):
-        #print("clip_lo: ", clip_lo)
-        #print("clip_lo shape: ", clip_lo.shape)
-        #print("max clip_lo: ", clip_lo.max())
-        torch._assert(torch.all(clip_lo <= 0), "Big problem: clip_lo passed to AlmostSymmQuantFunc is not negative!!! Everything will break!")
+
+        torch._assert(torch.all(clip_lo <= 0), "Big problem: `clip_lo` passed to AlmostSymmQuantFunc is not negative: everything will break!")
 
         if n_levels % 2 == 0:
             scale = torch.tensor(-(n_levels-2)/n_levels, device=clip_lo.device)
@@ -124,7 +129,6 @@ class AlmostSymmQuantFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        #print("grad_output: ", grad_output)
-        scale, = ctx.saved_variables
+        scale,  = ctx.saved_variables
         grad_lo = scale * grad_output
         return grad_lo, None

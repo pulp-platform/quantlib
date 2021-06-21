@@ -3,7 +3,7 @@ from collections import OrderedDict
 import networkx as nx
 
 from .trace import __TRACES_LIBRARY__
-import quantlib.graphs.graphs
+from .. import graphs
 
 
 def load_traces_library(modules=None):
@@ -20,7 +20,7 @@ def load_traces_library(modules=None):
     for mod_name in modules:
 
         L = nx.read_gpickle(os.path.join(mod_2_trace_dir[mod_name], 'networkx'))
-        VK = {n for n in L.nodes if L.nodes[n]['partition'] == quantlib.graphs.graphs.__CONTXT_PARTITION__}
+        VK = {n for n in L.nodes if L.nodes[n]['partition'] == graphs.Bipartite.CONTXT}
         for n in L.nodes:
             del L.nodes[n]['partition']
         K = L.subgraph(VK)

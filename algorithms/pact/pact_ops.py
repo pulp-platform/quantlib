@@ -16,24 +16,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .pact_functions import PACT_Quantize, AlmostSymmQuantFunc
+from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
 import torch
 from torch import nn
 
-from ..controller import Controller
-
 
 __all__ = [
-    'PACT_UnsignedAct',
-    'PACT_AsymmetricAct',
-    'PACT_Conv2d',
-    'PACT_Conv1d',
-    'PACT_Linear',
-    'PACT_Quantize'
+    'PACTUnsignedAct',
+    'PACTAsymmetricAct',
+    'PACTConv2d',
+    'PACTConv1d',
+    'PACTLinear',
+    'PACTQuantize',
 ]
 
 
-class PACT_UnsignedAct(torch.nn.Module):
+class PACTUnsignedAct(torch.nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.
 
     Implements a :py:class:`torch.nn.Module` to implement PACT-style activations. It is meant to replace :py:class:`torch.nn.ReLU`, :py:class:`torch.nn.ReLU6` and
@@ -77,7 +75,7 @@ class PACT_UnsignedAct(torch.nn.Module):
         :type  nb_std:    float or int
         """
 
-        super(PACT_UnsignedAct, self).__init__()
+        super(PACTUnsignedAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
         assert act_kind in ['relu', 'relu6', 'leaky_relu'], "Invalid argument act_kind: {}; expected 'relu', 'relu6' or 'leaky_relu'".format(act_kind)
@@ -90,7 +88,7 @@ class PACT_UnsignedAct(torch.nn.Module):
         self.init_clip = init_clip
         self.nb_std = nb_std
         self.leaky = leaky
-        # this is switched on/off by the PACT_ActController
+        # this is switched on/off by the PACTActController
         self.started = False
 
         # these are only used to gather statistics
@@ -105,7 +103,7 @@ class PACT_UnsignedAct(torch.nn.Module):
     def forward(self, x):
         r"""Forward-prop function for PACT-quantized activations.
 
-        See :py:class:`nemo.quant.pact_quant.PACT_QuantFunc` for details on the normal operation performed by this layer.
+        See :py:class:`nemo.quant.pact_quant.PACTQuantFunc` for details on the normal operation performed by this layer.
         In statistics mode, it uses a normal ReLU and collects statistics in the background.
 
         :param x: input activations tensor.
@@ -132,14 +130,14 @@ class PACT_UnsignedAct(torch.nn.Module):
                 self.running_mean.data[:] = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
                 self.running_var.data[:] = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
             return x
-        # in normal mode, PACT_UnsignedAct uses the PACT_QuantFunc
+        # in normal mode, PACTUnsignedAct uses the PACTQuantFunc
         else:
             eps = self.get_eps()
             # TODO why clip_hi+eps???
-            return PACT_Quantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, clip_gradient=torch.tensor(True, device=self.clip_hi.device)) # clip_gradient=True keeps NEMO compatibility
+            return PACTQuantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, clip_gradient=torch.tensor(True, device=self.clip_hi.device)) # clip_gradient=True keeps NEMO compatibility
 
 
-class PACT_AsymmetricAct(torch.nn.Module):
+class PACTAsymmetricAct(torch.nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering signed outputs, not necessarily symmetric.
 
     Implements a :py:class:`torch.nn.Module` to implement PACT-style quantization functions.
@@ -184,7 +182,7 @@ class PACT_AsymmetricAct(torch.nn.Module):
 
         """
 
-        super(PACT_AsymmetricAct, self).__init__()
+        super(PACTAsymmetricAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
         assert act_kind in ['identity', 'relu', 'relu6', 'leaky_relu'], "Invalid argument act_kind: {}; expected 'identity', 'relu', 'relu6' or 'leaky_relu'".format(act_kind)
@@ -199,7 +197,7 @@ class PACT_AsymmetricAct(torch.nn.Module):
         self.init_clip = init_clip
         self.nb_std = nb_std
         self.symm = symm
-        # this is switched on/off by the PACT_ActController
+        # this is switched on/off by the PACTActController
         self.started = False
 
         # these are only used to gather statistics
@@ -214,7 +212,7 @@ class PACT_AsymmetricAct(torch.nn.Module):
     def forward(self, x):
         r"""Forward-prop function for PACT-quantized activations.
 
-        See :py:class:`nemo.quant.pact_quant.PACT_QuantFunc` for details on the normal operation performed by this layer.
+        See :py:class:`nemo.quant.pact_quant.PACTQuantFunc` for details on the normal operation performed by this layer.
         In statistics mode, it uses a normal ReLU and collects statistics in the background.
 
         :param x: input activations tensor.
@@ -240,17 +238,18 @@ class PACT_AsymmetricAct(torch.nn.Module):
                 x = torch.nn.functional.relu6(x)
             elif self.act_kind == 'leaky_relu':
                 x = torch.nn.functional.leaky_relu(x, self.leaky)
-        # in normal mode, PACT_UnsignedAct uses
+        # in normal mode, PACTUnsignedAct uses
         else:
             eps = self.get_eps()
             if self.learn_clip and self.symm:
-                clip_upper = PACT_AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
             #TODO: why was this clip_hi+eps??
-            return PACT_Quantize(x, eps, self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            return PACTQuantize(x, eps, self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
 
-class PACT_Conv2d(nn.Conv2d):
+
+class PACTConv2d(nn.Conv2d):
     def __init__(
             self,
             in_channels,
@@ -285,7 +284,7 @@ class PACT_Conv2d(nn.Conv2d):
         assert quantize in ['per_layer', 'per_channel'], "Invalid option quantize: {}; expected 'per_layer' or 'per_channel'".format(quantize)
         assert init_clip in ['max', 'std', 'sawb'], "Invalid option init_clip: {}; expected 'max', 'std' or 'sawb'"
 
-        super(PACT_Conv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
+        super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.n_levels = n_levels
         self.quantize = quantize
         self.init_clip = init_clip
@@ -310,7 +309,6 @@ class PACT_Conv2d(nn.Conv2d):
 
         # this member indicates that the module's clipping bounds should not be touched. it is set by the controller
         self.frozen = False
-
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -338,14 +336,14 @@ class PACT_Conv2d(nn.Conv2d):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACT_Quantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
     @classmethod
     def from_conv2d(cls, c : nn.Conv2d, **kwargs):
-        # kwargs should be arguments to PACT_Conv2d
+        # kwargs should be arguments to PACTConv2d
         return cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
                    kernel_size=c.kernel_size,
@@ -358,7 +356,7 @@ class PACT_Conv2d(nn.Conv2d):
                    **kwargs)
 
 
-class PACT_Conv1d(nn.Conv1d):
+class PACTConv1d(nn.Conv1d):
     def __init__(
             self,
             in_channels,
@@ -393,7 +391,7 @@ class PACT_Conv1d(nn.Conv1d):
         assert quantize in ['per_layer', 'per_channel'], "Invalid option quantize: {}; expected 'per_layer' or 'per_channel'".format(quantize)
         assert init_clip in ['max', 'std', 'sawb'], "Invalid option init_clip: {}; expected 'max', 'std' or 'sawb'"
 
-        super(PACT_Conv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
+        super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.n_levels = n_levels
         self.quantize = quantize
         self.init_clip = init_clip
@@ -446,14 +444,14 @@ class PACT_Conv1d(nn.Conv1d):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACT_QuantFunc(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantFunc(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
     @classmethod
     def from_conv1d(cls, c : nn.Conv1d, **kwargs):
-        # kwargs should be arguments to PACT_Conv2d
+        # kwargs should be arguments to PACTConv2d
         return cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
                    kernel_size=c.kernel_size,
@@ -465,7 +463,8 @@ class PACT_Conv1d(nn.Conv1d):
                    padding_mode=c.padding_mode,
                    **kwargs)
 
-class PACT_Linear(nn.Linear):
+
+class PACTLinear(nn.Linear):
     def __init__(self,
                  in_features : int,
                  out_features : int,
@@ -493,7 +492,7 @@ class PACT_Linear(nn.Linear):
         assert quantize in ['per_layer', 'per_channel'], "Invalid option quantize: {}; expected 'per_layer' or 'per_channel'".format(quantize)
         assert init_clip in ['max', 'std', 'sawb'], "Invalid option init_clip: {}; expected 'max', 'std' or 'sawb'"
 
-        super(PACT_Linear, self).__init__(in_features, out_features, **kwargs)
+        super(PACTLinear, self).__init__(in_features, out_features, **kwargs)
         self.n_levels = n_levels
         self.quantize = quantize
         self.init_clip = init_clip
@@ -541,7 +540,7 @@ class PACT_Linear(nn.Linear):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACT_Quantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)

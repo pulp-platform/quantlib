@@ -1,55 +1,75 @@
 from torch import nn
-from torch.optim import Adam, SGD, Adagrad
+from torch.optim import SGD, Adam, Adagrad
 
 import inspect
 
 from . import pact_ops
-from quantlib.editing.lightweight.rules.filters import TypeFilter, VarOrFilter
+from quantlib.editing.lightweight.rules.filters import TypeFilter, VariadicOrFilter
 from quantlib.editing.lightweight.graph import LightweightGraph
 
-__all__ = ['PACT_Adam', 'PACT_SGD', 'PACT_Adagrad']
+
+__all__ = [
+    'PACTSGD',
+    'PACTAdam',
+    'PACTAdagrad',
+]
+
 
 _PACT_CLASSES = [cl[1] for cl in inspect.getmembers(pact_ops, inspect.isclass) if issubclass(cl[1], nn.Module)]
 
 
-# thanks to https://stackoverflow.com/questions/21060073/dynamic-inheritance-in-python
-class PACT_OptimizerFactory:
+class PACTOptimizerFactory(object):  # https://stackoverflow.com/questions/21060073/dynamic-inheritance-in-python
+
     def __init__(self):
-        self.created_classes = {}
-    def __call__(self, base : type):
-        rep = "PACT_" + base.__name__
-        if rep in self.created_classes.keys():
-            return self.created_classes[rep]
+        self._created_classes = {}
+
+    def __call__(self, base_opt_type: type):
+
+        rep = "PACT" + base_opt_type.__name__
+
+        if rep in self._created_classes.keys():
+
+            optimizer_class = self._created_classes[rep]
+
         else:
-            class PACT_Opt(base):
+
+            class PACTOptimizer(base_opt_type):
+
                 def __init__(self, net, pact_decay, *opt_args, **opt_kwargs):
-                    pact_filter = VarOrFilter(*[TypeFilter(t) for t in _PACT_CLASSES])
-                    net_nodes = LightweightGraph.build_nodes_list(net)
-                    learnable_clip_params = [b for n in pact_filter(net_nodes) for b in n.module.clipping_params.values() if b.requires_grad]
+
+                    net_nodes   = LightweightGraph.build_nodes_list(net)
+                    pact_filter = VariadicOrFilter(*[TypeFilter(t) for t in _PACT_CLASSES])
+                    learnable_clipping_params = [b for n in pact_filter(net_nodes) for b in n.module.clipping_params.values() if b.requires_grad]
+
                     # initialize the base class with configured weight decay for the
                     # clipping parameters and any other supplied parameters
-                    other_params = [p for p in net.parameters() if p.requires_grad and all(pp is not p for pp in learnable_clip_params)]
-                    # note that when the learnable clipping parameters are not
-                    # used (i.e. quantization is disabled), the weight decay
-                    # will not have any effect! This is very handy because it
-                    # prevents us from having to touch their 'requires_grad'
-                    # flags when turning quantization on/off.
-                    base.__init__(self,
-                                  [{'params':learnable_clip_params,
-                                    'weight_decay': pact_decay},
-                                   {'params':other_params}],
-                                  *opt_args,
-                                  **opt_kwargs)
 
-            # hide the fact that this class was dynamically created by changing
-            # its name and qualname attributes - the perfect crime...
-            PACT_Opt.__name__ = rep
-            PACT_Opt.__qualname__ = rep
-            self.created_classes[rep] = PACT_Opt
-            return PACT_Opt
+                    other_params = [p for p in net.parameters() if p.requires_grad and all(pp is not p for pp in learnable_clipping_params)]
+                    # Note: when the learnable clipping parameters are not used
+                    # (e.g., while quantization is disabled), the weight decay
+                    # will have NO effect on them. This fact is very handy,
+                    # since it prevents us from having to update their
+                    # 'requires_grad' flags when turning quantization on/off.
+                    base_opt_type.__init__(self,
+                                           ({'params':       learnable_clipping_params,
+                                             'weight_decay': pact_decay},
+                                            {'params':       other_params}),
+                                           *opt_args,
+                                           **opt_kwargs)
 
-fac = PACT_OptimizerFactory()
+            # Change the `name` and `qualname` of the newly-created class to
+            # hide the fact that it was dynamically created. The perfect crime...
+            PACTOptimizer.__name__     = rep
+            PACTOptimizer.__qualname__ = rep
+            self._created_classes[rep] = PACTOptimizer
 
-PACT_Adam = fac(Adam)
-PACT_SGD = fac(SGD)
-PACT_Adagrad = fac(Adagrad)
+            optimizer_class = PACTOptimizer
+
+        return optimizer_class
+
+
+opt_factory = PACTOptimizerFactory()
+
+PACTSGD     = opt_factory(SGD)
+PACTAdam    = opt_factory(Adam)
+PACTAdagrad = opt_factory(Adagrad)

@@ -29,7 +29,7 @@ def backward(grad_in, x_in, q, t, bmu, bsigma):
 
     if bsigma != 0.:
         x_minus_t_over_s = torch.abs(x_minus_t / bsigma)
-        pdf = torch.max(torch.tensor([0.]), 1 - x_minus_t_over_s) / bsigma
+        pdf = torch.max(torch.Tensor([0.0]).to(device=grad_in.device), 1.0 - x_minus_t_over_s) / bsigma
     else:
         pdf = torch.zeros_like(x_minus_t)
 
