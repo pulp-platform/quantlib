@@ -4,12 +4,12 @@ import os
 # import graphs
 # import quantlib.editing.graphs.utils
 
-from .. import graphs
-from .. import utils
+from quantlib.editing.graphs import graphs
+from quantlib.editing.graphs import utils
 
 
-# __TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
-__TRACES_LIBRARY__ = os.path.join(os.path.expanduser('~'), 'Desktop', 'QuantLab', 'quantlib', 'editing', 'graphs', 'traces', '.libtraces')
+__TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
+# __TRACES_LIBRARY__ = os.path.join(os.path.expanduser('~'), 'Desktop', 'QuantLab', 'quantlib', 'editing', 'graphs', 'traces', '.libtraces')
 
 
 def trace_module(library, algorithm, mod, dummy_input):
