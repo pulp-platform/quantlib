@@ -66,6 +66,24 @@ class OrFilter(Filter):
         return "".join(["(", repr(self._filter_a), " | ", repr(self._filter_b), ")"])
 
 
+class AndFilter(Filter):
+
+    def __init__(self, filter_a: Filter, filter_b: Filter):
+        super(AndFilter, self).__init__()
+        self._filter_a = filter_a
+        self._filter_b = filter_b
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+
+        filter_a_nodes = self._filter_a(nodes_list)
+        filter_b_nodes = self._filter_b(filter_a_nodes)
+
+        return filter_b_nodes
+
+    def __repr__(self):
+        return "".join(["(", repr(self._filter_a), " & ", repr(self._filter_b), ")"])
+
+
 class VarOrFilter(Filter):
 
     def __init__(self, *filters: Filter):
@@ -99,25 +117,6 @@ class VarAndFilter(Filter):
 
     def __repr__(self):
         return "".join(["("] + [repr(f)+" & " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])
-
-
-
-class AndFilter(Filter):
-
-    def __init__(self, filter_a: Filter, filter_b: Filter):
-        super(AndFilter, self).__init__()
-        self._filter_a = filter_a
-        self._filter_b = filter_b
-
-    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
-
-        filter_a_nodes = self._filter_a(nodes_list)
-        filter_b_nodes = self._filter_b(filter_a_nodes)
-
-        return filter_b_nodes
-
-    def __repr__(self):
-        return "".join(["(", repr(self._filter_a), " & ", repr(self._filter_b), ")"])
 
 
 class NameFilter(Filter):
