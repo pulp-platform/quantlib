@@ -87,7 +87,7 @@ class PACT_QuantFunc(torch.autograd.Function):
             grad_input = torch.where(where_input_nonclipped, grad_output, zero)
         else:
             grad_input = grad_output
-        reduce_dims = tuple(range(len(clip_lo.shape)))
+        reduce_dims = tuple(range(len(grad_output.shape)))
         if len(clip_lo.shape) > 1:
             # this works only for weights due to activations' batch dimensions,
             # but we don't support per-channel quantization of activations so
@@ -95,7 +95,9 @@ class PACT_QuantFunc(torch.autograd.Function):
             reduce_dims = reduce_dims[1:]
 
         grad_upper = torch.where(where_input_hi, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
-        # beta is the lower bound; making it larger will make the output smaller
+        # clip_lo is the lower bound; making it larger will make the output larger
+        # if input was clipped. the gradient propagation is thus identical for
+        # lower and upper bounds!
         grad_lower  = torch.where(where_input_lo, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
         return grad_input, None, grad_lower, grad_upper, None, None
 
