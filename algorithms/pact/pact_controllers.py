@@ -61,10 +61,6 @@ class PACTActController(Controller):
         - 'stop':   set `quantize` to False and set `requires_grad` to False for all clipping parameters
         :param epoch: The current epoch
         """
-        def set_learn_clip(val : bool):
-            for m in self.modules:
-                for p in m.clipping_params.values():
-                    p.requires_grad = val
 
         if epoch in self.schedule.keys():
             cmd = self.schedule[epoch]
@@ -74,18 +70,31 @@ class PACTActController(Controller):
                 self.log("Verbose mode enabled!")
             elif cmd == 'verbose_off':
                 self.verbose = False
+
             elif cmd == 'start':
                 for m in self.modules:
                     self.reset_clip_bounds(m, m.init_clip)
                     m.started = True
                 self.log("Started activation quantization!")
+
             elif cmd == 'freeze':
-                set_learn_clip(False)
+                for m in self.modules:
+                    for p in m.clipping_params.values():
+                        p.requires_grad = False
+                        p.grad = None
                 self.log("Froze clipping parameters!")
+
             elif cmd == 'thaw':
                 # 'thaw' means enable learning for clipping parameters
-                set_learn_clip(True)
+                for m in self.modules:
+                    for k, p in m.clipping_params.items():
+                        try:
+                            symm = m.symm
+                        except AttributeError:
+                            symm = False
+                        p.requires_grad = m.learn_clip and not (k=='high' and symm)
                 self.log("Unfroze clipping parameters!")
+
             else:
                 assert cmd == 'stop', "Invalid PACTActController command at epoch {}: {}".format(epoch, cmd)
                 for m in self.modules:
@@ -194,6 +203,7 @@ class PACTLinearController(Controller):
                 for m in self.modules:
                     for b in m.clipping_params.values():
                         b.requires_grad = False
+                        b.grad = None
                     m.frozen = True
             elif cmd == 'thaw':
                 for m in self.modules:
