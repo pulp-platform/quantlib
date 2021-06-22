@@ -125,9 +125,18 @@ class PACTActController(Controller):
             else:
                 assert False, "Unexpected clipping parameter dictionary key in module of type {}: {}".format(type(m), k)
 
+    def step_pre_validation_epoch(self, *args, **kwargs):
+        pass
+
     def log(self, msg : str):
         if self.verbose:
             print("[PACTActController]   ", msg)
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict : dict):
+        pass
 
 
 class PACTLinearController(Controller):
@@ -198,7 +207,7 @@ class PACTLinearController(Controller):
                     m.started = False
                 self.log("Stopped quantization!")
 
-    def step_pre_validation(self, epoch: int, *args, **kwargs):
+    def step_pre_validation_epoch(self, epoch: int, *args, **kwargs):
         # always before validation, update the clipping parameters as is done before each batch, so the changes from
         # the last batch of an epoch are reflected in the clipping params.
         self.step_pre_training_batch()
@@ -244,3 +253,9 @@ class PACTLinearController(Controller):
     def log(self, msg : str):
         if self.verbose:
             print("[PACTLinearController]   ", msg)
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict : dict):
+        pass
