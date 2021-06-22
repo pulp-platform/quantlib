@@ -85,7 +85,7 @@ class ANAActivation(ANAModule):
 
     def forward(self, x):
 
-        x = x / self.eps # if self.eps != 1.0 else x
+        x = x / self.eps
 
         x_out = self.ana_op(x,
                             self.quant_levels, self.thresholds,
@@ -93,7 +93,7 @@ class ANAActivation(ANAModule):
                             self.bnoise.mi, self.bnoise.sigma,
                             self.training)
 
-        x_out = x_out * self.eps # if self.eps != 1.0 else x_out
+        x_out = x_out * self.eps
 
         return x_out
 
