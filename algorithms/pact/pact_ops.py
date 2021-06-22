@@ -81,7 +81,7 @@ class PACTUnsignedAct(torch.nn.Module):
         assert act_kind in ['relu', 'relu6', 'leaky_relu'], "Invalid argument act_kind: {}; expected 'relu', 'relu6' or 'leaky_relu'".format(act_kind)
         assert init_clip in ['max', 'std'], "Invalid argument init_clip: {}; expected 'max' or 'std".format(init_clip)
         self.n_levels = n_levels
-        self.clip_hi = torch.nn.Parameter(torch.Tensor((1.,)), requires_grad=learn_clip)
+        self.clip_hi = torch.nn.Parameter(torch.Tensor((6.,)), requires_grad=learn_clip)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'high':self.clip_hi}
         self.act_kind = act_kind
@@ -155,7 +155,7 @@ class PACTAsymmetricAct(torch.nn.Module):
     def __init__(
             self,
             n_levels=256,
-            clip_hi=1.,
+            clip_hi=6.,
             clip_lo=0.,
             init_clip='max',
             learn_clip=True,
@@ -186,7 +186,7 @@ class PACTAsymmetricAct(torch.nn.Module):
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
         assert act_kind in ['identity', 'relu', 'relu6', 'leaky_relu'], "Invalid argument act_kind: {}; expected 'identity', 'relu', 'relu6' or 'leaky_relu'".format(act_kind)
-        assert init_clip in ['max', 'std'], "Invalid argument init_clip: {}; expected 'max' or 'std".format(init_clip)
+        assert init_clip in ['max', 'std'], "Invalid argument init_clip: {}; expected 'max' or 'std'".format(init_clip)
         self.n_levels = n_levels
         self.clip_lo = torch.nn.Parameter(torch.Tensor((clip_lo,)), requires_grad=learn_clip)
         self.clip_hi  = torch.nn.Parameter(torch.Tensor((clip_hi,)),  requires_grad=learn_clip and (not symm))
