@@ -178,7 +178,7 @@ class ANAController(Controller):
     def state_dict(self) -> dict:
         return {'_global_step': self._global_step}
 
-    def step_pre_training(self) -> None:
+    def step_pre_training_epoch(self) -> None:
 
         self._global_step += 1
 
