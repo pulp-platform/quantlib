@@ -1,3 +1,5 @@
-from .rules   import LightweightRule
-from .inq     import INQConv2dRule
 from .filters import *
+from .rules   import LightweightRule
+
+from . import inq
+from . import ana

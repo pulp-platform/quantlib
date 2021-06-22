@@ -9,8 +9,8 @@ import networkx as nx
 # import utils
 
 from .. import graphs
+from .. import grrules
 from .. import utils
-import quantlib.editing.graphs as qg
 
 
 __FAILURE__ = False
@@ -183,9 +183,9 @@ class Editor(object):
 
         if isinstance(self.qlgraph, graphs.PyTorchGraph):
             self.startup()
-            self.set_grr(qg.grrules.AddInputNodeRule())
+            self.set_grr(grrules.AddInputNodeRule())
             self.edit(gs=self.seek(VIs=[[n] for n in self._input_nodes]))
-            self.set_grr(qg.grrules.AddOutputNodeRule())
+            self.set_grr(grrules.AddOutputNodeRule())
             self.edit(gs=self.seek(VIs=[[n] for n in self._output_nodes]))
             self.pause()
 
