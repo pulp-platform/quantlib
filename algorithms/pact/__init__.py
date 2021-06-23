@@ -2,7 +2,7 @@
 # __init__.py
 # 
 # Author(s):
-# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # 
 # Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
 # 
@@ -22,4 +22,3 @@
 from .pact_ops import *
 from .pact_controllers import *
 from .pact_optimizers import *
-

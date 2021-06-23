@@ -2,7 +2,7 @@
 # pact_optimizers.py
 # 
 # Author(s):
-# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # 
 # Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
 # 
@@ -94,4 +94,3 @@ opt_factory = PACTOptimizerFactory()
 PACTSGD     = opt_factory(SGD)
 PACTAdam    = opt_factory(Adam)
 PACTAdagrad = opt_factory(Adagrad)
-
