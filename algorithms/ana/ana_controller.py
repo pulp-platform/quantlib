@@ -1,6 +1,7 @@
 from functools import partial
 from collections import OrderedDict
 import torch
+import torch.nn as nn
 
 from .ana_ops import ANAModule
 from ..controller import Controller
@@ -138,16 +139,19 @@ class ANAController(Controller):
 
     def __init__(self, module: torch.nn.Module, ctrl_spec: List) -> None:
 
+        is_nndataparallel_module = isinstance(module, nn.DataParallel)
+
         self._global_step   = -1
         self._timer2modules = []
 
         self._n2m = self.get_modules(module)
+        self._n2m = {('module.' if is_nndataparallel_module else '') + k: v for k, v in self._n2m.items()}
 
         # verify that each ANA module is linked to exactly one timer (i.e., check that ANA targets form a partition of the collection of ANA modules)
         all_ana_module_names = set(self._n2m.keys())
         ana_timer_targets    = []
         for timer_spec in ctrl_spec:
-            ana_timer_target = set(timer_spec['modules'])
+            ana_timer_target = set([('module.' if is_nndataparallel_module else '') + m for m in timer_spec['modules']])
             assert ana_timer_target.issubset(all_ana_module_names)  # non-ANA module specified as ANA target
             ana_timer_targets.append(ana_timer_target)
         assert len(all_ana_module_names) == sum([len(ana_timer_target) for ana_timer_target in ana_timer_targets])
@@ -156,7 +160,7 @@ class ANAController(Controller):
         # build timers and link them to the specified ANA modules
         for timer_spec in ctrl_spec:
             timer        = ANATimer(timer_spec['fnoise']['mi'], timer_spec['fnoise']['sigma'], timer_spec['bnoise']['mi'], timer_spec['bnoise']['sigma'])
-            modules      = list(map(lambda n: self._n2m[n], set(timer_spec['modules'])))
+            modules      = list(map(lambda n: self._n2m[n], set([('module.' if is_nndataparallel_module else '') + m for m in timer_spec['modules']])))
             self._timer2modules.append(Timer2Modules(timer=timer, modules=modules))
 
     @staticmethod
@@ -178,7 +182,7 @@ class ANAController(Controller):
     def state_dict(self) -> dict:
         return {'_global_step': self._global_step}
 
-    def step_pre_training_epoch(self) -> None:
+    def step_pre_training_epoch(self, *args, **kwargs) -> None:
 
         self._global_step += 1
 
@@ -192,7 +196,7 @@ class ANAController(Controller):
                 # update backward noise
                 m.set_bnoise(timer.bmi, timer.bsigma)
 
-    def step_pre_validation(self) -> None:
+    def step_pre_validation(self, *args, **kwargs) -> None:
 
         for timer, modules in self._timer2modules:
 
