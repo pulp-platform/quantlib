@@ -45,7 +45,6 @@ class PACTActController(Controller):
     to `True` and setting the initial clipping values based on the `init_clip` value.
     """
     def __init__(self, modules : list, schedule : dict, verbose : bool = False):
-        super(PACTActController, self).__init__()
         assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
         self.modules = modules
         self.schedule = {int(k):v.lower() for k,v in schedule.items()}
@@ -157,7 +156,6 @@ class PACTLinearController(Controller):
     """
 
     def __init__(self, modules : list, schedule : dict, verbose : bool = False):
-        super(PACTLinearController, self).__init__()
         self.modules = modules
         self.schedule = {int(k):v.lower() for k,v in schedule.items()}
         self.verbose = verbose
