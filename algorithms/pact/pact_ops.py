@@ -34,8 +34,12 @@ __all__ = [
     'PACTQuantize',
 ]
 
+def assert_param_valid(module : nn.Module, value, param_name : str, valid_values : list):
+    error_str = f"[{module.__class__.__name__}]  Invalid argument {param_name}: Got {value}, expected {valid_values[0] if len(valid_values)==1 else ', '.join(valid_values[:-1]) + ' or ' + str(valid_values[-1])}"
+    assert value in valid_values, error_str
 
-class PACTUnsignedAct(torch.nn.Module):
+
+class PACTUnsignedAct(nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.
 
     Implements a :py:class:`torch.nn.Module` to implement PACT-style activations. It is meant to replace :py:class:`torch.nn.ReLU`, :py:class:`torch.nn.ReLU6` and
@@ -82,8 +86,8 @@ class PACTUnsignedAct(torch.nn.Module):
         super(PACTUnsignedAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert act_kind in ['relu', 'relu6', 'leaky_relu'], "Invalid argument act_kind: {}; expected 'relu', 'relu6' or 'leaky_relu'".format(act_kind)
-        assert init_clip in ['max', 'std'], "Invalid argument init_clip: {}; expected 'max' or 'std".format(init_clip)
+        assert_param_valid(self, act_kind, 'act_kind', ['relu', 'relu6', 'leaky_relu'])
+        assert_param_valid(self, init_clip, 'init_clip',  ['max', 'std', 'const'])
         self.n_levels = n_levels
         self.clip_hi = torch.nn.Parameter(torch.Tensor((1.,)), requires_grad=learn_clip)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
@@ -141,7 +145,7 @@ class PACTUnsignedAct(torch.nn.Module):
             return PACTQuantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, clip_gradient=torch.tensor(True, device=self.clip_hi.device)) # clip_gradient=True keeps NEMO compatibility
 
 
-class PACTAsymmetricAct(torch.nn.Module):
+class PACTAsymmetricAct(nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering signed outputs, not necessarily symmetric.
 
     Implements a :py:class:`torch.nn.Module` to implement PACT-style quantization functions.
@@ -159,8 +163,6 @@ class PACTAsymmetricAct(torch.nn.Module):
     def __init__(
             self,
             n_levels=256,
-            clip_hi=1.,
-            clip_lo=0.,
             init_clip='max',
             learn_clip=True,
             act_kind='relu',
@@ -172,10 +174,6 @@ class PACTAsymmetricAct(torch.nn.Module):
         r"""Constructor.
         :param n_levels: number of quantization levels
         :type  n_levels: int
-        :param clip_hi: the initial value of the upper clipping bound
-        :type  clip_hi: `torch.Tensor` or float
-        :param clip_lo: the initial value of the lower clipping bound
-        :type  clip_lo: `torch.Tensor` or float
         :param learn_clip: default `True`; if `False`, do not update the value of the clipping factors `\alpha`,`\beta` with backpropagation.
         :type  learn_clip: bool
         :param act_kind: activation type to use in statistics mode
@@ -189,11 +187,12 @@ class PACTAsymmetricAct(torch.nn.Module):
         super(PACTAsymmetricAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert act_kind in ['identity', 'relu', 'relu6', 'leaky_relu'], "Invalid argument act_kind: {}; expected 'identity', 'relu', 'relu6' or 'leaky_relu'".format(act_kind)
-        assert init_clip in ['max', 'std'], "Invalid argument init_clip: {}; expected 'max' or 'std".format(init_clip)
+        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
+
         self.n_levels = n_levels
-        self.clip_lo = torch.nn.Parameter(torch.Tensor((clip_lo,)), requires_grad=learn_clip)
-        self.clip_hi  = torch.nn.Parameter(torch.Tensor((clip_hi,)),  requires_grad=learn_clip and (not symm))
+        self.clip_lo = torch.nn.Parameter(torch.Tensor((-1.,)), requires_grad=learn_clip)
+        self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=learn_clip and (not symm))
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
         self.act_kind = act_kind
@@ -237,11 +236,11 @@ class PACTAsymmetricAct(torch.nn.Module):
             if self.act_kind == 'identity':
                 return x
             elif self.act_kind == 'relu':
-                x = torch.nn.functional.relu(x)
+                return torch.nn.functional.relu(x)
             elif self.act_kind == 'relu6':
-                x = torch.nn.functional.relu6(x)
+                return torch.nn.functional.relu6(x)
             elif self.act_kind == 'leaky_relu':
-                x = torch.nn.functional.leaky_relu(x, self.leaky)
+                return torch.nn.functional.leaky_relu(x, self.leaky)
         # in normal mode, PACTUnsignedAct uses
         else:
             eps = self.get_eps()
@@ -285,8 +284,8 @@ class PACTConv2d(nn.Conv2d):
         """
         quantize = quantize.lower()
         init_clip = init_clip.lower()
-        assert quantize in ['per_layer', 'per_channel'], "Invalid option quantize: {}; expected 'per_layer' or 'per_channel'".format(quantize)
-        assert init_clip in ['max', 'std', 'sawb'], "Invalid option init_clip: {}; expected 'max', 'std' or 'sawb'"
+        assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb'])
 
         super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.n_levels = n_levels
@@ -392,8 +391,8 @@ class PACTConv1d(nn.Conv1d):
 
         quantize = quantize.lower()
         init_clip = init_clip.lower()
-        assert quantize in ['per_layer', 'per_channel'], "Invalid option quantize: {}; expected 'per_layer' or 'per_channel'".format(quantize)
-        assert init_clip in ['max', 'std', 'sawb'], "Invalid option init_clip: {}; expected 'max', 'std' or 'sawb'"
+        assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb'])
 
         super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.n_levels = n_levels
@@ -493,8 +492,8 @@ class PACTLinear(nn.Linear):
 
         quantize = quantize.lower()
         init_clip = init_clip.lower()
-        assert quantize in ['per_layer', 'per_channel'], "Invalid option quantize: {}; expected 'per_layer' or 'per_channel'".format(quantize)
-        assert init_clip in ['max', 'std', 'sawb'], "Invalid option init_clip: {}; expected 'max', 'std' or 'sawb'"
+        assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb'])
 
         super(PACTLinear, self).__init__(in_features, out_features, **kwargs)
         self.n_levels = n_levels

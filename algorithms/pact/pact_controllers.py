@@ -65,11 +65,13 @@ class PACTActController(Controller):
     at given epochs. Starting quantization entails setting the `quantize` flags
     to `True` and setting the initial clipping values based on the `init_clip` value.
     """
-    def __init__(self, modules : list, schedule : dict, verbose : bool = False):
+    def __init__(self, modules : list, schedule : dict, verbose : bool = False, init_clip_lo : float = -1., init_clip_hi : float = 1.):
         assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
         self.modules = modules
         self.schedule = {int(k):v.lower() for k,v in schedule.items()}
         self.verbose = verbose
+        self.init_clip_lo = init_clip_lo
+        self.init_clip_hi = init_clip_hi
 
     def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
         """
@@ -136,7 +138,7 @@ class PACTActController(Controller):
                 # we don't need 'min_val' if m does not have the 'symm' attribute because in that case
                 # it's not an asymmetric activation
                 pass
-        else: # method == 'std'
+        elif method == 'std':
             max_val = m.running_mean.data + m.nb_std * torch.sqrt(m.running_var.data)
             try:
                 if m.symm:
@@ -145,6 +147,12 @@ class PACTActController(Controller):
                     min_val = m.running_mean.data - m.nb_std * torch.sqrt(m.running_var.data)
             except AttributeError:
                 pass
+        else: # method == 'const'
+            for k, v in m.clipping_params.items():
+                if k == 'low':
+                    v.data = self.init_clip_lo * torch.ones_like(v.data)
+                else: # k== 'high
+                    v.data = self.init_clip_hi * torch.ones_like(v.data)
 
         for k, b in m.clipping_params.items():
             if k == 'high':
