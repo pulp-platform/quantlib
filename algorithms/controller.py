@@ -25,7 +25,8 @@ __all__ = ['Controller']
 class Controller(object):
 
     def __init__(self):
-        raise NotImplementedError
+        # controller base class does not do any initialization
+        pass
 
     @staticmethod
     def get_modules(*args, **kwargs):
