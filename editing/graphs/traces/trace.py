@@ -123,9 +123,10 @@ def trace_quantlib_modules():
     #########
     algorithm = 'STE'
 
-    mod_STEActivation = qa.ste.STEActivation()
-    dummy_input = torch.ones((_batch_size, _n_input_channels))
-    trace_module(library, algorithm, mod_STEActivation, dummy_input)
+    # TODO: upgrading to PyTorch 1.9.0 breaks tracing of STE activation for "some reason": we must look into this!
+    # mod_STEActivation = qa.ste.STEActivation()
+    # dummy_input = torch.ones((_batch_size, _n_input_channels))
+    # trace_module(library, algorithm, mod_STEActivation, dummy_input)
 
     #########
     ## INQ ##
@@ -180,4 +181,3 @@ if __name__ == '__main__':
 
     trace_pytorch_modules()
     trace_quantlib_modules()
-

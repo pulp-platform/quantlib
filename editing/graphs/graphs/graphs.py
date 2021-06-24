@@ -89,7 +89,7 @@ class ONNXGraph(object):
         if not isinstance(dummy_input, tuple):
             dummy_input = (dummy_input,)
 
-        assert version.parse(torch.__version__) >= version.parse('1.4.0')
+        assert version.parse(torch.__version__) >= version.parse('1.9.0')
         from torch.onnx.symbolic_helper import _set_opset_version
         _set_opset_version(11)  # opset_version9 does not support `round` ONNX operator (even though docs for PyTorch 1.5.0 suggests so)
 

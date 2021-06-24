@@ -34,7 +34,6 @@ __all__ = [
 
 class STEController(Controller):
     def __init__(self, modules, clear_optim_state_on_step=False):
-        super(STEController).__init__()
         self.modules = modules
         self.clear_optim_state_on_step = clear_optim_state_on_step
 
