@@ -29,8 +29,6 @@ from .. import graphs
 
 def load_traces_library(modules=None):
 
-    print(__TRACES_LIBRARY__)
-
     mod_2_trace_dir = {}
     for root, dirs, files in os.walk(__TRACES_LIBRARY__):
         if len(dirs) == 0:  # terminal directories contain only trace files (graphviz, networkx)
@@ -50,7 +48,4 @@ def load_traces_library(modules=None):
 
         libtraces[mod_name] = (L, K)
 
-    print(libtraces.keys())
-
     return libtraces
-
