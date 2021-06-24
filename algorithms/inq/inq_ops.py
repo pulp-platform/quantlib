@@ -46,7 +46,6 @@ class INQController(Controller):
     function once per epoch.
     """
     def __init__(self, modules, schedule, clear_optim_state_on_step=False):#, rescale_weights=False):
-        super(INQController, self).__init__()
         self.modules = modules
         self.fraction = 0.0
         self.schedule = {int(k): v for k, v in schedule.items()}  # parse string keys to ints
