@@ -1,11 +1,22 @@
-**/.idea
+# ignore OS- and IDE-specific files
 **/.DS_Store
+**/.idea
+
+# ignore build-and-install `setuptools` files
+**/build
+**/dist
+**/*.egg-info
+
+# ignore profiling files
 **/gmon.out
 
+# ignore generated Python bytecode
 **/__pycache__
 
-**/docs/_build/*
-**/data
-**/logs
+# ignore PyTorch JIT traces
 **/.libtraces
+
+# ignore built documentation and Jupyter notebook checkpoints
+**/docs/_build/*
+**/.ipynb_checkpoints
 

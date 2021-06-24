@@ -1,3 +1,24 @@
+# 
+# ana_logistic.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import torch
 from scipy.stats import logistic
 
@@ -11,13 +32,14 @@ def forward(x_in, q, t, fmu, fsigma, training):
 
     if training and fsigma != 0.:
         if is_cuda:
-            x_minus_t = x_minus_t.cpu().numpy()
-            fsigma    = fsigma.cpu().numpy()
-        cdf = logistic.cdf(x_minus_t, 0.0, fsigma)
+            x_minus_t = x_minus_t.cpu()
+            fsigma    = fsigma.cpu()
+        cdf = torch.from_numpy(logistic.cdf(x_minus_t.numpy(), 0.0, fsigma.numpy())).to(dtype=x_in.dtype)
         if is_cuda:
-            cdf = torch.from_numpy(cdf).to(device=x_in.device)
+            cdf = cdf.to(device=x_in.device)
     else:
         cdf = (x_minus_t >= 0.0).float()
+        cdf = cdf.to(dtype=x_in.dtype)
 
     d = q[1:] - q[:-1]
     x_out = q[0] + torch.sum(d.reshape(t_shape) * cdf, 0)
@@ -34,11 +56,11 @@ def backward(grad_in, x_in, q, t, bmu, bsigma):
 
     if bsigma != 0.:
         if is_cuda:
-            x_minus_t = x_minus_t.cpu().numpy()
-            bsigma    = bsigma.cpu().numpy()
-        pdf = logistic.pdf(x_minus_t, 0.0, bsigma)
+            x_minus_t = x_minus_t.cpu()
+            bsigma    = bsigma.cpu()
+        pdf = torch.from_numpy(logistic.pdf(x_minus_t.numpy(), 0.0, bsigma.numpy())).to(dtype=grad_in.dtype)
         if is_cuda:
-            pdf = torch.from_numpy(pdf).to(device=grad_in.device)
+            pdf = pdf.to(device=grad_in.device)
     else:
         pdf = torch.zeros_like(x_minus_t)
 
@@ -47,3 +69,4 @@ def backward(grad_in, x_in, q, t, bmu, bsigma):
     grad_out = grad_in * local_jacobian
 
     return grad_out
+

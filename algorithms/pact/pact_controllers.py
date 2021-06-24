@@ -1,3 +1,24 @@
+# 
+# pact_controllers.py
+# 
+# Author(s):
+# Georg Rutishauser <georgr@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import torch
 import numpy as np
 from ..controller import Controller
@@ -45,10 +66,9 @@ class PACTActController(Controller):
     to `True` and setting the initial clipping values based on the `init_clip` value.
     """
     def __init__(self, modules : list, schedule : dict, verbose : bool = False):
-        super(PACTActController, self).__init__()
         assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
         self.modules = modules
-        self.schedule = {int(k): v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
+        self.schedule = {int(k):v.lower() for k,v in schedule.items()}
         self.verbose = verbose
 
     def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
@@ -63,46 +83,43 @@ class PACTActController(Controller):
         """
 
         if epoch in self.schedule.keys():
-            cur_cmds = self.schedule[epoch]
-            if not isinstance(cur_cmds, list):
-                cur_cmds = [cur_cmds]
-            for cmd in cur_cmds:
-                self.log("Epoch {} - running command {}".format(epoch, cmd))
-                if cmd == 'verbose_on':
-                    self.verbose = True
-                    self.log("Verbose mode enabled!")
-                elif cmd == 'verbose_off':
-                    self.verbose = False
+            cmd = self.schedule[epoch]
+            self.log("Epoch {} - running command {}".format(epoch, cmd))
+            if cmd == 'verbose_on':
+                self.verbose = True
+                self.log("Verbose mode enabled!")
+            elif cmd == 'verbose_off':
+                self.verbose = False
 
-                elif cmd == 'start':
-                    for m in self.modules:
-                        self.reset_clip_bounds(m, m.init_clip)
-                        m.started = True
-                    self.log("Started activation quantization!")
+            elif cmd == 'start':
+                for m in self.modules:
+                    self.reset_clip_bounds(m, m.init_clip)
+                    m.started = True
+                self.log("Started activation quantization!")
 
-                elif cmd == 'freeze':
-                    for m in self.modules:
-                        for p in m.clipping_params.values():
-                            p.requires_grad = False
-                            p.grad = None
-                    self.log("Froze clipping parameters!")
+            elif cmd == 'freeze':
+                for m in self.modules:
+                    for p in m.clipping_params.values():
+                        p.requires_grad = False
+                        p.grad = None
+                self.log("Froze clipping parameters!")
 
-                elif cmd == 'thaw':
-                    # 'thaw' means enable learning for clipping parameters
-                    for m in self.modules:
-                        for k, p in m.clipping_params.items():
-                            try:
-                                symm = m.symm
-                            except AttributeError:
-                                symm = False
-                            p.requires_grad = m.learn_clip and not (k=='high' and symm)
-                    self.log("Unfroze clipping parameters!")
+            elif cmd == 'thaw':
+                # 'thaw' means enable learning for clipping parameters
+                for m in self.modules:
+                    for k, p in m.clipping_params.items():
+                        try:
+                            symm = m.symm
+                        except AttributeError:
+                            symm = False
+                        p.requires_grad = m.learn_clip and not (k=='high' and symm)
+                self.log("Unfroze clipping parameters!")
 
-                else:
-                    assert cmd == 'stop', "Invalid PACTActController command at epoch {}: {}".format(epoch, cmd)
-                    for m in self.modules:
-                        m.started = False
-                    self.log("Stopped quantization!")
+            else:
+                assert cmd == 'stop', "Invalid PACTActController command at epoch {}: {}".format(epoch, cmd)
+                for m in self.modules:
+                    m.started = False
+                self.log("Stopped quantization!")
 
     def reset_clip_bounds(self, m : Union[PACTUnsignedAct, PACTAsymmetricAct], method : str = None):
         if not method:
@@ -160,9 +177,8 @@ class PACTLinearController(Controller):
     """
 
     def __init__(self, modules : list, schedule : dict, verbose : bool = False):
-        super(PACTLinearController, self).__init__()
         self.modules = modules
-        self.schedule = {int(k):v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
+        self.schedule = {int(k):v.lower() for k,v in schedule.items()}
         self.verbose = verbose
 
     def step_pre_training_batch(self, *args, **kwargs):
@@ -190,38 +206,35 @@ class PACTLinearController(Controller):
 
     def step_pre_training_epoch(self, epoch : int, *args, **kwargs):
         if epoch in self.schedule.keys():
-            cur_cmds = self.schedule[epoch]
-            if not isinstance(cur_cmds, list):
-                cur_cmds = [cur_cmds]
-            for cmd in cur_cmds:
-                self.log("Epoch {} - running command {}".format(epoch, cmd))
-                if cmd == 'verbose_on':
-                    self.verbose = True
-                    self.log("Verbose mode enabled!")
-                elif cmd == 'verbose_off':
-                    self.verbose = False
-                elif cmd == 'start':
-                    for m in self.modules:
-                        self.reset_clip_bounds(m)
-                        m.started = True
-                    self.log("Started quantization!")
-                elif cmd == 'freeze':
-                    for m in self.modules:
-                        for b in m.clipping_params.values():
-                            b.requires_grad = False
-                            b.grad = None
-                        m.frozen = True
-                elif cmd == 'thaw':
-                    for m in self.modules:
-                        for k, b in m.clipping_params.items():
-                            # if symm_wts is True, the upper bound is not learned but inferred from the lower bound.
-                            b.requires_grad = m.learn_clip and not (k=='high' and m.symm_wts)
-                        m.frozen = False
-                else:
-                    assert cmd == 'stop', "Invalid PACTLinearController command at epoch {}: {}".format(epoch, cmd)
-                    for m in self.modules:
-                        m.started = False
-                    self.log("Stopped quantization!")
+            cmd = self.schedule[epoch]
+            self.log("Epoch {} - running command {}".format(epoch, cmd))
+            if cmd == 'verbose_on':
+                self.verbose = True
+                self.log("Verbose mode enabled!")
+            elif cmd == 'verbose_off':
+                self.verbose = False
+            elif cmd == 'start':
+                for m in self.modules:
+                    self.reset_clip_bounds(m)
+                    m.started = True
+                self.log("Started quantization!")
+            elif cmd == 'freeze':
+                for m in self.modules:
+                    for b in m.clipping_params.values():
+                        b.requires_grad = False
+                        b.grad = None
+                    m.frozen = True
+            elif cmd == 'thaw':
+                for m in self.modules:
+                    for k, b in m.clipping_params.items():
+                        # if symm_wts is True, the upper bound is not learned but inferred from the lower bound.
+                        b.requires_grad = m.learn_clip and not (k=='high' and m.symm_wts)
+                    m.frozen = False
+            else:
+                assert cmd == 'stop', "Invalid PACTLinearController command at epoch {}: {}".format(epoch, cmd)
+                for m in self.modules:
+                    m.started = False
+                self.log("Stopped quantization!")
 
     def step_pre_validation_epoch(self, epoch: int, *args, **kwargs):
         # always before validation, update the clipping parameters as is done before each batch, so the changes from
@@ -275,3 +288,4 @@ class PACTLinearController(Controller):
 
     def load_state_dict(self, state_dict : dict):
         pass
+
