@@ -61,8 +61,7 @@ class PACTQuantFunc(torch.autograd.Function):
     :type  clip_lo: `torch.Tensor` or float
     :param clip_hi: the value of the upper clipping bounds
     :type  clip_hi: `torch.Tensor` or float
-    :param delta: constant to sum to `eps` for numerical stability (default unused, 0).
-    :type  delta: `torch.Tensor` or float
+    :param floor:    If True, perform flooring on to get integer representation. if False, perform rounding.
     :param clip_gradient: if True, zero-out gradients outside of the clipping range.
     :type  clip_gradient: bool
 
@@ -72,19 +71,21 @@ class PACTQuantFunc(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input, eps, clip_lo, clip_hi, delta=0, clip_gradient=False):
-        # we quantize also clip_lo, beta. for beta it's "cosmetic", for clip_lo it is
-        # substantial, because also clip_lo will be represented as a wholly integer number
-        # down the line
-        # 'pc' indicates we are doing per-channel quantization - this is not
-        # very elegant
-        clip_lo_quant = (clip_lo / (eps+delta)).floor() * eps
-        clip_hi_quant  = (clip_hi / (eps+delta)).floor() * eps
-        where_input_nonclipped = (input >= clip_lo_quant) * (input < clip_hi_quant)
-        where_input_lo = (input < clip_lo_quant)
-        where_input_hi = (input >= clip_hi_quant)
+    def forward(ctx, input, eps, clip_lo, clip_hi, floor=True, clip_gradient=True):
+        where_input_nonclipped = (input >= clip_lo) * (input < clip_hi)
+        where_input_lo = (input < clip_lo)
+        where_input_hi = (input >= clip_hi)
         ctx.save_for_backward(where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient, clip_lo)
-        return ((input.clamp(clip_lo_quant, clip_hi_quant) / (eps+delta)).floor()) * eps
+        # for completeness' sake (e.g. to reproduce the results from the
+        # PACT+SAWB paper), we allow for outputs which are not a multiple of
+        # eps.
+        # to ensure hardware compatibility, it is the downstream user's
+        # responsibility to ensure that clip_lo/clip_hi are multiples of eps!
+        input_unrounded_int = (input.clamp(clip_lo, clip_hi) - clip_lo )/ eps
+        # for weights, we want to use rounding - for activations, we will round
+        # in hardware so represent this here too
+        input_rounded_int = input_unrounded_int.floor() if floor else input_unrounded_int.round()
+        return input_rounded_int * eps + clip_lo
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -111,8 +112,8 @@ class PACTQuantFunc(torch.autograd.Function):
 
 
 # a wrapper for PACTQuantFunc to allow kwargs
-def PACTQuantize(x, eps, clip_lo, clip_hi, delta=0, clip_gradient=False):
-    return PACTQuantFunc.apply(x, eps, clip_lo, clip_hi, delta, clip_gradient)
+def PACTQuantize(x, eps, clip_lo, clip_hi, floor=True, clip_gradient=True):
+    return PACTQuantFunc.apply(x, eps, clip_lo, clip_hi, floor, clip_gradient)
 
 
 class AlmostSymmQuantFunc(torch.autograd.Function):

@@ -65,7 +65,8 @@ class PACTOptimizerFactory(object):  # https://stackoverflow.com/questions/21060
                     # initialize the base class with configured weight decay for the
                     # clipping parameters and any other supplied parameters
 
-                    other_params = [p for p in net.parameters() if p.requires_grad and all(pp is not p for pp in learnable_clipping_params)]
+                    other_params = [p for p in net.parameters() if all(p is not pp for pp in learnable_clipping_params)]
+
                     # Note: when the learnable clipping parameters are not used
                     # (e.g., while quantization is disabled), the weight decay
                     # will have NO effect on them. This fact is very handy,
