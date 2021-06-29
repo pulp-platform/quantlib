@@ -1,16 +1,38 @@
+# 
+# editor.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
+import itertools
+import tempfile
 from collections import namedtuple
+from datetime import datetime
 from networkx.algorithms import bipartite
 import networkx as nx
-import tempfile
-from datetime import datetime
 
 # import graphs
 # import utils
 
-from ...graphs import graphs
-from ...graphs import utils
+from .. import graphs
+from .. import grrules
+from .. import utils
 
-from ... import graphs as qg
 
 __FAILURE__ = False
 __SUCCESS__ = True
@@ -69,29 +91,27 @@ class Editor(object):
 
         self.qlgraph = qlgraph
 
-        input_nodes = [key for key, value in nx.get_node_attributes(self.qlgraph.nx_graph, 'dataPartition').items() if value == graphs.DataPartition.INPUT]
-        output_nodes = [key for key, value in nx.get_node_attributes(self.qlgraph.nx_graph, 'dataPartition').items() if value == graphs.DataPartition.OUTPUT]
-                
+        self._input_nodes  = None
+        self._output_nodes = None
+
+        input_datanodes  = {n for n, dp in nx.get_node_attributes(self.qlgraph.nx_graph, 'data_partition').items() if dp == graphs.DataPartition.INPUT}
+        output_datanodes = {n for n, dp in nx.get_node_attributes(self.qlgraph.nx_graph, 'data_partition').items() if dp == graphs.DataPartition.OUTPUT}
+
         if onlykernel:
-            
-            input_op_nodes = set()
-            output_op_nodes = set()
 
-            for key in input_nodes:
-                input_op_nodes.update(set(self.qlgraph.nx_graph[key].keys()))
-            for key in output_nodes:
-                output_op_nodes.update(set(self.qlgraph.nx_graph.predecessors(key)))
+            input_opnodes  = set(itertools.chain.from_iterable([set([s for s in self.qlgraph.nx_graph.successors(n)]) for n in input_datanodes]))
+            output_opnodes = set(itertools.chain.from_iterable([set([p for p in self.qlgraph.nx_graph.predecessors(n)]) for n in output_datanodes]))
 
-            editor_input_nodes = [[key] for key in list(input_op_nodes) ]
-            editor_output_nodes = [[key] for key in list(output_op_nodes) ]
+            self._input_nodes  = input_opnodes
+            self._output_nodes = output_opnodes
 
             G = bipartite.projected_graph(self.qlgraph.nx_graph, {n for n in self.qlgraph.nx_graph.nodes if self.qlgraph.nx_graph.nodes[n]['bipartite'] == graphs.Bipartite.KERNEL})
 
         else:
 
-            editor_input_nodes = [[key] for key in input_nodes]
-            editor_output_nodes = [[key] for key in output_nodes]
-            
+            self._input_nodes  = input_datanodes
+            self._output_nodes = output_datanodes
+
             G = self.qlgraph.nx_graph
 
         nodes_dict = {k: v for k, v in self.qlgraph.nodes_dict.items() if k in G.nodes}
@@ -102,15 +122,6 @@ class Editor(object):
         self._graphviz = graphviz
         self._cache_dir = None
 
-        self.startup()
-        if editor_input_nodes:
-            self.set_grr(qg.grrules.AddInputNodeRule())
-            self.edit(gs=self.seek(VIs=editor_input_nodes))
-        if editor_output_nodes:
-            self.set_grr(qg.grrules.AddOutputNodeRule())
-            self.edit(gs=self.seek(VIs=editor_output_nodes))
-        self.shutdown()
-        
     @property
     def G(self):
         try:
@@ -140,6 +151,7 @@ class Editor(object):
         self._in_session = True
 
     def shutdown(self):
+        self._rho = None
         self._in_session = False
         self._apply_changes_to_graph()
         self._cache_dir.cleanup()
@@ -172,10 +184,11 @@ class Editor(object):
                     self._history.push(Commit(self._rho, g, G_new, nodes_dict_new))
                     status = __SUCCESS__
 
-                except Exception:
+                except Exception as e:
                     print("An issue arose while applying rule {} to graph <{}> at point: ".format(type(self._rho), self.G))
                     for vH, vL in g.items():
                         print("\t", vH, vL)
+                    print(e)
                     status = __FAILURE__
 
                 if (status == __SUCCESS__) and self._graphviz:
@@ -186,6 +199,16 @@ class Editor(object):
                 print("No rule defined for editor object <{}>.".format(self))
             else:
                 print("Editor object <{}> is not in an editing session.".format(self))
+
+    def add_io_handles(self):
+
+        if isinstance(self.qlgraph, graphs.PyTorchGraph):
+            self.startup()
+            self.set_grr(grrules.AddInputNodeRule())
+            self.edit(gs=self.seek(VIs=[[n] for n in self._input_nodes]))
+            self.set_grr(grrules.AddOutputNodeRule())
+            self.edit(gs=self.seek(VIs=[[n] for n in self._output_nodes]))
+            self.pause()
 
     def _apply_changes_to_graph(self):
 
@@ -211,3 +234,4 @@ class Editor(object):
 # which "ingredients" did I use in the past to generate these labels? (my personal "database/record" of use cases)
 #   - ONNX op type
 #   - node scope
+

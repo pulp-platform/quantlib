@@ -1,3 +1,24 @@
+# 
+# ana_ops.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,7 +39,7 @@ __all__ = [
 ]
 
 
-Noise = namedtuple('Noise', ['mu', 'sigma'])
+Noise = namedtuple('Noise', ['mi', 'sigma'])
 
 
 class ANAModule(nn.Module):
@@ -60,21 +81,21 @@ class ANAModule(nn.Module):
         anamod.ana_op = getattr(ana_lib, 'ANA' + noise_type.capitalize()).apply
 
         # initialise forward noise parameters
-        anamod.register_parameter('fmu', nn.Parameter(torch.zeros(1), requires_grad=False))
+        anamod.register_parameter('fmi', nn.Parameter(torch.zeros(1), requires_grad=False))
         anamod.register_parameter('fsigma', nn.Parameter(torch.ones(1), requires_grad=False))
-        anamod.fnoise = Noise(mu=anamod.fmu, sigma=anamod.fsigma)
+        anamod.fnoise = Noise(mi=anamod.fmi, sigma=anamod.fsigma)
 
         # initialise backward noise parameters
-        anamod.register_parameter('bmu', nn.Parameter(torch.zeros(1), requires_grad=False))
+        anamod.register_parameter('bmi', nn.Parameter(torch.zeros(1), requires_grad=False))
         anamod.register_parameter('bsigma', nn.Parameter(torch.ones(1), requires_grad=False))
-        anamod.bnoise = Noise(mu=anamod.bmu, sigma=anamod.bsigma)
+        anamod.bnoise = Noise(mi=anamod.bmi, sigma=anamod.bsigma)
 
-    def set_fnoise(self, mu, sigma):
-        self.fnoise.mu.data = torch.Tensor([mu]).to(self.fnoise.mu)
+    def set_fnoise(self, mi, sigma):
+        self.fnoise.mi.data    = torch.Tensor([mi]).to(self.fnoise.mi)
         self.fnoise.sigma.data = torch.Tensor([sigma]).to(self.fnoise.sigma)
 
-    def set_bnoise(self, mu, sigma):
-        self.bnoise.mu.data = torch.Tensor([mu]).to(self.bnoise.mu)
+    def set_bnoise(self, mi, sigma):
+        self.bnoise.mi.data    = torch.Tensor([mi]).to(self.bnoise.mi)
         self.bnoise.sigma.data = torch.Tensor([sigma]).to(self.bnoise.sigma)
 
 
@@ -85,15 +106,15 @@ class ANAActivation(ANAModule):
 
     def forward(self, x):
 
-        x = x / self.eps if self.eps != 1.0 else x
+        x = x / self.eps
 
         x_out = self.ana_op(x,
                             self.quant_levels, self.thresholds,
-                            self.fnoise.mu, self.fnoise.sigma,
-                            self.bnoise.mu, self.bnoise.sigma,
+                            self.fnoise.mi, self.fnoise.sigma,
+                            self.bnoise.mi, self.bnoise.sigma,
                             self.training)
 
-        x_out = x_out * self.eps if self.eps != 1.0 else x_out
+        x_out = x_out * self.eps
 
         return x_out
 
@@ -105,7 +126,6 @@ class ANALinear(ANAModule):
 
         # set quantizer + ANA properties
         super(ANALinear, self).__init__(quantizer_spec, noise_type)
-        assert self.eps == 1.0  # quantized weights should be "pure" integers, not fixed-point numbers
 
         # set linear layer parameters
         self.in_features  = in_features
@@ -130,15 +150,18 @@ class ANALinear(ANAModule):
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
 
-    def forward(self, input):
-
-        weight = self.ana_op(self.weight,
+    @property
+    def weight_maybe_quant(self):
+        weight = self.weight / self.eps
+        weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
-                             self.fnoise.mu, self.fnoise.sigma,
-                             self.bnoise.mu, self.bnoise.sigma,
+                             self.fnoise.mi, self.fnoise.sigma,
+                             self.bnoise.mi, self.bnoise.sigma,
                              self.training)
+        return weight
 
-        return F.linear(input, weight, self.bias)
+    def forward(self, input):
+        return F.linear(input, self.weight_maybe_quant * self.eps, self.bias)
 
 
 class _ANAConvNd(ANAModule):
@@ -148,7 +171,6 @@ class _ANAConvNd(ANAModule):
 
         # set quantizer + ANA properties
         super(_ANAConvNd, self).__init__(quantizer_spec, noise_type)
-        assert self.eps == 1.0  # quantized weights should be "pure" integers, not fixed-point numbers
 
         # set convolutional layer parameters
         if in_channels % groups != 0:
@@ -192,6 +214,16 @@ class _ANAConvNd(ANAModule):
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
 
+    @property
+    def weight_maybe_quant(self):
+        weight = self.weight / self.eps
+        weight = self.ana_op(weight,
+                             self.quant_levels, self.thresholds,
+                             self.fnoise.mi, self.fnoise.sigma,
+                             self.bnoise.mi, self.bnoise.sigma,
+                             self.training)
+        return weight
+
 
 class ANAConv1d(_ANAConvNd):
     def __init__(self, quantizer_spec, noise_type,
@@ -208,14 +240,7 @@ class ANAConv1d(_ANAConvNd):
         )
 
     def forward(self, input):
-
-        weight = self.ana_op(self.weight,
-                             self.quant_levels, self.thresholds,
-                             self.fnoise.mu, self.fnoise.sigma,
-                             self.bnoise.mu, self.bnoise.sigma,
-                             self.training)
-
-        return F.conv1d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return F.conv1d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
 class ANAConv2d(_ANAConvNd):
@@ -233,14 +258,7 @@ class ANAConv2d(_ANAConvNd):
         )
 
     def forward(self, input):
-
-        weight = self.ana_op(self.weight,
-                             self.quant_levels, self.thresholds,
-                             self.fnoise.mu, self.fnoise.sigma,
-                             self.bnoise.mu, self.bnoise.sigma,
-                             self.training)
-
-        return F.conv2d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return F.conv2d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
 class ANAConv3d(_ANAConvNd):
@@ -258,11 +276,5 @@ class ANAConv3d(_ANAConvNd):
         )
 
     def forward(self, input):
+        return F.conv3d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
-        weight = self.ana_op(self.weight,
-                             self.quant_levels, self.thresholds,
-                             self.fnoise.mu, self.fnoise.sigma,
-                             self.bnoise.mu, self.bnoise.sigma,
-                             self.training)
-
-        return F.conv3d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)

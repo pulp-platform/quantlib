@@ -1,3 +1,24 @@
+# 
+# filters.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import re
 
 from ..node import LightweightNode
@@ -5,8 +26,11 @@ from typing import List
 
 
 __all__ = [
+    'NotFilter',
     'OrFilter',
     'AndFilter',
+    'VariadicOrFilter',
+    'VariadicAndFilter',
     'NameFilter',
     'TypeFilter',
 ]
@@ -23,11 +47,27 @@ class Filter(object):
     def __call__(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
         return self.find(nodes_list)
 
+    def __neg__(self):
+        return NotFilter(self)
+
     def __and__(self, other):
         return AndFilter(self, other)
 
     def __or__(self, other):
         return OrFilter(self, other)
+
+
+class NotFilter(Filter):
+
+    def __init__(self, filter_: Filter):
+        super(NotFilter, self).__init__()
+        self._filter = filter_
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        return list(set(nodes_list).difference(set(self._filter(nodes_list))))
+
+    def __repr__(self):
+        return "".join(["(-", repr(self._filter), ")"])
 
 
 class OrFilter(Filter):
@@ -65,6 +105,41 @@ class AndFilter(Filter):
         return "".join(["(", repr(self._filter_a), " & ", repr(self._filter_b), ")"])
 
 
+class VariadicOrFilter(Filter):
+
+    def __init__(self, *filters: Filter):
+        assert len(filters) >= 2
+        super(VariadicOrFilter, self).__init__()
+        self._filters = filters
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        filtered_nodes = []
+        for f in self._filters:
+            filtered_nodes += f(nodes_list)
+        filtered_nodes = set(filtered_nodes)  # remove duplicates
+        return list(filtered_nodes)
+
+    def __repr__(self):
+        return "".join(["("] + [repr(f) + " | " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])
+
+
+class VariadicAndFilter(Filter):
+
+    def __init__(self, *filters):
+        assert len(filters) >= 2
+        super(VariadicAndFilter, self).__init__()
+        self._filters = filters
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        filtered_nodes = nodes_list
+        for f in self._filters:
+            filtered_nodes = f(filtered_nodes)
+        return filtered_nodes
+
+    def __repr__(self):
+        return "".join(["("] + [repr(f) + " & " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])
+
+
 class NameFilter(Filter):
 
     def __init__(self, regex: str):
@@ -94,3 +169,4 @@ class TypeFilter(Filter):
 
     def __repr__(self):
         return "".join([self.__class__.__name__, "(", self._type_str, ")"])
+

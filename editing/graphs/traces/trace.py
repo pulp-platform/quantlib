@@ -1,17 +1,35 @@
+# 
+# trace.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import networkx as nx
 import os
 
 # import graphs
 # import quantlib.editing.graphs.utils
 
-if __name__ == '__main__':
-    from quantlib.editing.graphs import graphs
-    from quantlib.editing.graphs import utils
-else:
-    from .. import graphs
-    from .. import utils
+from quantlib.editing.graphs import graphs
+from quantlib.editing.graphs import utils
 
 __TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
+# __TRACES_LIBRARY__ = os.path.join(os.path.expanduser('~'), 'Desktop', 'QuantLab', 'quantlib', 'editing', 'graphs', 'traces', '.libtraces')
 
 def trace_module(library, algorithm, mod, dummy_input):
 
@@ -103,9 +121,10 @@ def trace_quantlib_modules():
     #########
     algorithm = 'STE'
 
-    mod_STEActivation = qa.ste.STEActivation()
-    dummy_input = torch.ones((_batch_size, _n_input_channels))
-    trace_module(library, algorithm, mod_STEActivation, dummy_input)
+    # TODO: upgrading to PyTorch 1.9.0 breaks tracing of STE activation for "some reason": we must look into this!
+    # mod_STEActivation = qa.ste.STEActivation()
+    # dummy_input = torch.ones((_batch_size, _n_input_channels))
+    # trace_module(library, algorithm, mod_STEActivation, dummy_input)
 
     #########
     ## INQ ##
@@ -123,6 +142,34 @@ def trace_quantlib_modules():
     # mod_INQConv3d = qa.inq.INQConv3d(_n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
     # dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2, _dim3))
     # trace_module(library, algorithm, mod_INQConv3d, dummy_input)
+
+    #########
+    ## ANA ##
+    #########
+    algorithm = 'ANA'
+
+    quantizer_spec = {'nbits': 2, 'signed': True, 'balanced': True, 'eps': 1.0}
+    noise_type     = 'uniform'
+
+    mod_ANAActivation = qa.ana.ANAActivation(quantizer_spec, noise_type)
+    dummy_input = torch.ones((_batch_size, _n_input_channels))
+    trace_module(library, algorithm, mod_ANAActivation, dummy_input)
+
+    mod_ANALinear = qa.ana.ANALinear(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels))
+    trace_module(library, algorithm, mod_ANALinear, dummy_input)
+
+    mod_ANAConv1d = qa.ana.ANAConv1d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1))
+    trace_module(library, algorithm, mod_ANAConv1d, dummy_input)
+
+    mod_ANAConv2d = qa.ana.ANAConv2d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2))
+    trace_module(library, algorithm, mod_ANAConv2d, dummy_input)
+
+    mod_ANAConv3d = qa.ana.ANAConv3d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2, _dim3))
+    trace_module(library, algorithm, mod_ANAConv3d, dummy_input)
 
 
 if __name__ == '__main__':

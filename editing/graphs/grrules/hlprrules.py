@@ -1,3 +1,24 @@
+# 
+# hlprrules.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import networkx as nx
 from networkx.classes.filters import show_nodes, hide_edges
 import itertools
@@ -293,9 +314,10 @@ class AddPrecisionTunnelRule(HelperRule):
         Iout = I.subgraph(VIout)
 
         # create the precision tunnel
-        n = nodes_dict[next(iter(VIin))].nobj.num_levels
-        m = nodes_dict[next(iter(VIin))].nobj.abs_max_value.item()  # TODO: only `STEActivation` nodes have `abs_max_value` attribute! try to homogenise this in the future
-        eps = (2 * m) / (n - 1)
+        eps = nodes_dict[next(iter(VIin))].nobj.eps
+        # n = nodes_dict[next(iter(VIin))].nobj.num_levels
+        # m = nodes_dict[next(iter(VIin))].nobj.abs_max_value.item()  # TODO: only `STEActivation` nodes have `abs_max_value` attribute! try to homogenise this in the future
+        # eps = (2 * m) / (n - 1)
         JI, vJI_2_ptnode, E_I2JI, E_JI2I = self.core(H, Iin, Iout, eps, nodes_dict)
 
         # link the substitute (sub-)graph J\I to the interface (sub-)graph I
@@ -392,3 +414,4 @@ class RemovePrecisionTunnelRule(HelperRule):
         gs = list(filter(is_valid_application_point, gs))
 
         return gs
+

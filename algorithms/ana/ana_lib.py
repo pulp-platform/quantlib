@@ -1,15 +1,42 @@
+# 
+# ana_lib.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import torch
+
 from . import ana_uniform
-#import ana_uniform_cuda
 from . import ana_triangular
-#import ana_triangular_cuda
 from . import ana_normal
-#import ana_normal_cuda
 from . import ana_logistic
-#import ana_logistic_cuda
+
+try:
+    import ana_uniform_cuda
+    import ana_triangular_cuda
+    import ana_normal_cuda
+    import ana_logistic_cuda
+    use_ana_cuda_kernels = True
+except ImportError:
+    use_ana_cuda_kernels = False
 
 
-all = [
+__all__ = [
     'ANAUniform',
     'ANATriangular',
     'ANANormal',
@@ -29,7 +56,7 @@ class ANAUniform(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x_in, q, t, fmu, fsigma, bmu, bsigma, training):
         ctx.save_for_backward(x_in, q, t, bmu, bsigma)
-        if fsigma.is_cuda:
+        if use_ana_cuda_kernels and x_in.is_cuda:
             x_out = ana_uniform_cuda.forward(x_in, q, t, fmu, fsigma, torch.Tensor([training]).to(fsigma))
         else:
             x_out = ana_uniform.forward(x_in, q, t, fmu, fsigma, training)
@@ -38,7 +65,7 @@ class ANAUniform(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_in):
         x_in, q, t, bmu, bsigma = ctx.saved_tensors
-        if bsigma.is_cuda:
+        if use_ana_cuda_kernels and grad_in.is_cuda:
             grad_out = ana_uniform_cuda.backward(grad_in, x_in, q, t, bmu, bsigma)
         else:
             grad_out = ana_uniform.backward(grad_in, x_in, q, t, bmu, bsigma)
@@ -57,7 +84,7 @@ class ANATriangular(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x_in, q, t, fmu, fsigma, bmu, bsigma, training):
         ctx.save_for_backward(x_in, q, t, bmu, bsigma)
-        if fsigma.is_cuda:
+        if use_ana_cuda_kernels and x_in.is_cuda:
             x_out = ana_triangular_cuda.forward(x_in, q, t, fmu, fsigma, torch.Tensor([training]).to(fsigma))
         else:
             x_out = ana_triangular.forward(x_in, q, t, fmu, fsigma, training)
@@ -66,7 +93,7 @@ class ANATriangular(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_in):
         x_in, q, t, bmu, bsigma = ctx.saved_tensors
-        if bsigma.is_cuda:
+        if use_ana_cuda_kernels and grad_in.is_cuda:
             grad_out = ana_triangular_cuda.backward(grad_in, x_in, q, t, bmu, bsigma)
         else:
             grad_out = ana_triangular.backward(grad_in, x_in, q, t, bmu, bsigma)
@@ -85,7 +112,7 @@ class ANANormal(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x_in, q, t, fmu, fsigma, bmu, bsigma, training):
         ctx.save_for_backward(x_in, q, t, bmu, bsigma)
-        if fsigma.is_cuda:
+        if use_ana_cuda_kernels and x_in.is_cuda:
             x_out = ana_normal_cuda.forward(x_in, q, t, fmu, fsigma, torch.Tensor([training]).to(fsigma))
         else:
             x_out = ana_normal.forward(x_in, q, t, fmu, fsigma, training)
@@ -94,7 +121,7 @@ class ANANormal(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_in):
         x_in, q, t, bmu, bsigma = ctx.saved_tensors
-        if bsigma.is_cuda:
+        if use_ana_cuda_kernels and grad_in.is_cuda:
             grad_out = ana_normal_cuda.backward(grad_in, x_in, q, t, bmu, bsigma)
         else:
             grad_out = ana_normal.backward(grad_in, x_in, q, t, bmu, bsigma)
@@ -113,7 +140,7 @@ class ANALogistic(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x_in, q, t, fmu, fsigma, bmu, bsigma, training):
         ctx.save_for_backward(x_in, q, t, bmu, bsigma)
-        if fsigma.is_cuda:
+        if use_ana_cuda_kernels and x_in.is_cuda:
             x_out = ana_logistic_cuda.forward(x_in, q, t, fmu, fsigma, torch.Tensor([training]).to(fsigma))
         else:
             x_out = ana_logistic.forward(x_in, q, t, fmu, fsigma, training)
@@ -122,8 +149,9 @@ class ANALogistic(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_in):
         x_in, q, t, bmu, bsigma = ctx.saved_tensors
-        if bsigma.is_cuda:
+        if use_ana_cuda_kernels and grad_in.is_cuda:
             grad_out = ana_logistic_cuda.backward(grad_in, x_in, q, t, bmu, bsigma)
         else:
             grad_out = ana_logistic.backward(grad_in, x_in, q, t, bmu, bsigma)
         return grad_out, None, None, None, None, None, None, None
+

@@ -1,3 +1,24 @@
+# 
+# test.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import torch
 import matplotlib.pyplot as plt
 
@@ -87,11 +108,11 @@ def measure(anamod, forward_inputs, backward_inputs, n_iters=10):
     return forward_measurements, backward_measurements
 
 
-def profile(anamod, N=tuple([10**i for i in range(3, 6)]), n_iters=10):
+def profile(anamod, N=tuple([10**i for i in range(3, 6)]), n_iters=100):
     import numpy as np
 
     print("Performance report for {} version".format('GPU' if anamod.fnoise.sigma.is_cuda else 'CPU'))
-    print("Input size \t Forward \t\t\t\t\t\t | Backward")
+    print("Input size \t | Forward \t\t\t\t | Backward")
 
     for input_size in N:
         forward_inputs, backward_inputs = generate_inputs(input_size, anamod.quant_levels.data, anamod.eps.data, distribution='Dirac', n_iters=n_iters, is_cuda=anamod.fnoise.sigma.data.is_cuda)
@@ -104,7 +125,7 @@ def profile(anamod, N=tuple([10**i for i in range(3, 6)]), n_iters=10):
         backward_mu = np.mean(backward_perf)
         backward_std = np.std(backward_perf)
 
-        print("{:10d} \t {:10.3f}us +/- {:10.3f}us \t | {:10.3f}us +/- {:10.3f}us".format(input_size, forward_mu, forward_std, backward_mu, backward_std))
+        print("{:10d} \t | {:10.3f}us +/- {:10.3f}us \t | {:10.3f}us +/- {:10.3f}us".format(input_size, forward_mu, forward_std, backward_mu, backward_std))
 
 
 def check_functional_equivalence(anamod_gpu, anamod_cpu, tolerance=1e-6):
@@ -165,7 +186,7 @@ def get_ana_module(module_dict, quantizer_spec, noise_type,
     anamod = module_dict['ANAActivation'](quantizer_spec, noise_type)
     anamod.set_fnoise(fmu, fsigma)
     anamod.set_bnoise(bmu, bsigma)
-    if cuda:
+    if cuda and torch.cuda.is_available():
         anamod.cuda()
 
     return anamod
@@ -199,3 +220,4 @@ def test(module_dict, nbits=2, signed=True, balanced=True, eps=1.0,
         print("Noise type: {}".format(noise_type.upper()))
         test_noise(module_dict, quantizer_spec, noise_type, fmu, fsigma, bmu, bsigma)
         print("\n")
+

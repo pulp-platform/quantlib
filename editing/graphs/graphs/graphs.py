@@ -1,3 +1,24 @@
+# 
+# graphs.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 from packaging import version
 import torch.onnx.utils
 import torch
@@ -5,8 +26,8 @@ import itertools
 import networkx as nx
 from networkx.algorithms import dag
 
- #import graphs
 from .. import graphs
+
 
 class scope_name_workaround(object):
     # this is a necessary "context manager" object for PyTorch >= 1.4
@@ -68,12 +89,13 @@ class ONNXGraph(object):
         if not isinstance(dummy_input, tuple):
             dummy_input = (dummy_input,)
 
-        assert version.parse(torch.__version__) >= version.parse('1.4.0')
+        assert version.parse(torch.__version__) >= version.parse('1.9.0')
         from torch.onnx.symbolic_helper import _set_opset_version
         _set_opset_version(11)  # opset_version9 does not support `round` ONNX operator (even though docs for PyTorch 1.5.0 suggests so)
 
         with scope_name_workaround():
-            self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, propagate=True, _retain_param_name=True)
+            # self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, propagate=True, _retain_param_name=True)
+            self.jit_graph, _, _ = torch.onnx.utils._model_to_graph(net, dummy_input, _retain_param_name=True)
 
         # At this point, I have a handle on a `torch._C.Graph` object; its
         # components are `torch._C.Node` objects, which are abstractions for
@@ -162,7 +184,6 @@ class PyTorchGraph(object):
 
         # remove data nodes which are used internaly to a PyTorch `nn.Module` (i.e., as "working memory");
         # beware: this operation is not reversible!
-        
         self.nx_graph.remove_nodes_from(PyTorchGraph.find_internal_datanodes(self.nx_graph))
 
         # reassign IDs to nodes based on their topological sorting (I assume the graph is a DAG)
@@ -170,38 +191,14 @@ class PyTorchGraph(object):
         opnode_id_gen   = itertools.count()
         datanode_id_gen = itertools.count()
 
-        # SCHEREMO: the traced graph treats all inputs to the compute graph as inputs and doesn't distinguish
-        # between user inputs and trainable parameters - we do this here by using the requires_grad attribute,
-        # which we tested to still be there after setting the model in eval.
-        # It's possible this breaks under some conditions, though.
-        onnxgraph_parameters = [n.debugName() for n in onnxgraph.jit_graph.inputs() if n.requires_grad()]
-        onnxgraph_inputs = list(set([n.debugName() for n in onnxgraph.jit_graph.inputs()]) - set(onnxgraph_parameters))
-        onnxgraph_outputs = [n.debugName() for n in onnxgraph.jit_graph.outputs()]
-
-        data_partition_dict = {}
-        
         onnx_scope_2_pytorch_id = {}
         for n in dag.topological_sort(self.nx_graph):
             if self.nx_graph.nodes[n]['bipartite'] == graphs.nodes.Bipartite.KERNEL:
                 node_id = 'O' + __NODE_ID_FORMAT__.format(next(opnode_id_gen))
             elif self.nx_graph.nodes[n]['bipartite'] == graphs.Bipartite.MEMORY:
-
-                # SCHEREMO: identify node attributes - each data node is either input (in the sense of the network input, not the compute graph inputs), output, parameter or other
-                # Most probably other is equivalent to intermediate feature map, but this requires further checking
-                if (n in onnxgraph_inputs):
-                    attr = graphs.DataPartition.INPUT
-                elif (n in onnxgraph_outputs):
-                    attr = graphs.DataPartition.OUTPUT
-                elif (n in onnxgraph_parameters):
-                    attr = graphs.DataPartition.PARAMETER
-                else:
-                    attr  = graphs.DataPartition.OTHER
-                    
-                data_partition_dict[n] = attr
                 node_id = 'D' + __NODE_ID_FORMAT__.format(next(datanode_id_gen))
             onnx_scope_2_pytorch_id[n] = node_id
 
-        nx.set_node_attributes(self.nx_graph, data_partition_dict, 'dataPartition')
         nx.relabel_nodes(self.nx_graph, onnx_scope_2_pytorch_id, copy=False)
         self.pytorch_id_2_onnx_scope = {v: k for k, v in onnx_scope_2_pytorch_id.items()}
         
@@ -226,9 +223,26 @@ class PyTorchGraph(object):
             datanodes_dict[n] = graphs.PyTorchNode(obj)
 
         self.nodes_dict = {**opnodes_dict, **datanodes_dict}
-
         nx.set_node_attributes(self.nx_graph, {k: v.ntype for k, v in self.nodes_dict.items()}, 'type')
         nx.set_node_attributes(self.nx_graph, {k: v.nscope for k, v in self.nodes_dict.items()}, 'scope')
+
+        # SCHEREMO: the traced graph treats all inputs to the compute graph as inputs and doesn't distinguish
+        # between user inputs and trainable parameters - we do this here by using the requires_grad attribute,
+        # which we tested to still be there after setting the model in eval.
+        # It's possible this breaks under some conditions, though.
+        python_id_2_datanode  = {id(node.nobj): n for n, node in self.nodes_dict.items() if self.nx_graph.nodes[n]['bipartite'] == graphs.Bipartite.MEMORY}
+        inputs_python_ids     = set(map(lambda n: id(n), onnxgraph.jit_graph.inputs()))
+        parameters_python_ids = set(filter(lambda id_: onnxgraph.nodes_dict[python_id_2_datanode[id_]].nobj.requires_grad(), inputs_python_ids))
+        inputs_python_ids     = inputs_python_ids.difference(parameters_python_ids)
+        outputs_python_ids    = set(map(lambda n: id(n), onnxgraph.jit_graph.outputs()))
+
+        # SCHEREMO: identify node attributes - each data node is either input (in the sense of the network input, not the compute graph inputs), output, parameter or other
+        # Most probably other is equivalent to intermediate feature map, but this requires further checking
+        data_partition_dict = {}
+        data_partition_dict.update({python_id_2_datanode[id_]: graphs.DataPartition.INPUT for id_ in inputs_python_ids})
+        data_partition_dict.update({python_id_2_datanode[id_]: graphs.DataPartition.OUTPUT for id_ in outputs_python_ids})
+        data_partition_dict.update({python_id_2_datanode[id_]: graphs.DataPartition.PARAMETER for id_ in parameters_python_ids})
+        nx.set_node_attributes(self.nx_graph, data_partition_dict, 'data_partition')
 
     @staticmethod
     def find_internal_datanodes(G):
@@ -259,3 +273,4 @@ class PyTorchGraph(object):
                 return PyTorchGraph.get_pytorch_module_by_name(child, target_name.split('.', 1)[-1])
 
         return module
+

@@ -1,3 +1,24 @@
+# 
+# editor.py
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 from collections import namedtuple
 
 from .graph import LightweightGraph
@@ -59,6 +80,10 @@ class LightweightEditor(object):
         self._history    = History()
         self._in_session = False  # put a lock on the history by preventing editing actions
         self._rho        = None   # current ``LightweightRule``
+
+    @property
+    def graph(self) -> LightweightGraph:
+        return self._graph
 
     def startup(self):
         self._in_session = True
@@ -122,3 +147,4 @@ class LightweightEditor(object):
 
         else:
             print("Graph editing denied: {} object is non in an editing session.".format(self.__class__.__name__))
+
