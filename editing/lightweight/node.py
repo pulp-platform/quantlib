@@ -38,3 +38,11 @@ class LightweightNode(object):
     def type_(self) -> type:
         return type(self.module)
 
+    def __repr__(self) -> str:
+        return f"LightweightNode(name={self.name}, module={self.module})"
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, LightweightNode):
+            return self.name == other.name and str(self.module) == str(other.module)
+        else:
+            raise NotImplementedError
