@@ -19,11 +19,16 @@
 # limitations under the License.
 # 
 
+from typing import Union
+
 import torch
 import numpy as np
+
 from ..controller import Controller
-from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d
-from typing import Union
+
+from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear
+from .util import assert_param_valid
+
 
 
 __all__ = [
@@ -70,16 +75,6 @@ _sawb_asymm_lut = {
 }
 
 
-def almost_symm_quant(max_val, n_levels):
-    if n_levels % 2 == 0:
-        eps = 2*max_val/n_levels
-    else:
-        eps = 2*max_val/(n_levels-1)
-    min_val = -max_val
-    max_val = min_val + (n_levels-1)*eps
-    return min_val, max_val
-
-
 class PACTActController(Controller):
     """
     Controller for PACT activation classes:
@@ -91,6 +86,7 @@ class PACTActController(Controller):
     """
     def __init__(self, modules : list, schedule : dict, verbose : bool = False, init_clip_lo : float = -1., init_clip_hi : float = 1.):
         assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
+
         self.modules = modules
         self.schedule = {int(k): v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
         self.verbose = verbose
@@ -236,20 +232,29 @@ class PACTLinearController(Controller):
       - PACTLinear
     """
 
-    def __init__(self, modules : list, schedule : dict, verbose : bool = False):
+    def __init__(self, modules : list, schedule : dict, verbose : bool = False, init_clip_lo : float = -1., init_clip_hi : float = 1., update_every : str = 'batch'):
+        assert_param_valid(self, update_every, 'update_every', ['batch', 'epoch'])
         super(PACTLinearController, self).__init__()
         self.modules = modules
         self.schedule = {int(k):v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
         self.verbose = verbose
+        self.init_clip_lo = init_clip_lo
+        self.init_clip_hi = init_clip_hi
         self.started = False
         self.frozen = False
+        self.update_every = update_every
 
     def step_pre_training_batch(self, *args, **kwargs):
+        if self.update_every == 'batch':
+            self.update_clip_params()
+
+
+    def update_clip_params(self):
         with torch.no_grad():
             for m in self.modules:
                 if (not m.frozen) and m.started:
                     if not m.learn_clip:
-                        self.reset_clip_bounds(m)
+                        self.reset_clip_bounds(m, m.init_clip)
                     # if 'learn_clip' is True and 'symm_wts' is also True, we learn the lower clip bound and set the upper
                     # one automatically with a function equivalent to 'almost_symm_quant'. This is performed in the
                     # conv/linear module itself to ensure proper gradient propagation (???).
@@ -311,14 +316,19 @@ class PACTLinearController(Controller):
                     self.started = False
                     self.log("Stopped quantization!")
 
+        elif self.update_every == 'epoch':
+            self.update_clip_params()
+
+
     def step_pre_validation_epoch(self, epoch: int, *args, **kwargs):
         # always before validation, update the clipping parameters as is done before each batch, so the changes from
         # the last batch of an epoch are reflected in the clipping params.
         self.step_pre_training_batch()
 
     # resetting clip bounds is almost identical between the different convolutions
-    def reset_clip_bounds(self, m: Union[PACTConv2d, PACTConv1d]):
-        method = m.init_clip
+    def reset_clip_bounds(self, m: Union[PACTConv2d, PACTConv1d, PACTLinear], method: str = None):
+        if method is None:
+            method = m.init_clip
         w = m.weight.data
         if m.quantize == 'per_channel':
             reduce_dims = tuple(range(1, len(w.shape)))
@@ -334,12 +344,13 @@ class PACTLinearController(Controller):
                 max_val = torch.amax(w, dim=reduce_dims)
                 min_val = torch.amin(w, dim=reduce_dims)
         elif method == 'std':
-            #TODO this doesn't really make sense. this way, the lower bound is initialized to -mean-nb_std*std.
-            # if mean is 0 (which it should approximately be...) that's fine but if not, it's not really a proper
-            # mean + std initialization.
             max_val = w.mean(dim=reduce_dims) + w.std(dim=reduce_dims) * m.nb_std
-            # 'std' initialization is inherently symmetrical, so use the "almost_symmetrical" quantization anyway
-            min_mal, max_val = almost_symm_quant(max_val, m.n_levels)
+            if m.symm_wts:
+                # 'std' initialization is inherently symmetrical, so use the "almost_symmetrical" quantization anyway
+                min_mal, max_val = almost_symm_quant(max_val, m.n_levels)
+            else:
+                min_val = w.mean(dim=reduce_dims) - w.std(dim=reduce_dims) * m.nb_std
+
         elif method[0:4] == 'sawb':
             symm = method[5:] == 'symm'
             # mean absolute weights: E[|W|] - either channel-wise or over the whole tensor depending on reduce_dims
@@ -355,6 +366,9 @@ class PACTLinearController(Controller):
                 max_val = alpha
             else:
                 min_val, max_val = almost_symm_quant(alpha, m.n_levels)
+        else: # method == 'const'
+            min_val = torch.ones_like(m.clip_lo.data) * self.init_clip_lo
+            max_val = torch.ones_like(m.clip_hi.data) * self.init_clip_hi
 
         m.clip_hi.data = m.expand_bounds(max_val)
         m.clip_lo.data = m.expand_bounds(min_val)
