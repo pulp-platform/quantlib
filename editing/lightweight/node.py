@@ -42,7 +42,9 @@ class LightweightNode(object):
         return f"LightweightNode(name={self.name}, module={self.module})"
 
     def __eq__(self, other) -> bool:
+        # two nodes are equal if they have the same name and point to the same
+        # nn.Module instance.
         if isinstance(other, LightweightNode):
-            return self.name == other.name and str(self.module) == str(other.module)
+            return (self.name == other.name) and (self.module is other.module)
         else:
             raise NotImplementedError
