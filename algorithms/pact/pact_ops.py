@@ -91,6 +91,7 @@ class PACTUnsignedAct(nn.Module):
         self.clip_hi = torch.nn.Parameter(torch.Tensor((1.,)), requires_grad=learn_clip)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'high':self.clip_hi}
+        self.learn_clip = learn_clip
         self.act_kind = act_kind
         self.init_clip = init_clip
         self.nb_std = nb_std
@@ -198,6 +199,7 @@ class PACTAsymmetricAct(nn.Module):
         self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=learn_clip and (not symm))
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
+        self.learn_clip = learn_clip
         self.act_kind = act_kind
         self.leaky = leaky
         self.init_clip = init_clip
