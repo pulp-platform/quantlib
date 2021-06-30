@@ -20,9 +20,12 @@
 # limitations under the License.
 # 
 
-from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
+
 import torch
 from torch import nn
+
+from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
+from .util import assert_param_valid
 
 
 __all__ = [
@@ -33,10 +36,6 @@ __all__ = [
     'PACTLinear',
     'PACTQuantize',
 ]
-
-def assert_param_valid(module : nn.Module, value, param_name : str, valid_values : list):
-    error_str = f"[{module.__class__.__name__}]  Invalid argument {param_name}: Got {value}, expected {valid_values[0] if len(valid_values)==1 else ', '.join(valid_values[:-1]) + ' or ' + str(valid_values[-1])}"
-    assert value in valid_values, error_str
 
 
 class PACTUnsignedAct(nn.Module):
@@ -92,6 +91,7 @@ class PACTUnsignedAct(nn.Module):
         self.clip_hi = torch.nn.Parameter(torch.Tensor((1.,)), requires_grad=learn_clip)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'high':self.clip_hi}
+        self.learn_clip = learn_clip
         self.act_kind = act_kind
         self.init_clip = init_clip
         self.nb_std = nb_std
@@ -107,6 +107,10 @@ class PACTUnsignedAct(nn.Module):
 
     def get_eps(self, *args):
         return self.clip_hi/(self.n_levels-1)
+
+    def extra_repr(self):
+        r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, nb_std={nb_std}".format(**self.__dict__)
+        return r
 
     def forward(self, x):
         r"""Forward-prop function for PACT-quantized activations.
@@ -142,7 +146,7 @@ class PACTUnsignedAct(nn.Module):
         else:
             eps = self.get_eps()
             # TODO why clip_hi+eps???
-            return PACTQuantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, clip_gradient=torch.tensor(True, device=self.clip_hi.device)) # clip_gradient=True keeps NEMO compatibility
+            return PACTQuantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, floor=True, clip_gradient=torch.tensor(True, device=self.clip_hi.device)) # clip_gradient=True keeps NEMO compatibility
 
 
 class PACTAsymmetricAct(nn.Module):
@@ -195,6 +199,7 @@ class PACTAsymmetricAct(nn.Module):
         self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=learn_clip and (not symm))
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
+        self.learn_clip = learn_clip
         self.act_kind = act_kind
         self.leaky = leaky
         self.init_clip = init_clip
@@ -211,6 +216,10 @@ class PACTAsymmetricAct(nn.Module):
 
     def get_eps(self, *args):
         return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+
+    def extra_repr(self):
+        r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, symm={symm}, nb_std={nb_std}".format(**self.__dict__)
+        return r
 
     def forward(self, x):
         r"""Forward-prop function for PACT-quantized activations.
@@ -249,7 +258,7 @@ class PACTAsymmetricAct(nn.Module):
             else:
                 clip_upper = self.clip_hi
             #TODO: why was this clip_hi+eps??
-            return PACTQuantize(x, eps, self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
 
 
 class PACTConv2d(nn.Conv2d):
@@ -260,7 +269,7 @@ class PACTConv2d(nn.Conv2d):
             kernel_size,
             n_levels = 256,
             quantize = 'per_layer',
-            init_clip = 'sawb',
+            init_clip = 'sawb_asymm',
             learn_clip = False,
             symm_wts = True,
             nb_std = 3,
@@ -274,18 +283,18 @@ class PACTConv2d(nn.Conv2d):
         :param n_levels: Number of weight quantization levels
         :param quantize: how to quantize weights - 'per_layer' or 'per_channel'
         :type  quantize: str
-        :param init_clip: how weight clipping parameters should be initialized - 'sawb', 'max' or 'std'
+        :param init_clip: how weight clipping parameters should be initialized - 'sawb_symm', 'sawb_asymm', 'max' or 'std'
         :param learn_clip: whether clipping bound(s) should be learned
         :param symm_wts: Indicates that the weights should cover a symmetrical range around 0. If n_levels is an odd number,
                the integer representations of the weights will go from -n_levels/2 to n_levels/2-1, and the clipping range will
-               be set accordingly. If init_clip is 'sawb', the symm_wts parameter has no effect.
+               be set accordingly. If init_clip is 'sawb_symm'/'sawb_asymm', the symm_wts parameter has no effect.
         :param kwargs: passed to Conv2d constructor
         # todo: quantize bias??
         """
         quantize = quantize.lower()
         init_clip = init_clip.lower()
         assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
 
         super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.n_levels = n_levels
@@ -333,13 +342,18 @@ class PACTConv2d(nn.Conv2d):
         """
         return self.get_eps_w()*eps_in
 
+    def extra_repr(self):
+        r = super(PACTConv2d, self).extra_repr()
+        r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
+        return r
+
     def forward(self, x):
         if self.started:
             if self.learn_clip and self.symm_wts:
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -367,7 +381,7 @@ class PACTConv1d(nn.Conv1d):
             kernel_size,
             n_levels = 256,
             quantize = 'per_layer',
-            init_clip = 'sawb',
+            init_clip = 'sawb_asymm',
             learn_clip = False,
             symm_wts = True,
             nb_std = 3,
@@ -380,11 +394,11 @@ class PACTConv1d(nn.Conv1d):
         :param n_levels: Number of weight quantization levels
         :param quantize: how to quantize weights - 'per_layer' or 'per_channel'
         :type  quantize: str
-        :param init_clip: how weight clipping parameters should be initialized - 'sawb', 'max' or 'std'
+        :param init_clip: how weight clipping parameters should be initialized - 'sawb_symm', 'sawb_asymm, 'max' or 'std'
         :param learn_clip: whether clipping bound(s) should be learned
         :param symm_wts: Indicates that the weights should cover a symmetrical range around 0. If n_levels is an odd number,
                the integer representations of the weights will go from -n_levels/2 to n_levels/2-1, and the clipping range will
-               be set accordingly. If init_clip is 'sawb', the symm_wts parameter has no effect.
+               be set accordingly. If init_clip is 'sawb_symm'/'sawb_asymm', the symm_wts parameter has no effect.
         :param kwargs: passed to Conv1d constructor
         TODO: implement quantized bias?
         """
@@ -392,7 +406,7 @@ class PACTConv1d(nn.Conv1d):
         quantize = quantize.lower()
         init_clip = init_clip.lower()
         assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
 
         super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.n_levels = n_levels
@@ -447,14 +461,20 @@ class PACTConv1d(nn.Conv1d):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantFunc(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
+
+    def extra_repr(self):
+        r = super(PACTConv1d, self).extra_repr()
+        r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
+        return r
+
     @classmethod
     def from_conv1d(cls, c : nn.Conv1d, **kwargs):
-        # kwargs should be arguments to PACTConv2d
+        # kwargs should be arguments to PACTConv1d
         return cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
                    kernel_size=c.kernel_size,
@@ -473,7 +493,7 @@ class PACTLinear(nn.Linear):
                  out_features : int,
                  n_levels : int = 256,
                  quantize : str = 'per_layer',
-                 init_clip : str = 'sawb',
+                 init_clip : str = 'sawb_asymm',
                  learn_clip : bool = False,
                  symm_wts : bool = True,
                  nb_std : int = 3,
@@ -493,7 +513,7 @@ class PACTLinear(nn.Linear):
         quantize = quantize.lower()
         init_clip = init_clip.lower()
         assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
 
         super(PACTLinear, self).__init__(in_features, out_features, **kwargs)
         self.n_levels = n_levels
@@ -543,10 +563,16 @@ class PACTLinear(nn.Linear):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)
+
+
+    def extra_repr(self):
+        r = super(PACTLinear, self).extra_repr()
+        r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
+        return r
 
     @classmethod
     def from_linear(cls, l : nn.Linear, **kwargs):

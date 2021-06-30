@@ -19,11 +19,16 @@
 # limitations under the License.
 # 
 
+from typing import Union
+
 import torch
 import numpy as np
+
 from ..controller import Controller
-from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d
-from typing import Union
+
+from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear
+from .util import assert_param_valid, almost_symm_quant
+
 
 
 __all__ = [
@@ -35,25 +40,39 @@ __all__ = [
 # Coefficients generated with this code:
 # https://colab.research.google.com/drive/1IH8TwCfkvcMkHx4tHldMNgsvBIgCpTeM?usp=sharing
 # first entry is c1, second is c2 with alpha_w^* = c1 * sqrt(Ew2) - c2 * Ew1
-_sawb_asymm_lut = {
-    2: [ 1.708,  0.403],
-    3: [ 4.712,  3.621],
-    4: [ 8.536,  7.931],
-    5: [12.251, 12.201],
-    6: [14.858, 15.296],
-    7: [20.552, 22.297],
-    8: [28.221, 31.858]
+_sawb_symm_lut = {
+      3: [ 2.58072,  1.68371],
+      4: [ 3.22824,  2.19780],
+      7: [ 6.99146,  6.34798],
+      8: [ 7.57111,  6.96333],
+     15: [12.04287, 12.07040],
+     16: [12.16637, 12.19222],
+     31: [14.71474, 15.13775],
+     32: [15.18684, 15.72128],
+     63: [20.78714, 22.60234],
+     64: [20.54678, 22.29264],
+    127: [27.15792, 30.50641],
+    128: [27.75226, 31.25157],
+    255: [35.48044, 40.89530],
+    256: [34.97231, 40.26019],
 }
 
-
-def almost_symm_quant(max_val, n_levels):
-    if n_levels % 2 == 0:
-        eps = 2*max_val/n_levels
-    else:
-        eps = 2*max_val/(n_levels-1)
-    min_val = -max_val
-    max_val = min_val + (n_levels-1)*eps
-    return min_val, max_val
+_sawb_asymm_lut = {
+      3: [ 2.58072,  1.68371],
+      4: [ 4.74932,  3.32860],
+      7: [ 6.99146,  6.34798],
+      8: [ 8.26900,  7.36509],
+     15: [12.04287, 12.07040],
+     16: [12.06485, 11.86833],
+     31: [14.71474, 15.13775],
+     32: [15.47646, 15.98616],
+     63: [20.78714, 22.60234],
+     64: [21.96366, 24.03408],
+    127: [27.15792, 30.50641],
+    128: [28.26410, 31.87972],
+    255: [35.48044, 40.89530],
+    256: [36.15292, 41.73554],
+}
 
 
 class PACTActController(Controller):
@@ -67,11 +86,14 @@ class PACTActController(Controller):
     """
     def __init__(self, modules : list, schedule : dict, verbose : bool = False, init_clip_lo : float = -1., init_clip_hi : float = 1.):
         assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
+
         self.modules = modules
         self.schedule = {int(k): v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
         self.verbose = verbose
         self.init_clip_lo = init_clip_lo
         self.init_clip_hi = init_clip_hi
+        self.started = False
+        self.frozen = False
 
     def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
         """
@@ -100,6 +122,8 @@ class PACTActController(Controller):
                     for m in self.modules:
                         self.reset_clip_bounds(m, m.init_clip)
                         m.started = True
+
+                    self.started = True
                     self.log("Started activation quantization!")
 
                 elif cmd == 'freeze':
@@ -107,6 +131,7 @@ class PACTActController(Controller):
                         for p in m.clipping_params.values():
                             p.requires_grad = False
                             p.grad = None
+                    self.frozen = True
                     self.log("Froze clipping parameters!")
 
                 elif cmd == 'thaw':
@@ -118,6 +143,7 @@ class PACTActController(Controller):
                             except AttributeError:
                                 symm = False
                             p.requires_grad = m.learn_clip and not (k=='high' and symm)
+                    self.frozen = False
                     self.log("Unfroze clipping parameters!")
 
                 else:
@@ -141,6 +167,11 @@ class PACTActController(Controller):
                 # we don't need 'min_val' if m does not have the 'symm' attribute because in that case
                 # it's not an asymmetric activation
                 pass
+        elif method == 'const':
+            for p in m.clipping_params.values():
+                max_val = torch.ones_like(p.data) * self.init_clip_hi
+                min_val = torch.ones_like(p.data) * self.init_clip_lo
+                break
         else: # method == 'std'
             max_val = m.running_mean.data + m.nb_std * torch.sqrt(m.running_var.data)
             try:
@@ -167,10 +198,30 @@ class PACTActController(Controller):
             print("[PACTActController]   ", msg)
 
     def state_dict(self):
-        return {}
+        return {'verbose':self.verbose, 'started':self.started, 'frozen':self.frozen}
 
     def load_state_dict(self, state_dict : dict):
-        pass
+        try:
+            self.verbose = state_dict['verbose']
+            if state_dict['started']:
+                for m in self.modules:
+                    m.started = True
+
+                self.started = True
+                self.log("Quantization is enabled!")
+
+            if state_dict['frozen']:
+                for m in self.modules:
+                    for p in m.clipping_params.values():
+                        p.requires_grad = False
+                        p.grad = None
+                    self.frozen = True
+                    self.log("All modules frozen!")
+        except KeyError:
+            vo = self.verbose
+            self.verbose = True
+            self.log("Got a bad state_dict - ignoring!")
+            self.verbose = vo
 
 
 class PACTLinearController(Controller):
@@ -181,18 +232,29 @@ class PACTLinearController(Controller):
       - PACTLinear
     """
 
-    def __init__(self, modules : list, schedule : dict, verbose : bool = False):
+    def __init__(self, modules : list, schedule : dict, verbose : bool = False, init_clip_lo : float = -1., init_clip_hi : float = 1., update_every : str = 'batch'):
+        assert_param_valid(self, update_every, 'update_every', ['batch', 'epoch'])
         super(PACTLinearController, self).__init__()
         self.modules = modules
         self.schedule = {int(k):v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
         self.verbose = verbose
+        self.init_clip_lo = init_clip_lo
+        self.init_clip_hi = init_clip_hi
+        self.started = False
+        self.frozen = False
+        self.update_every = update_every
 
     def step_pre_training_batch(self, *args, **kwargs):
+        if self.update_every == 'batch':
+            self.update_clip_params()
+
+
+    def update_clip_params(self):
         with torch.no_grad():
             for m in self.modules:
                 if (not m.frozen) and m.started:
                     if not m.learn_clip:
-                        self.reset_clip_bounds(m)
+                        self.reset_clip_bounds(m, m.init_clip)
                     # if 'learn_clip' is True and 'symm_wts' is also True, we learn the lower clip bound and set the upper
                     # one automatically with a function equivalent to 'almost_symm_quant'. This is performed in the
                     # conv/linear module itself to ensure proper gradient propagation (???).
@@ -220,30 +282,43 @@ class PACTLinearController(Controller):
                 if cmd == 'verbose_on':
                     self.verbose = True
                     self.log("Verbose mode enabled!")
+
                 elif cmd == 'verbose_off':
                     self.verbose = False
+
                 elif cmd == 'start':
                     for m in self.modules:
                         self.reset_clip_bounds(m)
                         m.started = True
+
+                    self.started = True
                     self.log("Started quantization!")
+
                 elif cmd == 'freeze':
                     for m in self.modules:
                         for b in m.clipping_params.values():
                             b.requires_grad = False
                             b.grad = None
                         m.frozen = True
+                    self.frozen = True
+
                 elif cmd == 'thaw':
                     for m in self.modules:
                         for k, b in m.clipping_params.items():
                             # if symm_wts is True, the upper bound is not learned but inferred from the lower bound.
                             b.requires_grad = m.learn_clip and not (k=='high' and m.symm_wts)
                         m.frozen = False
+                    self.frozen = False
                 else:
                     assert cmd == 'stop', "Invalid PACTLinearController command at epoch {}: {}".format(epoch, cmd)
                     for m in self.modules:
                         m.started = False
+                    self.started = False
                     self.log("Stopped quantization!")
+
+        elif self.update_every == 'epoch':
+            self.update_clip_params()
+
 
     def step_pre_validation_epoch(self, epoch: int, *args, **kwargs):
         # always before validation, update the clipping parameters as is done before each batch, so the changes from
@@ -251,8 +326,9 @@ class PACTLinearController(Controller):
         self.step_pre_training_batch()
 
     # resetting clip bounds is almost identical between the different convolutions
-    def reset_clip_bounds(self, m: Union[PACTConv2d, PACTConv1d]):
-        method = m.init_clip
+    def reset_clip_bounds(self, m: Union[PACTConv2d, PACTConv1d, PACTLinear], method: str = None):
+        if method is None:
+            method = m.init_clip
         w = m.weight.data
         if m.quantize == 'per_channel':
             reduce_dims = tuple(range(1, len(w.shape)))
@@ -268,22 +344,31 @@ class PACTLinearController(Controller):
                 max_val = torch.amax(w, dim=reduce_dims)
                 min_val = torch.amin(w, dim=reduce_dims)
         elif method == 'std':
-            #TODO this doesn't really make sense. this way, the lower bound is initialized to -mean-nb_std*std.
-            # if mean is 0 (which it should approximately be...) that's fine but if not, it's not really a proper
-            # mean + std initialization.
             max_val = w.mean(dim=reduce_dims) + w.std(dim=reduce_dims) * m.nb_std
-            # 'std' initialization is inherently symmetrical, so use the "almost_symmetrical" quantization anyway
-            min_mal, max_val = almost_symm_quant(max_val, m.n_levels)
-        elif method == 'sawb':
+            if m.symm_wts:
+                # 'std' initialization is inherently symmetrical, so use the "almost_symmetrical" quantization anyway
+                min_mal, max_val = almost_symm_quant(max_val, m.n_levels)
+            else:
+                min_val = w.mean(dim=reduce_dims) - w.std(dim=reduce_dims) * m.nb_std
+
+        elif method[0:4] == 'sawb':
+            symm = method[5:] == 'symm'
             # mean absolute weights: E[|W|] - either channel-wise or over the whole tensor depending on reduce_dims
-            # when using SAWB
             e_w_abs = m.weight.data.abs().mean(dim=reduce_dims)
             e_w2 = torch.mean(m.weight.data**2, dim=reduce_dims)
-            n_bits = int(np.log2(m.n_levels))
-            assert int(2**n_bits) == m.n_levels, "SAWB not supported for n_levels={} - must be power of 2!".format(m.n_levels)
-            coeffs = _sawb_asymm_lut[n_bits]
+            if symm:
+                coeffs = _sawb_symm_lut[m.n_levels]
+            else:
+                coeffs = _sawb_asymm_lut[m.n_levels]
             alpha = coeffs[0] * e_w2.sqrt() - coeffs[1] * e_w_abs
-            min_val, max_val = almost_symm_quant(alpha, m.n_levels)
+            if symm:
+                min_val = -alpha
+                max_val = alpha
+            else:
+                min_val, max_val = almost_symm_quant(alpha, m.n_levels)
+        else: # method == 'const'
+            min_val = torch.ones_like(m.clip_lo.data) * self.init_clip_lo
+            max_val = torch.ones_like(m.clip_hi.data) * self.init_clip_hi
 
         m.clip_hi.data = m.expand_bounds(max_val)
         m.clip_lo.data = m.expand_bounds(min_val)
@@ -293,7 +378,29 @@ class PACTLinearController(Controller):
             print("[PACTLinearController]   ", msg)
 
     def state_dict(self):
-        return {}
+        return {'verbose': self.verbose, 'started':self.started, 'frozen':self.frozen}
 
     def load_state_dict(self, state_dict : dict):
-        pass
+        try:
+            self.verbose = state_dict['verbose']
+            if state_dict['started']:
+                for m in self.modules:
+                    m.started = True
+
+                self.started = True
+                self.log("Quantization is enabled!")
+
+            if state_dict['frozen']:
+                for m in self.modules:
+                    for p in m.clipping_params.values():
+                        p.requires_grad = False
+                        p.grad = None
+                self.frozen = True
+                self.log("All modules frozen!")
+        except KeyError:
+            vo = self.verbose
+            self.verbose = True
+            self.log("Got a bad state_dict - ignoring!")
+            self.verbose = vo
+
+
