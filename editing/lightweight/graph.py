@@ -42,8 +42,11 @@ class LightweightGraph(object):
         return self._nodes_list
 
     @staticmethod
-    def build_nodes_list(parent_module: torch.nn.Module, parent_name: str = '', nodes_list: List[LightweightNode] = []):
-
+    def build_nodes_list(parent_module: torch.nn.Module, parent_name: str = '', nodes_list: List[LightweightNode] = None):
+        # this is a workaround for a bug (?) where nodes_list is treated like a
+        # static variable
+        if nodes_list is None:
+            nodes_list = []
         for name, child in parent_module.named_children():
             if len(list(child.children())) == 0:
                 nodes_list.append(LightweightNode(name=parent_name + name, module=child))
