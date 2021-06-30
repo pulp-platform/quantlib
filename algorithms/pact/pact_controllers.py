@@ -27,7 +27,7 @@ import numpy as np
 from ..controller import Controller
 
 from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear
-from .util import assert_param_valid
+from .util import assert_param_valid, almost_symm_quant
 
 
 
