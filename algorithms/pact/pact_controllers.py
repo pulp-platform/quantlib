@@ -288,7 +288,7 @@ class PACTLinearController(Controller):
                         for b in m.clipping_params.values():
                             b.requires_grad = False
                             b.grad = None
-                        m.frozen = True
+                        m.frozen |= True
                     self.frozen = True
 
                 elif cmd == 'thaw':
@@ -296,7 +296,7 @@ class PACTLinearController(Controller):
                         for k, b in m.clipping_params.items():
                             # if symm_wts is True, the upper bound is not learned but inferred from the lower bound.
                             b.requires_grad = m.learn_clip and not (k=='high' and m.symm_wts)
-                        m.frozen = False
+                        m.frozen &= False
                     self.frozen = False
                 else:
                     assert cmd == 'stop', "Invalid PACTLinearController command at epoch {}: {}".format(epoch, cmd)
