@@ -97,7 +97,7 @@ class PACTUnsignedAct(nn.Module):
         self.nb_std = nb_std
         self.leaky = leaky
         # this is switched on/off by the PACTActController
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         # these are only used to gather statistics
         self.max          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
@@ -146,7 +146,7 @@ class PACTUnsignedAct(nn.Module):
         else:
             eps = self.get_eps()
             # TODO why clip_hi+eps???
-            return PACTQuantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, floor=True, clip_gradient=torch.tensor(True, device=self.clip_hi.device)) # clip_gradient=True keeps NEMO compatibility
+            return PACTQuantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, floor=True, clip_gradient=torch.tensor(True)) # clip_gradient=True keeps NEMO compatibility
 
 
 class PACTAsymmetricAct(nn.Module):
@@ -206,7 +206,7 @@ class PACTAsymmetricAct(nn.Module):
         self.nb_std = nb_std
         self.symm = symm
         # this is switched on/off by the PACTActController
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         # these are only used to gather statistics
         self.max          = torch.nn.Parameter(torch.zeros_like(self.alpha.data), requires_grad=False)
@@ -302,7 +302,7 @@ class PACTConv2d(nn.Conv2d):
         self.init_clip = init_clip
         self.learn_clip = learn_clip
         # this member indicates that quantization is enabled
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
         self.symm_wts = symm_wts
         self.nb_std = nb_std
         clip_lo = torch.tensor(-1.)
@@ -319,8 +319,9 @@ class PACTConv2d(nn.Conv2d):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
-        # this member indicates that the module's clipping bounds should not be touched. it is set by the controller
-        self.frozen = False
+        # this member indicates that the module's clipping bounds should not be
+        # touched. it is set by the controller
+        self.register_buffer('frozen', torch.tensor(False))
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -353,7 +354,7 @@ class PACTConv2d(nn.Conv2d):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True))
         else:
             w = self.weight
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -416,7 +417,7 @@ class PACTConv1d(nn.Conv1d):
         self.symm_wts = symm_wts
         self.nb_std = nb_std
         # this member indicates that quantization is enabled
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         clip_lo = torch.tensor(-1.)
         # clip_lo & clip_hi should have dimension (out_channels, 1, 1) to in the case of per-channel quantization.
@@ -432,8 +433,10 @@ class PACTConv1d(nn.Conv1d):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
-        # this member indicates that the module's clipping bounds should not be touched. it is set by the controller
-        self.frozen = False
+        # this member indicates that the module's clipping bounds should not be
+        # touched. it is set by the controller
+        self.register_buffer('frozen', torch.tensor(False))
+
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -461,7 +464,7 @@ class PACTConv1d(nn.Conv1d):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True))
         else:
             w = self.weight
         return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -523,7 +526,7 @@ class PACTLinear(nn.Linear):
         self.symm_wts = symm_wts
         self.nb_std = nb_std
         # this member indicates that quantization is enabled
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         clip_lo = torch.tensor(-1.)
         clip_lo = self.expand_bounds(clip_lo)
@@ -534,8 +537,9 @@ class PACTLinear(nn.Linear):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
-        # this member indicates that the module's clipping bounds should not be touched. it is set by the controller
-        self.frozen = False
+        # this member indicates that the module's clipping bounds should not be
+        # touched. it is set by the controller
+        self.register_buffer('frozen', torch.tensor(False))
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -563,7 +567,7 @@ class PACTLinear(nn.Linear):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True))
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)

@@ -92,7 +92,6 @@ class PACTActController(Controller):
         self.verbose = verbose
         self.init_clip_lo = init_clip_lo
         self.init_clip_hi = init_clip_hi
-        self.started = False
         self.frozen = False
 
     def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
@@ -121,9 +120,8 @@ class PACTActController(Controller):
                 elif cmd == 'start':
                     for m in self.modules:
                         self.reset_clip_bounds(m, m.init_clip)
-                        m.started = True
+                        m.started |= True
 
-                    self.started = True
                     self.log("Started activation quantization!")
 
                 elif cmd == 'freeze':
@@ -149,7 +147,7 @@ class PACTActController(Controller):
                 else:
                     assert cmd == 'stop', "Invalid PACTActController command at epoch {}: {}".format(epoch, cmd)
                     for m in self.modules:
-                        m.started = False
+                        m.started &= False
                     self.log("Stopped quantization!")
 
     def reset_clip_bounds(self, m : Union[PACTUnsignedAct, PACTAsymmetricAct], method : str = None):
@@ -198,18 +196,11 @@ class PACTActController(Controller):
             print("[PACTActController]   ", msg)
 
     def state_dict(self):
-        return {'verbose':self.verbose, 'started':self.started, 'frozen':self.frozen}
+        return {'verbose':self.verbose, 'frozen':self.frozen}
 
     def load_state_dict(self, state_dict : dict):
         try:
             self.verbose = state_dict['verbose']
-            if state_dict['started']:
-                for m in self.modules:
-                    m.started = True
-
-                self.started = True
-                self.log("Quantization is enabled!")
-
             if state_dict['frozen']:
                 for m in self.modules:
                     for p in m.clipping_params.values():
@@ -240,7 +231,6 @@ class PACTLinearController(Controller):
         self.verbose = verbose
         self.init_clip_lo = init_clip_lo
         self.init_clip_hi = init_clip_hi
-        self.started = False
         self.frozen = False
         self.update_every = update_every
 
@@ -289,9 +279,8 @@ class PACTLinearController(Controller):
                 elif cmd == 'start':
                     for m in self.modules:
                         self.reset_clip_bounds(m)
-                        m.started = True
+                        m.started |= True
 
-                    self.started = True
                     self.log("Started quantization!")
 
                 elif cmd == 'freeze':
@@ -312,8 +301,7 @@ class PACTLinearController(Controller):
                 else:
                     assert cmd == 'stop', "Invalid PACTLinearController command at epoch {}: {}".format(epoch, cmd)
                     for m in self.modules:
-                        m.started = False
-                    self.started = False
+                        m.started &= False
                     self.log("Stopped quantization!")
 
         elif self.update_every == 'epoch':
@@ -378,17 +366,11 @@ class PACTLinearController(Controller):
             print("[PACTLinearController]   ", msg)
 
     def state_dict(self):
-        return {'verbose': self.verbose, 'started':self.started, 'frozen':self.frozen}
+        return {'verbose': self.verbose, 'frozen':self.frozen}
 
     def load_state_dict(self, state_dict : dict):
         try:
             self.verbose = state_dict['verbose']
-            if state_dict['started']:
-                for m in self.modules:
-                    m.started = True
-
-                self.started = True
-                self.log("Quantization is enabled!")
 
             if state_dict['frozen']:
                 for m in self.modules:
