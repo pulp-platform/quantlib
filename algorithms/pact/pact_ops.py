@@ -105,6 +105,9 @@ class PACTUnsignedAct(nn.Module):
         self.running_mean = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
 
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('clip_lo', torch.zeros(1))
+
     def get_eps(self, *args):
         return self.clip_hi/(self.n_levels-1)
 
@@ -146,7 +149,7 @@ class PACTUnsignedAct(nn.Module):
         else:
             eps = self.get_eps()
             # TODO why clip_hi+eps???
-            return PACTQuantize(x, eps, torch.zeros(1, device=self.clip_hi.device), self.clip_hi, floor=True, clip_gradient=torch.tensor(True)) # clip_gradient=True keeps NEMO compatibility
+            return PACTQuantize(x, eps, self.clip_lo, self.clip_hi, floor=True, clip_gradient=self.clip_gradient) # clip_gradient=True keeps NEMO compatibility
 
 
 class PACTAsymmetricAct(nn.Module):
@@ -209,10 +212,12 @@ class PACTAsymmetricAct(nn.Module):
         self.register_buffer('started', torch.tensor(False))
 
         # these are only used to gather statistics
-        self.max          = torch.nn.Parameter(torch.zeros_like(self.alpha.data), requires_grad=False)
-        self.min          = torch.nn.Parameter(torch.zeros_like(self.alpha.data), requires_grad=False)
-        self.running_mean = torch.nn.Parameter(torch.zeros_like(self.alpha.data), requires_grad=False)
-        self.running_var  = torch.nn.Parameter(torch.ones_like(self.alpha.data),  requires_grad=False)
+        self.max          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
+        self.min          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
+        self.running_mean = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
+        self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
+
+        self.register_buffer('clip_gradient', torch.tensor(True))
 
     def get_eps(self, *args):
         return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
@@ -258,7 +263,7 @@ class PACTAsymmetricAct(nn.Module):
             else:
                 clip_upper = self.clip_hi
             #TODO: why was this clip_hi+eps??
-            return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=torch.tensor(True, device=self.clip_lo.device))
+            return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=self.clip_gradient)
 
 
 class PACTConv2d(nn.Conv2d):
@@ -310,6 +315,7 @@ class PACTConv2d(nn.Conv2d):
         # The PACTController will take care of managing them according to the configuration (per-channel, per-layer)
         clip_lo = self.expand_bounds(clip_lo)
         self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip)
+        self.register_buffer('clip_gradient', torch.tensor(True))
         clip_hi = torch.tensor(1.)
         clip_hi = self.expand_bounds(clip_hi)
         # in the case when learn_clip and symm_wts are both True, clip_hi is not actually used;
@@ -354,7 +360,7 @@ class PACTConv2d(nn.Conv2d):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
         else:
             w = self.weight
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -436,7 +442,9 @@ class PACTConv1d(nn.Conv1d):
         # this member indicates that the module's clipping bounds should not be
         # touched. it is set by the controller
         self.register_buffer('frozen', torch.tensor(False))
-
+        # needed to cleanly call PACTQuantize in all scenarios (CUDA,
+        # DataParallel, ...)
+        self.register_buffer('clip_gradient', torch.tensor(True))
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -464,7 +472,7 @@ class PACTConv1d(nn.Conv1d):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
         else:
             w = self.weight
         return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -541,6 +549,8 @@ class PACTLinear(nn.Linear):
         # touched. it is set by the controller
         self.register_buffer('frozen', torch.tensor(False))
 
+        self.register_buffer('clip_gradient', torch.tensor(True))
+
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
@@ -567,7 +577,7 @@ class PACTLinear(nn.Linear):
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=torch.tensor(True))
+            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)
