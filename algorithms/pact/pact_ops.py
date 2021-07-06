@@ -35,8 +35,8 @@ __all__ = [
     'PACTConv1d',
     'PACTLinear',
     'PACTQuantize',
+    'PACTIntegerAdd'
 ]
-
 
 class PACTUnsignedAct(nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.
@@ -266,7 +266,26 @@ class PACTAsymmetricAct(nn.Module):
             #TODO: why was this clip_hi+eps??
             return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=self.clip_gradient)
 
+class PACTIntegerAdd(PACTAsymmetricAct):
 
+    def __init__(
+            self,
+            n_levels=256,
+            init_clip='max',
+            learn_clip=True,
+            act_kind='relu',
+            leaky=0,
+            nb_std=3
+    ):
+
+        super().__init__(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, nb_std=nb_std)
+
+    def forward(self, *x):
+        total = 0
+        for i in x:
+            total += super().forward(i)
+        return total
+    
 class PACTConv2d(nn.Conv2d):
     def __init__(
             self,
