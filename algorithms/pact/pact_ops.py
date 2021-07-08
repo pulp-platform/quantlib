@@ -98,7 +98,7 @@ class PACTUnsignedAct(nn.Module):
         self.nb_std = nb_std
         self.leaky = leaky
         # this is switched on/off by the PACTActController
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         # these are only used to gather statistics
         self.max          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
@@ -109,7 +109,6 @@ class PACTUnsignedAct(nn.Module):
         self.register_buffer('clip_gradient', torch.tensor(True))
         self.register_buffer('clip_lo', torch.zeros(1))
 
-        
     def get_eps(self, *args):
         return self.clip_hi/(self.n_levels-1)
 
@@ -211,14 +210,13 @@ class PACTAsymmetricAct(nn.Module):
         self.nb_std = nb_std
         self.symm = symm
         # this is switched on/off by the PACTActController
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         # these are only used to gather statistics
         self.max          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.min          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_mean = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
-
         self.register_buffer('clip_gradient', torch.tensor(True))
         
     def get_eps(self, *args):
@@ -357,7 +355,7 @@ class PACTConv2d(nn.Conv2d):
         self.init_clip = init_clip
         self.learn_clip = learn_clip
         # this member indicates that quantization is enabled
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
         self.symm_wts = symm_wts
         self.nb_std = nb_std
         clip_lo = torch.tensor(-1.)
@@ -375,8 +373,9 @@ class PACTConv2d(nn.Conv2d):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
-        # this member indicates that the module's clipping bounds should not be touched. it is set by the controller
-        self.frozen = False
+        # this member indicates that the module's clipping bounds should not be
+        # touched. it is set by the controller
+        self.register_buffer('frozen', torch.tensor(False))
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -403,21 +402,32 @@ class PACTConv2d(nn.Conv2d):
         r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
         return r
 
+    @property
+    def weight_q(self):
+        if self.learn_clip and self.symm_wts:
+            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+        else:
+            clip_upper = self.clip_hi
+
+        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+
+    @property
+    def weight_int(self):
+        return self.weight_q / self.get_eps_w()
+
+
     def forward(self, x):
         if self.started:
-            if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-            else:
-                clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            w = self.weight_q
         else:
             w = self.weight
+
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
     @classmethod
     def from_conv2d(cls, c : nn.Conv2d, **kwargs):
         # kwargs should be arguments to PACTConv2d
-        return cls(in_channels=c.in_channels,
+        pact_conv = cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
                    kernel_size=c.kernel_size,
                    stride=c.stride,
@@ -427,6 +437,12 @@ class PACTConv2d(nn.Conv2d):
                    bias=(c.bias is not None),
                    padding_mode=c.padding_mode,
                    **kwargs)
+        # initialize parameters from the nn.Conv2d
+        pact_conv.weight.data.copy_(c.weight.data)
+        if c.bias is not None:
+            pact_conv.bias.data.copy_(c.bias.data)
+
+        return pact_conv
 
 
 class PACTConv1d(nn.Conv1d):
@@ -472,7 +488,7 @@ class PACTConv1d(nn.Conv1d):
         self.symm_wts = symm_wts
         self.nb_std = nb_std
         # this member indicates that quantization is enabled
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         clip_lo = torch.tensor(-1.)
         # clip_lo & clip_hi should have dimension (out_channels, 1, 1) to in the case of per-channel quantization.
@@ -488,8 +504,12 @@ class PACTConv1d(nn.Conv1d):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
-        # this member indicates that the module's clipping bounds should not be touched. it is set by the controller
-        self.frozen = False
+        # this member indicates that the module's clipping bounds should not be
+        # touched. it is set by the controller
+        self.register_buffer('frozen', torch.tensor(False))
+        # needed to cleanly call PACTQuantize in all scenarios (CUDA,
+        # DataParallel, ...)
+        self.register_buffer('clip_gradient', torch.tensor(True))
 
         self.register_buffer('clip_gradient', torch.tensor(True))
         
@@ -513,13 +533,22 @@ class PACTConv1d(nn.Conv1d):
         """
         return self.get_eps_w()*eps_in
 
+    @property
+    def weight_q(self):
+        if self.learn_clip and self.symm_wts:
+            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+        else:
+            clip_upper = self.clip_hi
+
+        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+
+    @property
+    def weight_int(self):
+        return self.weight_q / self.get_eps_w()
+
     def forward(self, x):
         if self.started:
-            if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-            else:
-                clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            w = self.weight_q
         else:
             w = self.weight
         return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -533,7 +562,7 @@ class PACTConv1d(nn.Conv1d):
     @classmethod
     def from_conv1d(cls, c : nn.Conv1d, **kwargs):
         # kwargs should be arguments to PACTConv1d
-        return cls(in_channels=c.in_channels,
+        pact_conv = cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
                    kernel_size=c.kernel_size,
                    stride=c.stride,
@@ -543,6 +572,12 @@ class PACTConv1d(nn.Conv1d):
                    bias=(c.bias is not None),
                    padding_mode=c.padding_mode,
                    **kwargs)
+        # initialize parameters from the nn.Conv1d
+        pact_conv.weight.data.copy_(c.weight.data)
+        if c.bias is not None:
+            pact_conv.bias.data.copy_(c.bias.data)
+
+        return pact_conv
 
 
 class PACTLinear(nn.Linear):
@@ -581,7 +616,7 @@ class PACTLinear(nn.Linear):
         self.symm_wts = symm_wts
         self.nb_std = nb_std
         # this member indicates that quantization is enabled
-        self.started = False
+        self.register_buffer('started', torch.tensor(False))
 
         clip_lo = torch.tensor(-1.)
         clip_lo = self.expand_bounds(clip_lo)
@@ -592,8 +627,11 @@ class PACTLinear(nn.Linear):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
-        # this member indicates that the module's clipping bounds should not be touched. it is set by the controller
-        self.frozen = False
+        # this member indicates that the module's clipping bounds should not be
+        # touched. it is set by the controller
+        self.register_buffer('frozen', torch.tensor(False))
+
+        self.register_buffer('clip_gradient', torch.tensor(True))
 
         self.register_buffer('clip_gradient', torch.tensor(True))
 
@@ -617,13 +655,22 @@ class PACTLinear(nn.Linear):
         """
         return self.get_eps_w()*eps_in
 
+    @property
+    def weight_q(self):
+        if self.learn_clip and self.symm_wts:
+            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+        else:
+            clip_upper = self.clip_hi
+
+        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+
+    @property
+    def weight_int(self):
+        return self.weight_q / self.get_eps_w()
+
     def forward(self, x):
         if self.started:
-            if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-            else:
-                clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            w = self.weight_q
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)
@@ -636,8 +683,13 @@ class PACTLinear(nn.Linear):
 
     @classmethod
     def from_linear(cls, l : nn.Linear, **kwargs):
-        return cls(in_features=l.in_features,
-                   out_features=l.out_features,
-                   bias=(l.bias is not None),
-                   **kwargs)
+        pact_linear = cls(in_features=l.in_features,
+                          out_features=l.out_features,
+                          bias=(l.bias is not None),
+                          **kwargs)
+        # initialize parameters from nn.Linear instance
+        pact_linear.weight.data.copy_(l.weight.data)
+        if l.bias is not None:
+            pact_linear.bias.data.copy_(l.bias.data)
+        return pact_linear
 
