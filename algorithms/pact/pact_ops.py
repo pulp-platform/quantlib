@@ -35,7 +35,8 @@ __all__ = [
     'PACTConv1d',
     'PACTLinear',
     'PACTQuantize',
-    'PACTIntegerAdd'
+    'PACTIntegerAdd',
+    'PACTIntegerConcat'
 ]
 
 class PACTUnsignedAct(nn.Module):
@@ -56,7 +57,7 @@ class PACTUnsignedAct(nn.Module):
 
     def __init__(
             self,
-            n_levels=256,
+            n_levels = 256,
             init_clip='max',
             learn_clip=True,
             act_kind='relu',
@@ -141,10 +142,10 @@ class PACTUnsignedAct(nn.Module):
             with torch.no_grad():
                 cur_max = torch.max(x)
                 cur_min = torch.min(x)
-                self.max.data[:] = torch.maximum(self.max.data, cur_max)
-                self.min.data[:] = torch.minimum(self.min.data, cur_min)
-                self.running_mean.data[:] = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
-                self.running_var.data[:] = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
+                self.max.data = torch.maximum(self.max.data, cur_max)
+                self.min.data = torch.minimum(self.min.data, cur_min)
+                self.running_mean.data = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
+                self.running_var.data = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
             return x
         # in normal mode, PACTUnsignedAct uses the PACTQuantFunc
         else:
@@ -266,6 +267,35 @@ class PACTAsymmetricAct(nn.Module):
             #TODO: why was this clip_hi+eps??
             return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=self.clip_gradient)
 
+class PACTIntegerConcat(PACTAsymmetricAct):
+
+    def __init__(
+            self,
+            n_levels: int = 256,
+            dim: int = 0,
+            stack_flag: bool = False,
+            init_clip='max',
+            learn_clip=True,
+            act_kind='relu',
+            leaky=0,
+            nb_std=3
+    ):
+
+        super().__init__(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, nb_std=nb_std)
+        self.dim = dim
+        self.stack_flag = False
+        
+    def forward(self, *x):
+        if self.stack_flag:
+            z = list(map(lambda x: torch.unsqueeze(x, self.dim), x))
+        else:
+            z = list(x)
+
+        for idx, i in enumerate(z):
+            z[idx] = super().forward(i)        
+        y = torch.cat(z, dim=self.dim)
+        return y
+        
 class PACTIntegerAdd(PACTAsymmetricAct):
 
     def __init__(
@@ -280,7 +310,7 @@ class PACTIntegerAdd(PACTAsymmetricAct):
 
         super().__init__(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, nb_std=nb_std)
 
-    def forward(self, *x):
+    def forward(self, *x: torch.Tensor):
         total = 0
         for i in x:
             total += super().forward(i)
