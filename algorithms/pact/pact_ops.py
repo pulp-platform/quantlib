@@ -354,21 +354,32 @@ class PACTConv2d(nn.Conv2d):
         r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
         return r
 
+    @property
+    def weight_q(self):
+        if self.learn_clip and self.symm_wts:
+            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+        else:
+            clip_upper = self.clip_hi
+
+        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+
+    @property
+    def weight_int(self):
+        return self.weight_q / self.get_eps_w()
+
+
     def forward(self, x):
         if self.started:
-            if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-            else:
-                clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            w = self.weight_q
         else:
             w = self.weight
+
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
     @classmethod
     def from_conv2d(cls, c : nn.Conv2d, **kwargs):
         # kwargs should be arguments to PACTConv2d
-        return cls(in_channels=c.in_channels,
+        pact_conv = cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
                    kernel_size=c.kernel_size,
                    stride=c.stride,
@@ -378,6 +389,12 @@ class PACTConv2d(nn.Conv2d):
                    bias=(c.bias is not None),
                    padding_mode=c.padding_mode,
                    **kwargs)
+        # initialize parameters from the nn.Conv2d
+        pact_conv.weight.data.copy_(c.weight.data)
+        if c.bias is not None:
+            pact_conv.bias.data.copy_(c.bias.data)
+
+        return pact_conv
 
 
 class PACTConv1d(nn.Conv1d):
@@ -466,13 +483,22 @@ class PACTConv1d(nn.Conv1d):
         """
         return self.get_eps_w()*eps_in
 
+    @property
+    def weight_q(self):
+        if self.learn_clip and self.symm_wts:
+            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+        else:
+            clip_upper = self.clip_hi
+
+        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+
+    @property
+    def weight_int(self):
+        return self.weight_q / self.get_eps_w()
+
     def forward(self, x):
         if self.started:
-            if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-            else:
-                clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            w = self.weight_q
         else:
             w = self.weight
         return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -486,7 +512,7 @@ class PACTConv1d(nn.Conv1d):
     @classmethod
     def from_conv1d(cls, c : nn.Conv1d, **kwargs):
         # kwargs should be arguments to PACTConv1d
-        return cls(in_channels=c.in_channels,
+        pact_conv = cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
                    kernel_size=c.kernel_size,
                    stride=c.stride,
@@ -496,6 +522,12 @@ class PACTConv1d(nn.Conv1d):
                    bias=(c.bias is not None),
                    padding_mode=c.padding_mode,
                    **kwargs)
+        # initialize parameters from the nn.Conv1d
+        pact_conv.weight.data.copy_(c.weight.data)
+        if c.bias is not None:
+            pact_conv.bias.data.copy_(c.bias.data)
+
+        return pact_conv
 
 
 class PACTLinear(nn.Linear):
@@ -571,13 +603,22 @@ class PACTLinear(nn.Linear):
         """
         return self.get_eps_w()*eps_in
 
+    @property
+    def weight_q(self):
+        if self.learn_clip and self.symm_wts:
+            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+        else:
+            clip_upper = self.clip_hi
+
+        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+
+    @property
+    def weight_int(self):
+        return self.weight_q / self.get_eps_w()
+
     def forward(self, x):
         if self.started:
-            if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-            else:
-                clip_upper = self.clip_hi
-            w = PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            w = self.weight_q
         else:
             w = self.weight
         return nn.functional.linear(x, w, self.bias)
@@ -590,8 +631,13 @@ class PACTLinear(nn.Linear):
 
     @classmethod
     def from_linear(cls, l : nn.Linear, **kwargs):
-        return cls(in_features=l.in_features,
-                   out_features=l.out_features,
-                   bias=(l.bias is not None),
-                   **kwargs)
+        pact_linear = cls(in_features=l.in_features,
+                          out_features=l.out_features,
+                          bias=(l.bias is not None),
+                          **kwargs)
+        # initialize parameters from nn.Linear instance
+        pact_linear.weight.data.copy_(l.weight.data)
+        if l.bias is not None:
+            pact_linear.bias.data.copy_(l.bias.data)
+        return pact_linear
 

@@ -263,6 +263,8 @@ class PACTLinearController(Controller):
                         m.clip_hi.data = max_val
 
     def step_pre_training_epoch(self, epoch : int, *args, **kwargs):
+        # keep track of whether we already performed update_clip_params
+        do_update = True
         if epoch in self.schedule.keys():
             cur_cmds = self.schedule[epoch]
             if not isinstance(cur_cmds, list):
@@ -282,14 +284,19 @@ class PACTLinearController(Controller):
                         m.started |= True
 
                     self.log("Started quantization!")
+                    do_update = False
 
                 elif cmd == 'freeze':
+                    #NOTE: this does not work as intended when using stateful
+                    #optimizers such as Adam. The parameters will not stay
+                    #frozen because the optimizer still applies momentum...
                     for m in self.modules:
                         for b in m.clipping_params.values():
                             b.requires_grad = False
                             b.grad = None
                         m.frozen |= True
                     self.frozen = True
+                    do_update = False
 
                 elif cmd == 'thaw':
                     for m in self.modules:
@@ -298,13 +305,15 @@ class PACTLinearController(Controller):
                             b.requires_grad = m.learn_clip and not (k=='high' and m.symm_wts)
                         m.frozen &= False
                     self.frozen = False
+
                 else:
                     assert cmd == 'stop', "Invalid PACTLinearController command at epoch {}: {}".format(epoch, cmd)
                     for m in self.modules:
                         m.started &= False
                     self.log("Stopped quantization!")
+                    do_update = False
 
-        elif self.update_every == 'epoch':
+        if self.update_every == 'epoch' and do_update:
             self.update_clip_params()
 
 
