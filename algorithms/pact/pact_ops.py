@@ -655,6 +655,18 @@ class PACTLinear(nn.Linear):
         """
         return self.get_eps_w()*eps_in
 
+    # do not use in training!
+    def get_bias_q(self, eps_in):
+        # we assume that bias gets quantized to a really high bitwidth so don't
+        # clip it
+        with torch.no_grad():
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+        return b
+
+    # do not use in training!
+    def get_bias_int(self, eps_in):
+        return self.get_bias_q(eps_in)*self.get_eps_out(eps_in)
+
     @property
     def weight_q(self):
         if self.learn_clip and self.symm_wts:
