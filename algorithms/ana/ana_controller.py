@@ -60,43 +60,43 @@ _AC_MAPPER = {'lws': lws, 'uws': uws}
 
 class ANATimer(object):
 
-    def __init__(self, fmi_spec: dict, fsigma_spec: dict, bmi_spec: dict, bsigma_spec: dict):
+    def __init__(self, fnoise_mi_spec: dict, fnoise_sigma_spec: dict, bnoise_mi_spec: dict, bnoise_sigma_spec: dict):
 
-        self._fmi = None
-        assert ANATimer.check_spec(fmi_spec, is_sigma=False)
-        self._fmi_base = fmi_spec['base']
-        self._fmi_fun  = partial(_AC_MAPPER[fmi_spec['fun']], **fmi_spec['kwargs'])
+        self._fnoise_mi = None
+        assert ANATimer.check_spec(fnoise_mi_spec, is_sigma=False)
+        self._fnoise_mi_base = fnoise_mi_spec['base']
+        self._fnoise_mi_fun  = partial(_AC_MAPPER[fnoise_mi_spec['fun']], **fnoise_mi_spec['kwargs'])
 
-        self._fsigma = None
-        assert ANATimer.check_spec(fsigma_spec, is_sigma=True)
-        self._fsigma_base = fsigma_spec['base']
-        self._fsigma_fun  = partial(_AC_MAPPER[fsigma_spec['fun']], **fsigma_spec['kwargs'])
+        self._fnoise_sigma = None
+        assert ANATimer.check_spec(fnoise_sigma_spec, is_sigma=True)
+        self._fnoise_sigma_base = fnoise_sigma_spec['base']
+        self._fnoise_sigma_fun  = partial(_AC_MAPPER[fnoise_sigma_spec['fun']], **fnoise_sigma_spec['kwargs'])
 
-        self._bmi = None
-        assert ANATimer.check_spec(bmi_spec, is_sigma=False)
-        self._bmi_base = bmi_spec['base']
-        self._bmi_fun  = partial(_AC_MAPPER[bmi_spec['fun']], **bmi_spec['kwargs'])
+        self._bnoise_mi = None
+        assert ANATimer.check_spec(bnoise_mi_spec, is_sigma=False)
+        self._bnoise_mi_base = bnoise_mi_spec['base']
+        self._bnoise_mi_fun  = partial(_AC_MAPPER[bnoise_mi_spec['fun']], **bnoise_mi_spec['kwargs'])
 
-        self._bsigma = None
-        assert ANATimer.check_spec(bsigma_spec, is_sigma=True)
-        self._bsigma_base = bsigma_spec['base']
-        self._bsigma_fun  = partial(_AC_MAPPER[bsigma_spec['fun']], **bsigma_spec['kwargs'])
-
-    @property
-    def fmi(self) -> Union[None, float]:
-        return self._fmi
+        self._bnoise_sigma = None
+        assert ANATimer.check_spec(bnoise_sigma_spec, is_sigma=True)
+        self._bnoise_sigma_base = bnoise_sigma_spec['base']
+        self._bnoise_sigma_fun  = partial(_AC_MAPPER[bnoise_sigma_spec['fun']], **bnoise_sigma_spec['kwargs'])
 
     @property
-    def fsigma(self) -> Union[None, float]:
-        return self._fsigma
+    def fnoise_mi(self) -> Union[None, float]:
+        return self._fnoise_mi
 
     @property
-    def bmi(self) -> Union[None, float]:
-        return self._bmi
+    def fnoise_sigma(self) -> Union[None, float]:
+        return self._fnoise_sigma
 
     @property
-    def bsigma(self) -> Union[None, float]:
-        return self._bsigma
+    def bnoise_mi(self) -> Union[None, float]:
+        return self._bnoise_mi
+
+    @property
+    def bnoise_sigma(self) -> Union[None, float]:
+        return self._bnoise_sigma
 
     @staticmethod
     def check_spec(spec: dict, is_sigma: bool) -> bool:
@@ -126,11 +126,11 @@ class ANATimer(object):
 
     def step(self, t: int) -> None:
 
-        self._fmi    = self._fmi_base    * self._fmi_fun(t)
-        self._fsigma = self._fsigma_base * self._fsigma_fun(t)
+        self._fnoise_mi    = self._fnoise_mi_base    * self._fnoise_mi_fun(t)
+        self._fnoise_sigma = self._fnoise_sigma_base * self._fnoise_sigma_fun(t)
 
-        self._bmi    = self._bmi_base    * self._bmi_fun(t)
-        self._bsigma = self._bsigma_base * self._bsigma_fun(t)
+        self._bnoise_mi    = self._bnoise_mi_base    * self._bnoise_mi_fun(t)
+        self._bnoise_sigma = self._bnoise_sigma_base * self._bnoise_sigma_fun(t)
 
 
 Timer2Modules = typing.NamedTuple('Timer2Modules', [('timer', ANATimer), ('modules', List[torch.nn.Module])])
@@ -160,19 +160,22 @@ class ANAController(Controller):
 
     def __init__(self, module: torch.nn.Module, ctrl_spec: List) -> None:
 
-        is_nndataparallel_module = isinstance(module, nn.DataParallel)
-
         self._global_step   = -1
         self._timer2modules = []
 
         self._n2m = self.get_modules(module)
-        self._n2m = {('module.' if is_nndataparallel_module else '') + k: v for k, v in self._n2m.items()}
+
+        if isinstance(module, nn.DataParallel):
+            # the network is wrapped inside an nn.DataParallel module:
+            # this requires to resolve an additional naming layer
+            for timer_spec in ctrl_spec:
+                timer_spec['modules'] = ['.'.join(['module', m]) for m in timer_spec['modules']]
 
         # verify that each ANA module is linked to exactly one timer (i.e., check that ANA targets form a partition of the collection of ANA modules)
         all_ana_module_names = set(self._n2m.keys())
         ana_timer_targets    = []
         for timer_spec in ctrl_spec:
-            ana_timer_target = set([('module.' if is_nndataparallel_module else '') + m for m in timer_spec['modules']])
+            ana_timer_target = set(timer_spec['modules'])
             assert ana_timer_target.issubset(all_ana_module_names)  # non-ANA module specified as ANA target
             ana_timer_targets.append(ana_timer_target)
         assert len(all_ana_module_names) == sum([len(ana_timer_target) for ana_timer_target in ana_timer_targets])
@@ -181,7 +184,7 @@ class ANAController(Controller):
         # build timers and link them to the specified ANA modules
         for timer_spec in ctrl_spec:
             timer        = ANATimer(timer_spec['fnoise']['mi'], timer_spec['fnoise']['sigma'], timer_spec['bnoise']['mi'], timer_spec['bnoise']['sigma'])
-            modules      = list(map(lambda n: self._n2m[n], set([('module.' if is_nndataparallel_module else '') + m for m in timer_spec['modules']])))
+            modules      = list(map(lambda n: self._n2m[n], set(timer_spec['modules'])))
             self._timer2modules.append(Timer2Modules(timer=timer, modules=modules))
 
     @staticmethod
@@ -213,11 +216,11 @@ class ANAController(Controller):
 
             for m in modules:
                 # update forward noise
-                m.set_fnoise(timer.fmi, timer.fsigma)
+                m.set_fnoise(timer.fnoise_mi, timer.fnoise_sigma)
                 # update backward noise
-                m.set_bnoise(timer.bmi, timer.bsigma)
+                m.set_bnoise(timer.bnoise_mi, timer.bnoise_sigma)
 
-    def step_pre_validation(self, *args, **kwargs) -> None:
+    def step_pre_validation_epoch(self, *args, **kwargs) -> None:
 
         for timer, modules in self._timer2modules:
 

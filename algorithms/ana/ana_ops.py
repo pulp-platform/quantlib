@@ -25,7 +25,6 @@ import torch.nn.functional as F
 from torch.nn.modules.utils import _single, _pair, _triple
 
 import math
-from collections import namedtuple
 
 from . import ana_lib
 
@@ -37,9 +36,6 @@ __all__ = [
     'ANAConv2d',
     'ANAConv3d',
 ]
-
-
-Noise = namedtuple('Noise', ['mi', 'sigma'])
 
 
 class ANAModule(nn.Module):
@@ -81,22 +77,20 @@ class ANAModule(nn.Module):
         anamod.ana_op = getattr(ana_lib, 'ANA' + noise_type.capitalize()).apply
 
         # initialise forward noise parameters
-        anamod.register_parameter('fmi', nn.Parameter(torch.zeros(1), requires_grad=False))
-        anamod.register_parameter('fsigma', nn.Parameter(torch.ones(1), requires_grad=False))
-        anamod.fnoise = Noise(mi=anamod.fmi, sigma=anamod.fsigma)
+        anamod.register_parameter('fnoise_mi',    nn.Parameter(torch.zeros(1), requires_grad=False))
+        anamod.register_parameter('fnoise_sigma', nn.Parameter(torch.ones(1),  requires_grad=False))
 
         # initialise backward noise parameters
-        anamod.register_parameter('bmi', nn.Parameter(torch.zeros(1), requires_grad=False))
-        anamod.register_parameter('bsigma', nn.Parameter(torch.ones(1), requires_grad=False))
-        anamod.bnoise = Noise(mi=anamod.bmi, sigma=anamod.bsigma)
+        anamod.register_parameter('bnoise_mi',    nn.Parameter(torch.zeros(1), requires_grad=False))
+        anamod.register_parameter('bnoise_sigma', nn.Parameter(torch.ones(1),  requires_grad=False))
 
     def set_fnoise(self, mi, sigma):
-        self.fnoise.mi.data    = torch.Tensor([mi]).to(self.fnoise.mi)
-        self.fnoise.sigma.data = torch.Tensor([sigma]).to(self.fnoise.sigma)
+        self.fnoise_mi.data    = torch.Tensor([mi]).to(device=self.fnoise_mi.device)
+        self.fnoise_sigma.data = torch.Tensor([sigma]).to(device=self.fnoise_sigma.device)
 
     def set_bnoise(self, mi, sigma):
-        self.bnoise.mi.data    = torch.Tensor([mi]).to(self.bnoise.mi)
-        self.bnoise.sigma.data = torch.Tensor([sigma]).to(self.bnoise.sigma)
+        self.bnoise_mi.data    = torch.Tensor([mi]).to(device=self.bnoise_mi.device)
+        self.bnoise_sigma.data = torch.Tensor([sigma]).to(device=self.bnoise_sigma.device)
 
 
 class ANAActivation(ANAModule):
@@ -110,8 +104,8 @@ class ANAActivation(ANAModule):
 
         x_out = self.ana_op(x,
                             self.quant_levels, self.thresholds,
-                            self.fnoise.mi, self.fnoise.sigma,
-                            self.bnoise.mi, self.bnoise.sigma,
+                            self.fnoise_mi, self.fnoise_sigma,
+                            self.bnoise_mi, self.bnoise_sigma,
                             self.training)
 
         x_out = x_out * self.eps
@@ -155,8 +149,8 @@ class ANALinear(ANAModule):
         weight = self.weight / self.eps
         weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
-                             self.fnoise.mi, self.fnoise.sigma,
-                             self.bnoise.mi, self.bnoise.sigma,
+                             self.fnoise_mi, self.fnoise_sigma,
+                             self.bnoise_mi, self.bnoise_sigma,
                              self.training)
         return weight
 
@@ -219,8 +213,8 @@ class _ANAConvNd(ANAModule):
         weight = self.weight / self.eps
         weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
-                             self.fnoise.mi, self.fnoise.sigma,
-                             self.bnoise.mi, self.bnoise.sigma,
+                             self.fnoise_mi, self.fnoise_sigma,
+                             self.bnoise_mi, self.bnoise_sigma,
                              self.training)
         return weight
 
