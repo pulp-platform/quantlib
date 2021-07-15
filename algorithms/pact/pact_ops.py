@@ -4,7 +4,8 @@
 # Author(s):
 # Francesco Conti <f.conti@unibo.it>
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
-# 
+# Moritz Scherer <scheremo@iis.ee.ethz.ch>
+#
 # Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +27,7 @@ from torch import nn
 
 from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
 from .util import assert_param_valid
+import math
 
 
 __all__ = [
@@ -36,7 +38,8 @@ __all__ = [
     'PACTLinear',
     'PACTQuantize',
     'PACTIntegerAdd',
-    'PACTIntegerConcat'
+    'PACTIntegerConcat',
+    'PACTIntegerMatmul'
 ]
 
 class PACTUnsignedAct(nn.Module):
@@ -265,23 +268,51 @@ class PACTAsymmetricAct(nn.Module):
             #TODO: why was this clip_hi+eps??
             return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=self.clip_gradient)
 
-class PACTIntegerConcat(PACTAsymmetricAct):
+class PACTIntegerConcat(torch.nn.Module):
 
     def __init__(
             self,
             n_levels: int = 256,
+            num_args = 1,
             dim: int = 0,
             stack_flag: bool = False,
             init_clip='max',
             learn_clip=True,
+            symm=False,
             act_kind='relu',
             leaky=0,
             nb_std=3
     ):
 
-        super().__init__(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, nb_std=nb_std)
+        super().__init__()
         self.dim = dim
         self.stack_flag = False
+        
+        self.acts = torch.nn.ModuleList([])
+        for i in range(num_args):
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
+            
+        self.clip_lo = self.acts[0].clip_lo
+        self.clip_hi = self.acts[0].clip_hi
+        self.n_levels = self.acts[0].n_levels
+            
+    def reassign_epsilons(self):
+        max_clip = -math.inf
+        min_clip = math.inf
+        
+        for i in self.acts:
+            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
+                max_clip = i.clip_hi.data
+                min_clip = i.clip_lo.data
+
+        for i in self.acts:
+            i.clip_hi.data = max_clip
+            i.clip_lo.data = min_clip
+            
+        self.clip_hi.data = max_clip
+        self.clip_lo.data = min_clip
+
+        self.act_out.eps_in = self.acts[0].get_eps()
         
     def forward(self, *x):
         if self.stack_flag:
@@ -290,29 +321,105 @@ class PACTIntegerConcat(PACTAsymmetricAct):
             z = list(x)
 
         for idx, i in enumerate(z):
-            z[idx] = super().forward(i)        
+            z[idx] = self.acts[idx](i)
         y = torch.cat(z, dim=self.dim)
         return y
         
-class PACTIntegerAdd(PACTAsymmetricAct):
+class PACTIntegerAdd(torch.nn.Module):
 
+    def __init__(
+            self,
+            n_levels=256,
+            num_args = 1,
+            init_clip='max',
+            learn_clip=True,
+            act_kind='relu',
+            symm=False,
+            leaky=0,
+            nb_std=3
+    ):
+
+        super().__init__()
+        self.acts = torch.nn.ModuleList([])
+        for i in range(num_args):
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
+            
+        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
+        self.act_out.register_buffer("eps_in", torch.Tensor())
+        
+        self.clip_lo = self.acts[0].clip_lo
+        self.clip_hi = self.acts[0].clip_hi
+        self.n_levels = self.acts[0].n_levels
+
+    def reassign_epsilons(self):
+        max_clip = -math.inf
+        min_clip = math.inf
+        
+        for i in self.acts:
+            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
+                max_clip = i.clip_hi.data
+                min_clip = i.clip_lo.data
+
+        for i in self.acts:
+            i.clip_hi.data = max_clip
+            i.clip_lo.data = min_clip
+            
+        self.clip_hi.data = max_clip
+        self.clip_lo.data = min_clip
+        self.act_out.eps_in = self.acts[0].get_eps()
+        
+    def forward(self, *x: torch.Tensor):
+        total = 0
+        for idx, i in enumerate(x):
+            total += self.acts[idx](i)
+        return self.act_out(total)
+
+class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
             self,
             n_levels=256,
             init_clip='max',
             learn_clip=True,
             act_kind='relu',
+            symm=False,
             leaky=0,
             nb_std=3
     ):
 
-        super().__init__(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, nb_std=nb_std)
+        super().__init__()
+        self.acts = torch.nn.ModuleList([])
+        for i in range(2):
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
+            
+        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
+        self.act_out.register_buffer("eps_in", torch.Tensor())
+        
+        self.clip_lo = self.acts[0].clip_lo
+        self.clip_hi = self.acts[0].clip_hi
+        self.n_levels = self.acts[0].n_levels
 
-    def forward(self, *x: torch.Tensor):
-        total = 0
-        for i in x:
-            total += super().forward(i)
-        return total
+    def reassign_epsilons(self):
+        max_clip = -math.inf
+        min_clip = math.inf
+        
+        for i in self.acts:
+            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
+                max_clip = i.clip_hi.data
+                min_clip = i.clip_lo.data
+
+        for i in self.acts:
+            i.clip_hi.data = max_clip
+            i.clip_lo.data = min_clip
+            
+        self.clip_hi.data = max_clip
+        self.clip_lo.data = min_clip
+
+        self.act_out.eps_in = self.acts[0].get_eps()
+        
+    def forward(self, x: torch.Tensor, y: torch.Tensor):
+        mulresult = torch.matmul(x,y)
+        return self.act_out(mulresult)
+
     
 class PACTConv2d(nn.Conv2d):
     def __init__(
