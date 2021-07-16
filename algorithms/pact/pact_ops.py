@@ -613,7 +613,7 @@ class PACTLinear(nn.Linear):
 
     # do not use in training!
     def get_bias_int(self, eps_in):
-        return self.get_bias_q(eps_in)*self.get_eps_out(eps_in)
+        return self.get_bias_q(eps_in)/self.get_eps_out(eps_in)
 
     @property
     def weight_q(self):

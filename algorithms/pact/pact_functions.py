@@ -81,7 +81,7 @@ class PACTQuantFunc(torch.autograd.Function):
         # eps.
         # to ensure hardware compatibility, it is the downstream user's
         # responsibility to ensure that clip_lo/clip_hi are multiples of eps!
-        input_unrounded_int = (input.clamp(clip_lo, clip_hi) - clip_lo )/ eps
+        input_unrounded_int = (input.clamp(clip_lo, clip_hi + 1e-7) - clip_lo)/ eps
         # for weights, we want to use rounding - for activations, we will round
         # in hardware so represent this here too
         input_rounded_int = input_unrounded_int.floor() if floor else input_unrounded_int.round()
