@@ -43,11 +43,8 @@ class LightweightGraph(object):
 
     @staticmethod
     def build_nodes_list(parent_module: torch.nn.Module, parent_name: str = '', nodes_list: List[LightweightNode] = None):
-        # this is a workaround for a bug (?) where nodes_list is treated like a
-        # static variable: if nodes_list defaults to [] or list(), calling
-        # build_nodes_list multiple times with no nodes_list argument gives the
-        # same ID for nodes_list, resulting in the net being duplicated in the
-        # list
+        # if nodes_list's default value is `[]`, the empty list is initialized
+        # only once. See https://stackoverflow.com/questions/32326777/python-default-arguments-evaluation
         nodes_list = nodes_list if nodes_list is not None else []
 
         for name, child in parent_module.named_children():
