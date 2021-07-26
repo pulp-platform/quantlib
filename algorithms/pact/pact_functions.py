@@ -65,7 +65,7 @@ class PACTQuantFunc(torch.autograd.Function):
     :param clip_gradient: if True, zero-out gradients outside of the clipping range.
     :type  clip_gradient: bool
 
-    :return: The quantized weights tensor.
+    :return: The quantized tensor.
     :rtype:  `torch.Tensor`
 
     """
