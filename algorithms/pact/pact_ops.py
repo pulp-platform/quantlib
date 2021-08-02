@@ -365,7 +365,7 @@ class PACTConv2d(nn.Conv2d):
 
     @property
     def weight_int(self):
-        return self.weight_q / self.get_eps_w()
+        return (self.weight_q / self.get_eps_w()).round()
 
 
     def forward(self, x):
@@ -494,7 +494,7 @@ class PACTConv1d(nn.Conv1d):
 
     @property
     def weight_int(self):
-        return self.weight_q / self.get_eps_w()
+        return (self.weight_q / self.get_eps_w()).round()
 
     def forward(self, x):
         if self.started:
@@ -613,7 +613,7 @@ class PACTLinear(nn.Linear):
 
     # do not use in training!
     def get_bias_int(self, eps_in):
-        return self.get_bias_q(eps_in)/self.get_eps_out(eps_in)
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
 
     @property
     def weight_q(self):
@@ -626,7 +626,7 @@ class PACTLinear(nn.Linear):
 
     @property
     def weight_int(self):
-        return self.weight_q / self.get_eps_w()
+        return (self.weight_q / self.get_eps_w()).round()
 
     def forward(self, x):
         if self.started:
