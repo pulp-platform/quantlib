@@ -174,6 +174,9 @@ class ReplaceMatchWithModulePass(FxPass):
         return gm
 
 class ReplaceSequentialPatternPass(SequentialPass):
+    # finds all instances of pattern in the graph, calls the replacement_fn on
+    # the matches and replaces the matched nodes with the module returned by
+    # replacement_fn.
     def __init__(self, pattern : callable, trace : callable, replacement_fn : callable, name : '', **kwargs):
         super(ReplaceSequentialPatternPass, self).__init__(name_prefix=name)
         self.matcher = SequentialMatcher(pattern, trace)
