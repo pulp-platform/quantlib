@@ -39,6 +39,7 @@
 template <typename scalar_t>
 __global__ void uniform_forward_cuda_kernel(
     scalar_t * const __restrict__ x_out,
+    scalar_t * const __restrict__ temp,
     const scalar_t * __restrict__ x_in,
     const int64_t len_x,
     const scalar_t * __restrict__ q,
@@ -152,6 +153,9 @@ torch::Tensor uniform_forward_cuda_dispatch(
 )
 {
     auto x_out = torch::zeros_like(x_in);
+
+    auto temp = torch::zeros({x_in.numel(), t.numel() + 2}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device())
+
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
     AT_DISPATCH_FLOATING_TYPES(
@@ -160,6 +164,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
         ([&] {
             uniform_forward_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                 x_out.data_ptr<scalar_t>(),
+                temp.data_ptr<scalar_t>(),
                 x_in.data_ptr<scalar_t>(),
                 x_in.numel(),
                 q.data_ptr<scalar_t>(),
