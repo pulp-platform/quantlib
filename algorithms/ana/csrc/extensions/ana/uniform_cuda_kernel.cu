@@ -62,7 +62,7 @@ __global__ void uniform_forward_cuda_kernel(
         // compute shifted thresholds
         for (int it = (0 + 1); it < (len_t + 1); ++it)
         {
-            temp[row_offset + it] = x_in[ix] - *mu - t[it];
+            temp[row_offset + it] = x_in[ix] - *mu - t[it - 1];
         }
 
         // compute CDF
@@ -70,11 +70,11 @@ __global__ void uniform_forward_cuda_kernel(
         {
             if (it == 0)
             {
-                temp[row_offset + it] = 0.0f;
+                temp[row_offset + it] = 1.0f;
             }
             else if (it == (PLUS2(len_t) - 1))
             {
-                temp[row_offset + it] = 1.0f;
+                temp[row_offset + it] = 0.0f;
             }
             else
             {
@@ -179,7 +179,7 @@ __global__ void uniform_backward_cuda_kernel(
             if (*sigma != 0.0f)
             {
                 scalar_t sigma_inv = 1.0f / (*sigma);
-                scalar_t local_derivative = (scalar_t) (ABS(x_minus_t) <= (*bsigma));
+                scalar_t local_derivative = (scalar_t) (ABS(x_minus_t) <= (*sigma));
                 pdf = 0.5f * sigma_inv * local_derivative;
             }
             else
@@ -245,9 +245,6 @@ torch::Tensor uniform_forward_cuda_dispatch(
             );
         })
     );
-
-    delete seeds;
-    delete temp;
 
     return x_out;
 }
