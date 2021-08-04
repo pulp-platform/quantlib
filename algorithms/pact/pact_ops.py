@@ -26,7 +26,7 @@ import torch
 from torch import nn
 
 from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
-from .util import assert_param_valid
+from .util import assert_param_valid, almost_symm_quant
 import math
 
 
@@ -262,7 +262,7 @@ class PACTAsymmetricAct(nn.Module):
         else:
             eps = self.get_eps()
             if self.learn_clip and self.symm:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+                    clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
             #TODO: why was this clip_hi+eps??
@@ -305,13 +305,21 @@ class PACTIntegerConcat(torch.nn.Module):
                 max_clip = i.clip_hi.data
                 min_clip = i.clip_lo.data
 
+        # SCHEREMO: This is the part that I might have to think about a bit more...
         for i in self.acts:
-            i.clip_hi.data = max_clip
-            i.clip_lo.data = min_clip
-            
-        self.clip_hi.data = max_clip
-        self.clip_lo.data = min_clip
-
+            if abs(i.min) < abs(i.max)/2:
+                i.symm = False
+                i.clip_hi.data = torch.Tensor((max_clip - min_clip,))
+                i.clip_lo.data = torch.Tensor((0.,))
+            else:
+                i.symm = True
+                if (abs(min_clip) > max_clip):
+                    # Almost symmetrically quantized:
+                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(abs(min_clip), i.n_levels)
+                else:
+                    # Unsigned quantization
+                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(max_clip/2, i.n_levels)
+                    
         self.act_out.eps_in = self.acts[0].get_eps()
         
     def forward(self, *x):
@@ -344,8 +352,8 @@ class PACTIntegerAdd(torch.nn.Module):
         for i in range(num_args):
             self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
             
-        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
-        self.act_out.register_buffer("eps_in", torch.Tensor())
+#         self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
+#         self.act_out.register_buffer("eps_in", torch.Tensor())
         
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
@@ -359,20 +367,39 @@ class PACTIntegerAdd(torch.nn.Module):
             if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
                 max_clip = i.clip_hi.data
                 min_clip = i.clip_lo.data
+                diff = max_clip - min_clip
 
+        # SCHEREMO: This is the part that I might have to think about a bit more...
         for i in self.acts:
-            i.clip_hi.data = max_clip
-            i.clip_lo.data = min_clip
-            
-        self.clip_hi.data = max_clip
-        self.clip_lo.data = min_clip
-        self.act_out.eps_in = self.acts[0].get_eps()
-        
+            # Closer to unsigned than to signed -- Is this reasonable?
+            #if abs(i.clip_lo) < abs(i.clip_hi)/2:
+            # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
+            if abs(i.clip_lo) < 5*i.get_eps():
+                i.symm = False
+                i.clip_hi.data.copy_(torch.Tensor((max_clip - min_clip,)))
+                i.clip_lo.data.copy_(torch.Tensor((0.,)))
+            # Closer to signed than unsigned
+            else:
+                i.symm = True
+                if (abs(min_clip) > max_clip):
+                    # Almost symmetrically quantized:
+                    lower_bound, upper_bound  = almost_symm_quant(abs(min_clip), i.n_levels)
+                else:
+                    # Unsigned quantization
+                    lower_bound, upper_bound  = almost_symm_quant(max_clip/2, i.n_levels)
+                i.clip_lo.data.copy_(lower_bound)
+                i.clip_hi.data.copy_(upper_bound)
+
+
     def forward(self, *x: torch.Tensor):
-        total = 0
-        for idx, i in enumerate(x):
+#         total = 0
+#         for idx, i in enumerate(x):
+#             total += self.acts[idx](i)
+#         return self.act_out(total)
+        total = self.acts[0](x[0])
+        for idx, i in enumerate(x[1:]):
             total += self.acts[idx](i)
-        return self.act_out(total)
+        return total
 
 class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
@@ -387,38 +414,23 @@ class PACTIntegerMatmul(torch.nn.Module):
     ):
 
         super().__init__()
-        self.acts = torch.nn.ModuleList([])
-        for i in range(2):
-            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
-            
-        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
-        self.act_out.register_buffer("eps_in", torch.Tensor())
+#        self.acts = torch.nn.ModuleList([])
+#         for i in range(2):
+#             self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
         
-        self.clip_lo = self.acts[0].clip_lo
-        self.clip_hi = self.acts[0].clip_hi
-        self.n_levels = self.acts[0].n_levels
-
+#         self.clip_lo = self.acts[0].clip_lo
+#         self.clip_hi = self.acts[0].clip_hi
+#         self.n_levels = self.acts[0].n_levels
+        
     def reassign_epsilons(self):
-        max_clip = -math.inf
-        min_clip = math.inf
-        
-        for i in self.acts:
-            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
-                max_clip = i.clip_hi.data
-                min_clip = i.clip_lo.data
-
-        for i in self.acts:
-            i.clip_hi.data = max_clip
-            i.clip_lo.data = min_clip
-            
-        self.clip_hi.data = max_clip
-        self.clip_lo.data = min_clip
-
-        self.act_out.eps_in = self.acts[0].get_eps()
+        pass
+#         self.eps_out = self.acts[0].get_eps()*self.acts[1].get_eps()
         
     def forward(self, x: torch.Tensor, y: torch.Tensor):
+#         x = self.acts[0](x)
+#         y = self.acts[1](y)
         mulresult = torch.matmul(x,y)
-        return self.act_out(mulresult)
+        return mulresult
 
     
 class PACTConv2d(nn.Conv2d):
