@@ -58,14 +58,12 @@ __global__ void uniform_forward_cuda_kernel(
     {
         // precompute row offset
         int row_offset = ix * PLUS2(len_t);
-        printf("Step 1\n");
 
         // compute shifted thresholds
         for (int it = (0 + 1); it < (len_t + 1); ++it)
         {
             temp[row_offset + it] = t[it] - (x_in[ix] - *fmu);
         }
-        printf("Step 2\n");
 
         // compute CDF
         for (int it = 0; it < PLUS2(len_t); ++it)
@@ -91,19 +89,17 @@ __global__ void uniform_forward_cuda_kernel(
                 }
             }
         }
-        printf("Step 3\n");
 
         // compute probability mass in each bin
         for (int it = 0; it < len_t + 1; ++it)
         {
             temp[row_offset + it] = temp[row_offset + it + 1] - temp[row_offset + it];
         }
-        printf("Step 4\n");
 
         // compute outputs
         if (*strategy == 0)  // expectation
         {
-            scalar_t sum = 0.0;
+            scalar_t sum = 0.0f;
 
             for (int it = 0; it < len_t + 1; ++it)
             {
@@ -130,7 +126,7 @@ __global__ void uniform_forward_cuda_kernel(
         }
         else if (*strategy == 2)  // stochastic sampling
         {
-            scalar_t cum_prob = 0.0;
+            scalar_t cum_prob = 0.0f;
             scalar_t u = seeds[ix];
             bool found = false;
             int idx = -1;
@@ -147,7 +143,6 @@ __global__ void uniform_forward_cuda_kernel(
 
             x_out[ix] = q[idx];
         }
-        printf("Step 5\n");
     }
     else  // I am out of bounds!
     {
