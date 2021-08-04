@@ -64,7 +64,7 @@ __global__ void uniform_forward_cuda_kernel_pmf(
         }
 
         // compute CDF
-        for (int it = 0; it < PLUS1(len_t); ++it)
+        for (int it = 0; it < PLUS_1(len_t); ++it)
         {
             if (it == 0)
             {
@@ -75,7 +75,7 @@ __global__ void uniform_forward_cuda_kernel_pmf(
                 if (*training && (*sigma != 0.0f))
                 {
                     scalar_t sigma_inv = 1.0 / (*sigma);
-                    pmf[row_offset + it] = CLAMP_0_1(0.5f * (temp[row_offset + it] * sigma_inv + 1.0f));
+                    pmf[row_offset + it] = CLAMP_0_1(0.5f * (pmf[row_offset + it] * sigma_inv + 1.0f));
                 }
                 else
                 {
@@ -150,7 +150,7 @@ __global__ void uniform_forward_cuda_kernel_mode(
         scalar_t max = pmf[row_offset + argmax];
         for (int iq = 1; iq < PLUS_1(len_t); ++iq)
         {
-            if (max < temp[row_offset + iq])
+            if (max <= pmf[row_offset + iq])
             {
                 argmax = iq;
                 max = pmf[row_offset + argmax];
@@ -192,12 +192,12 @@ __global__ void uniform_forward_cuda_kernel_random(
         scalar_t u = us[ix];
         scalar_t cum_prob = 0.0f;
         int idx = -1;
-        for (int iq = 0; iq < PLUS_1(iq); ++iq)
+        for (int iq = 0; iq < PLUS_1(len_t); ++iq)
         {
             cum_prob += pmf[row_offset + iq];
             if ((idx < 0) && (u < cum_prob))  // I work under the assumption that the cumulative probability is monotone
             {
-                idx = it;  // setting this integer to positive acts as a flag signaling that the sampled bin has been found
+                idx = iq;  // setting this integer to positive acts as a flag signaling that the sampled bin has been found
             }
         }
 
@@ -278,7 +278,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
 )
 {
     auto x_out = torch::zeros_like(x_in);
-    auto pmf = torch::zeros({x_in.numel(), PLUS2(t.numel())}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
+    auto pmf = torch::zeros({x_in.numel(), PLUS_1(t.numel())}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
 
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
@@ -300,7 +300,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
         })
     );
 
-    switch(strategy.item())
+    switch(strategy.item<int32_t>())
     {
         case 0:  // expectation
             AT_DISPATCH_FLOATING_TYPES(
@@ -316,6 +316,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
                     );
                 })
             );
+            break;
 
         case 1:  // argmax sampling (i.e., mode)
             AT_DISPATCH_FLOATING_TYPES(
@@ -331,6 +332,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
                     );
                 })
             );
+            break;
 
         case 2:  // random sampling
             auto us = torch::rand_like(x_in);
@@ -348,10 +350,9 @@ torch::Tensor uniform_forward_cuda_dispatch(
                     );
                 })
             );
+            break;
 
     }
-
-
 
     return x_out;
 }
