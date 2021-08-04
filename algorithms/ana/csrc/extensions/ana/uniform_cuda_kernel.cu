@@ -22,7 +22,7 @@
 #include <torch/extension.h>
 #include <vector>
 
-// #include <stdio.h>  // for debug
+// #include <stdio.h>  // for debugging
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -47,8 +47,8 @@ __global__ void uniform_forward_cuda_kernel(
     const scalar_t * __restrict__ q,
     const scalar_t * __restrict__ t,
     const int64_t len_t,
-    const scalar_t * __restrict__ fmu,
-    const scalar_t * __restrict__ fsigma,
+    const scalar_t * __restrict__ mu,
+    const scalar_t * __restrict__ sigma,
     const int32_t * __restrict__ strategy,
     const scalar_t * __restrict__ training
 )
@@ -62,7 +62,7 @@ __global__ void uniform_forward_cuda_kernel(
         // compute shifted thresholds
         for (int it = (0 + 1); it < (len_t + 1); ++it)
         {
-            temp[row_offset + it] = t[it] - (x_in[ix] - *fmu);
+            temp[row_offset + it] = x_in[ix] - *mu - t[it];
         }
 
         // compute CDF
@@ -78,9 +78,9 @@ __global__ void uniform_forward_cuda_kernel(
             }
             else
             {
-                if (*training && (*fsigma != 0.0f))
+                if (*training && (*sigma != 0.0f))
                 {
-                    scalar_t sigma_inv = 1.0 / (*fsigma);
+                    scalar_t sigma_inv = 1.0 / (*sigma);
                     temp[row_offset + it] = CLAMP_0_1(0.5f * (temp[row_offset + it] * sigma_inv + 1.0f));
                 }
                 else
@@ -90,10 +90,10 @@ __global__ void uniform_forward_cuda_kernel(
             }
         }
 
-        // compute probability mass in each bin
+        // compute the probability mass in each bin
         for (int it = 0; it < len_t + 1; ++it)
         {
-            temp[row_offset + it] = temp[row_offset + it + 1] - temp[row_offset + it];
+            temp[row_offset + it] = temp[row_offset + it] - temp[row_offset + it + 1];
         }
 
         // compute outputs
@@ -160,8 +160,8 @@ __global__ void uniform_backward_cuda_kernel(
     const scalar_t * __restrict__ q,
     const scalar_t * __restrict__ t,
     const int64_t len_t,
-    const scalar_t * __restrict__ bmu,
-    const scalar_t * __restrict__ bsigma
+    const scalar_t * __restrict__ mu,
+    const scalar_t * __restrict__ sigma
 )
 {
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
@@ -172,13 +172,13 @@ __global__ void uniform_backward_cuda_kernel(
         for (int it = 0; it < len_t; ++it)
         {
             // input position relative to the threshold
-            scalar_t x_minus_t = x_in[ix] - t[it] - *bmu;
+            scalar_t x_minus_t = x_in[ix] - t[it] - *mu;
 
             // the derivative of the expected (i.e., regularised) step function is the PDF of the uniform distribution
             scalar_t pdf;
-            if (*bsigma != 0.0f)
+            if (*sigma != 0.0f)
             {
-                scalar_t sigma_inv = 1.0f / (*bsigma);
+                scalar_t sigma_inv = 1.0f / (*sigma);
                 scalar_t local_derivative = (scalar_t) (ABS(x_minus_t) <= (*bsigma));
                 pdf = 0.5f * sigma_inv * local_derivative;
             }
@@ -212,15 +212,15 @@ torch::Tensor uniform_forward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mu,
+    torch::Tensor sigma,
     torch::Tensor strategy,
     torch::Tensor training
 )
 {
     auto x_out = torch::zeros_like(x_in);
 
-    auto temp = torch::zeros({x_in.numel(), t.numel() + 2}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
+    auto temp = torch::zeros({x_in.numel(), PLUS2(t.numel())}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
     auto seeds = torch::rand_like(x_in);
 
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
@@ -238,13 +238,16 @@ torch::Tensor uniform_forward_cuda_dispatch(
                 q.data_ptr<scalar_t>(),
                 t.data_ptr<scalar_t>(),
                 t.numel(),
-                fmu.data_ptr<scalar_t>(),
-                fsigma.data_ptr<scalar_t>(),
+                mu.data_ptr<scalar_t>(),
+                sigma.data_ptr<scalar_t>(),
                 strategy.data_ptr<int32_t>(),
                 training.data_ptr<scalar_t>()
             );
         })
     );
+
+    delete seeds;
+    delete temp;
 
     return x_out;
 }
@@ -255,8 +258,8 @@ torch::Tensor uniform_backward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mu,
+    torch::Tensor sigma
 )
 {
     auto grad_out = torch::zeros_like(x_in);
@@ -275,8 +278,8 @@ torch::Tensor uniform_backward_cuda_dispatch(
                 q.data_ptr<scalar_t>(),
                 t.data_ptr<scalar_t>(),
                 t.numel(),
-                bmu.data_ptr<scalar_t>(),
-                bsigma.data_ptr<scalar_t>()
+                mu.data_ptr<scalar_t>(),
+                sigma.data_ptr<scalar_t>()
             );
         })
     );

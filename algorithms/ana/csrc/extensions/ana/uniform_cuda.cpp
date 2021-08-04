@@ -22,7 +22,7 @@
 #include <torch/extension.h>
 #include <vector>
 
-// #include <stdio.h>  // for debug
+// #include <stdio.h>  // for debugging
 
 
 // declarations of C++\CUDA interface (executed on: CPU)
@@ -31,8 +31,8 @@ torch::Tensor uniform_forward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mu,
+    torch::Tensor sigma,
     torch::Tensor strategy,
     torch::Tensor training
 );
@@ -42,8 +42,8 @@ torch::Tensor uniform_backward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mu,
+    torch::Tensor sigma
 );
 
 
@@ -60,8 +60,8 @@ torch::Tensor uniform_forward_cuda(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mu,
+    torch::Tensor sigma,
     torch::Tensor strategy,
     torch::Tensor training
 )
@@ -69,12 +69,12 @@ torch::Tensor uniform_forward_cuda(
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(fmu);
-    CHECK_INPUT(fsigma);
-    // CHECK_INPUT(strategy);
+    CHECK_INPUT(mu);
+    CHECK_INPUT(sigma);
+    CHECK_INPUT(strategy);
     CHECK_INPUT(training);
 
-    return uniform_forward_cuda_dispatch(x_in, q, t, fmu, fsigma, strategy, training);
+    return uniform_forward_cuda_dispatch(x_in, q, t, mu, sigma, strategy, training);
 }
 
 
@@ -83,18 +83,18 @@ torch::Tensor uniform_backward_cuda(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mu,
+    torch::Tensor sigma
 )
 {
     CHECK_INPUT(grad_in);
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(bmu);
-    CHECK_INPUT(bsigma);
+    CHECK_INPUT(mu);
+    CHECK_INPUT(sigma);
 
-    return uniform_backward_cuda_dispatch(grad_in, x_in, q, t, bmu, bsigma);
+    return uniform_backward_cuda_dispatch(grad_in, x_in, q, t, mu, sigma);
 }
 
 
