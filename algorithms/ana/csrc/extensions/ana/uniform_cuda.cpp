@@ -33,6 +33,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
     torch::Tensor t,
     torch::Tensor fmu,
     torch::Tensor fsigma,
+    torch::Tensor strategy,
     torch::Tensor training
 );
 

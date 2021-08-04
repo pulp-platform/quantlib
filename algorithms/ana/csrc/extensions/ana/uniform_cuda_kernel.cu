@@ -49,6 +49,7 @@ __global__ void uniform_forward_cuda_kernel(
     const int64_t len_t,
     const scalar_t * __restrict__ fmu,
     const scalar_t * __restrict__ fsigma,
+    const int32_t strategy,
     const scalar_t * __restrict__ training
 )
 {
