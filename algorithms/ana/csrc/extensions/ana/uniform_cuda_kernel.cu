@@ -30,119 +30,178 @@
 
 #define THREADS_PER_BLOCK 1024
 
-#define PLUS2(x) (x + 2)
+#define PLUS_1(x) (x + 1)
 #define ABS(x) ((x < 0.0f) ? -x : x)
 #define CLAMP_0_1(x) ((x > 1.0f) ? 1.0f : ((x < 0.0f) ?  0.0f : x))
 
 
 // definitions of CUDA kernels (executed on: GPU)
 
+
 template <typename scalar_t>
-__global__ void uniform_forward_cuda_kernel(
-    scalar_t * const __restrict__ x_out,
-    scalar_t * const __restrict__ seeds,
-    scalar_t * const __restrict__ temp,
-    const scalar_t * __restrict__ x_in,
+__global__ void uniform_forward_cuda_kernel_pmf(
+    scalar_t * const __restrict__ pmf,
+    scalar_t * const __restrict__ x_in,
     const int64_t len_x,
-    const scalar_t * __restrict__ q,
-    const scalar_t * __restrict__ t,
+    const scalar_t * __restrict__ t,      // thresholds
     const int64_t len_t,
-    const scalar_t * __restrict__ mu,
-    const scalar_t * __restrict__ sigma,
-    const int32_t * __restrict__ strategy,
+    const scalar_t * __restrict__ mu,     // mean
+    const scalar_t * __restrict__ sigma,  // standard deviation
     const scalar_t * __restrict__ training
 )
 {
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
+
     if (ix < len_x)
     {
-        // precompute row offset
-        int row_offset = ix * PLUS2(len_t);
+        // pre-compute row offset from the beginning of the `pmf` array
+        int row_offset = ix * PLUS_1(len_t);
 
         // compute shifted thresholds
-        for (int it = (0 + 1); it < (len_t + 1); ++it)
+        for (int it = 0; it < PLUS_1(len_t); ++it)
         {
-            temp[row_offset + it] = x_in[ix] - *mu - t[it - 1];
+            pmf[row_offset + it + 1] = x_in[ix] - *mu - t[it];
         }
 
         // compute CDF
-        for (int it = 0; it < PLUS2(len_t); ++it)
+        for (int it = 0; it < PLUS1(len_t); ++it)
         {
             if (it == 0)
             {
-                temp[row_offset + it] = 1.0f;
-            }
-            else if (it == (PLUS2(len_t) - 1))
-            {
-                temp[row_offset + it] = 0.0f;
+                pmf[row_offset + it] = 1.0f;
             }
             else
             {
                 if (*training && (*sigma != 0.0f))
                 {
                     scalar_t sigma_inv = 1.0 / (*sigma);
-                    temp[row_offset + it] = CLAMP_0_1(0.5f * (temp[row_offset + it] * sigma_inv + 1.0f));
+                    pmf[row_offset + it] = CLAMP_0_1(0.5f * (temp[row_offset + it] * sigma_inv + 1.0f));
                 }
                 else
                 {
-                    temp[row_offset + it] = (scalar_t) (temp[row_offset + it] >= 0.0f);
+                    pmf[row_offset + it] = (scalar_t) (pmf[row_offset + it] >= 0.0f);
                 }
             }
         }
 
         // compute the probability mass in each bin
-        for (int it = 0; it < len_t + 1; ++it)
+        for (int iq = 0; iq < PLUS_1(len_t) - 1; ++iq)
         {
-            temp[row_offset + it] = temp[row_offset + it] - temp[row_offset + it + 1];
+            pmf[row_offset + iq] = pmf[row_offset + iq] - pmf[row_offset + iq + 1];
+        }
+        // the last bin (with index `row_offset + len_t`) would have mass `pmf[row_offset + len_t] - 0.0f`, so it's not necessary to compute it!
+    }
+    else  // I am out of bounds!
+    {
+        return;
+    }
+}
+
+
+template <typename scalar_t>
+__global__ void uniform_forward_cuda_kernel_expectation(
+    scalar_t * const __restrict__ x_out,
+    scalar_t * const __restrict__ pmf,
+    const int64_t len_x,
+    const scalar_t * __restrict__ q,
+    const int64_t len_t
+)
+{
+    int ix = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (ix < len_x)
+    {
+        // pre-compute row offset from the beginning of the `pmf` array
+        int row_offset = ix * PLUS_1(len_t);
+
+        scalar_t sum = 0.0f;
+        for (int iq = 0; iq < PLUS_1(len_t); ++iq)
+        {
+            sum += q[iq] * pmf[row_offset + iq];
         }
 
-        // compute outputs
-        if (*strategy == 0)  // expectation
-        {
-            scalar_t sum = 0.0f;
+        x_out[ix] = sum;
+    }
+    else  // I am out of bounds!
+    {
+        return;
+    }
+}
 
-            for (int it = 0; it < len_t + 1; ++it)
+
+template <typename scalar_t>
+__global__ void uniform_forward_cuda_kernel_mode(
+    scalar_t * const __restrict__ x_out,
+    scalar_t * const __restrict__ pmf,
+    const int64_t len_x,
+    const scalar_t * __restrict__ q,
+    const int64_t len_t
+)
+{
+    int ix = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (ix < len_x)
+    {
+        // pre-compute row offset from the beginning of the `pmf` array
+        int row_offset = ix * PLUS_1(len_t);
+
+        // find the bin that contains the greatest probability mass
+        int32_t argmax = 0;
+        scalar_t max = pmf[row_offset + argmax];
+        for (int iq = 1; iq < PLUS_1(len_t); ++iq)
+        {
+            if (max < temp[row_offset + iq])
             {
-                sum += q[it] * temp[row_offset + it];
+                argmax = iq;
+                max = pmf[row_offset + argmax];
             }
-
-            x_out[ix] = sum;
         }
-        else if (*strategy == 1)  // argmax sampling (i.e., mode)
+
+        x_out[ix] = q[argmax];
+    }
+    else  // I am out of bounds!
+    {
+        return;
+    }
+}
+
+
+template <typename scalar_t>
+__global__ void uniform_forward_cuda_kernel_random(
+    scalar_t * const __restrict__ x_out,
+    scalar_t * const __restrict__ us,     // samples from the uniform over [0, 1)
+    scalar_t * const __restrict__ pmf,
+    const int64_t len_x,
+    const scalar_t * __restrict__ q,
+    const int64_t len_t
+)
+{
+    int ix = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (ix < len_x)
+    {
+        // pre-compute row offset from the beginning of the `pmf` array
+        int row_offset = ix * PLUS_1(len_t);
+
+        // Each row in `pmf` sums to 1 due to the normalisation property.
+        // I imagine to have a segment for each bin, the length of the
+        // segment being proportional to the probability mass in the bin. If I
+        // glue the segments in a row, selecting a random number in [0, 1)
+        // will generate a point falling in exactly one of the segments, i.e.,
+        // in one of the bins.
+        scalar_t u = us[ix];
+        scalar_t cum_prob = 0.0f;
+        int idx = -1;
+        for (int iq = 0; iq < PLUS_1(iq); ++iq)
         {
-            int argmax = 0;
-            scalar_t max = temp[row_offset + argmax];
-
-            for (int it = 1; it < (len_t + 1); ++it)
+            cum_prob += pmf[row_offset + iq];
+            if ((idx < 0) && (u < cum_prob))  // I work under the assumption that the cumulative probability is monotone
             {
-                if (max < temp[row_offset + it])
-                {
-                    argmax = it;
-                    max = temp[row_offset + argmax];
-                }
+                idx = it;  // setting this integer to positive acts as a flag signaling that the sampled bin has been found
             }
-
-            x_out[ix] = q[argmax];
         }
-        else if (*strategy == 2)  // stochastic sampling
-        {
-            scalar_t cum_prob = 0.0f;
-            scalar_t u = seeds[ix];
-            bool found = false;
-            int idx = -1;
 
-            for (int it = 0; it < (len_t + 1); ++it)
-            {
-                cum_prob += temp[row_offset + it];
-                if ((!found) && (u < cum_prob))
-                {
-                    idx = it;
-                    found = true;
-                }
-            }
-
-            x_out[ix] = q[idx];
-        }
+        x_out[ix] = q[idx];
     }
     else  // I am out of bounds!
     {
@@ -219,32 +278,80 @@ torch::Tensor uniform_forward_cuda_dispatch(
 )
 {
     auto x_out = torch::zeros_like(x_in);
-
-    auto temp = torch::zeros({x_in.numel(), PLUS2(t.numel())}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
-    auto seeds = torch::rand_like(x_in);
+    auto pmf = torch::zeros({x_in.numel(), PLUS2(t.numel())}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
 
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
+    // compute PMF over bins (i.e., the quantization levels)
     AT_DISPATCH_FLOATING_TYPES(
         x_in.type(),
-        "uniform_forward_cuda",
+        "uniform_forward_cuda_kernel_pmf",
         ([&] {
-            uniform_forward_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
-                x_out.data_ptr<scalar_t>(),
-                seeds.data_ptr<scalar_t>(),
-                temp.data_ptr<scalar_t>(),
+            uniform_forward_cuda_kernel_pmf<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                pmf.data_ptr<scalar_t>(),
                 x_in.data_ptr<scalar_t>(),
                 x_in.numel(),
-                q.data_ptr<scalar_t>(),
                 t.data_ptr<scalar_t>(),
                 t.numel(),
                 mu.data_ptr<scalar_t>(),
                 sigma.data_ptr<scalar_t>(),
-                strategy.data_ptr<int32_t>(),
                 training.data_ptr<scalar_t>()
             );
         })
     );
+
+    switch(strategy.item())
+    {
+        case 0:  // expectation
+            AT_DISPATCH_FLOATING_TYPES(
+                x_in.type(),
+                "uniform_forward_cuda_kernel_expectation",
+                ([&] {
+                    uniform_forward_cuda_kernel_expectation<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                        x_out.data_ptr<scalar_t>(),
+                        pmf.data_ptr<scalar_t>(),
+                        x_in.numel(),
+                        q.data_ptr<scalar_t>(),
+                        t.numel()
+                    );
+                })
+            );
+
+        case 1:  // argmax sampling (i.e., mode)
+            AT_DISPATCH_FLOATING_TYPES(
+                x_in.type(),
+                "uniform_forward_cuda_kernel_mode",
+                ([&] {
+                    uniform_forward_cuda_kernel_mode<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                        x_out.data_ptr<scalar_t>(),
+                        pmf.data_ptr<scalar_t>(),
+                        x_in.numel(),
+                        q.data_ptr<scalar_t>(),
+                        t.numel()
+                    );
+                })
+            );
+
+        case 2:  // random sampling
+            auto us = torch::rand_like(x_in);
+            AT_DISPATCH_FLOATING_TYPES(
+                x_in.type(),
+                "uniform_forward_cuda_kernel_random",
+                ([&] {
+                    uniform_forward_cuda_kernel_random<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                        x_out.data_ptr<scalar_t>(),
+                        us.data_ptr<scalar_t>(),
+                        pmf.data_ptr<scalar_t>(),
+                        x_in.numel(),
+                        q.data_ptr<scalar_t>(),
+                        t.numel()
+                    );
+                })
+            );
+
+    }
+
+
 
     return x_out;
 }
