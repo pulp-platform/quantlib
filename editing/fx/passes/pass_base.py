@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 from torch import fx, nn
 from torch.fx.subgraph_rewriter import Match
@@ -205,7 +205,7 @@ class ModularizeNodePass(FxPass):
     # (module, args, kwargs), where args/kwargs are the args/kwargs with which
     # the module will be called
 
-    def __init__(self, node : Node, new_target : str, replacement_fn : callable):
+    def __init__(self, node : fx.Node, new_target : str, replacement_fn : callable):
         super(ModularizeNodePass, self).__init__()
         self.node = node
         self.new_target = new_target
@@ -254,7 +254,7 @@ class ModularizePass(SequentialPass):
         passes = []
         for node in gm.graph.nodes:
             if node.op == self.op and node.target in self.target:
-                replaced_fn = f"_{node.target.__name__.upper()" if node.op == 'call_function' else ''
+                replaced_fn = f"_{node.target.__name__.upper()}" if node.op == 'call_function' else ''
                 passes.append(ModularizeNodePass(node, f"_QL_{self.name.upper()}_MODULARIZED{replaced_fn}_{i}", replacement_fn))
 
         super(ModularizePass, self).setup_passes(passes)
