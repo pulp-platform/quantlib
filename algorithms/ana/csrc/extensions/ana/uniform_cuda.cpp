@@ -61,6 +61,7 @@ torch::Tensor uniform_forward_cuda(
     torch::Tensor t,
     torch::Tensor fmu,
     torch::Tensor fsigma,
+    torch::Tensor strategy,
     torch::Tensor training
 )
 {
@@ -69,9 +70,10 @@ torch::Tensor uniform_forward_cuda(
     CHECK_INPUT(t);
     CHECK_INPUT(fmu);
     CHECK_INPUT(fsigma);
+    CHECK_INPUT(strategy);
     CHECK_INPUT(training);
 
-    return uniform_forward_cuda_dispatch(x_in, q, t, fmu, fsigma, training);
+    return uniform_forward_cuda_dispatch(x_in, q, t, fmu, fsigma, strategy, training);
 }
 
 

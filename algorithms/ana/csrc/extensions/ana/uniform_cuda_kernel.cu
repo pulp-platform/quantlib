@@ -30,6 +30,7 @@
 
 #define THREADS_PER_BLOCK 1024
 
+#define PLUS2(x) (x + 2)
 #define ABS(x) ((x < 0.0f) ? -x : x)
 #define CLAMP_0_1(x) ((x > 1.0f) ? 1.0f : ((x < 0.0f) ?  0.0f : x))
 
@@ -39,6 +40,7 @@
 template <typename scalar_t>
 __global__ void uniform_forward_cuda_kernel(
     scalar_t * const __restrict__ x_out,
+    scalar_t * const __restrict__ seeds,
     scalar_t * const __restrict__ temp,
     const scalar_t * __restrict__ x_in,
     const int64_t len_x,
@@ -53,31 +55,93 @@ __global__ void uniform_forward_cuda_kernel(
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
     if (ix < len_x)
     {
-        float sum = q[0];
+        // precompute row offset
+        int row_offset = ix * PLUS2(len_t);
 
-        for (int it = 0; it < len_t; ++it)
+        // compute shifted thresholds
+        for (int it = (0 + 1); it < (len_t + 1); ++it)
         {
-            // input position relative to the threshold
-            float x_minus_t  = x_in[ix] - t[it] - *fmu;
+            temp[row_offset + it] = t[it] - (x_in[ix] - *fmu);
+        }
 
-            // expected value of the Heaviside function is the CDF of the uniform distribution
-            float cdf;
-            if (*training && (*fsigma != 0.0f))
+        // compute CDF
+        for (int it = 0; it < PLUS2(len_t); ++it)
+        {
+            if (it == 0)
             {
-                float sigma_inv = 1.0f / (*fsigma);
-                cdf = CLAMP_0_1((0.5f * x_minus_t) * sigma_inv + 0.5f);
+                temp[row_offset + it] = 0.0f;
+            }
+            else if (it == (PLUS2(len_t) - 1)
+            {
+                temp[row_offset + it] = 1.0f;
             }
             else
             {
-                cdf = (float) (x_minus_t >= 0.0f); // use the Heaviside which maps zero to one
+                if (*training && (*fsigma != 0.0f))
+                {
+                    float sigma_inv = 1.0 / (*fsigma);
+                    temp[row_offset + it] = CLAMP_0_1(0.5f * (temp[row_offset + it] * sigma_inv + 1.0f));
+                }
+                else
+                {
+                    temp[row_offset + it] = (float) (temp[row_offset + it] >= 0.0f);
+                }
             }
-
-            // dilate and accumulate expected step value
-            float dq = q[it + 1] - q[it];
-            sum += dq * cdf;
         }
 
-        x_out[ix] = sum;
+        // compute probability mass in each bin
+        for (it = 0; it < len_t + 1; ++it)
+        {
+            temp[row_offset + it] = temp[row_offset + it + 1] - temp[row_offset + it];
+        }
+
+        // compute outputs
+        if (strategy == 0)  // expectation
+        {
+            float sum = 0.0;
+
+            for (it = 0; it < len_t + 1; ++it)
+            {
+                sum += q[it] * temp[row_offset + it];
+            }
+
+            x_out[ix] = sum;
+        }
+        else if (strategy == 1)  // argmax sampling (i.e., mode)
+        {
+            int argmax = 0;
+            float max = temp[row_offset + argmax];
+
+            for (int it = 1; it < (len_t + 1); ++it)
+            {
+                if (max < temp[row_offset + it])
+                {
+                    argmax = it;
+                    max = temp[row_offset + argmax];
+                }
+            }
+
+            x_out[ix] = q[argmax];
+        }
+        else if (strategy == 2)  // stochastic sampling
+        {
+            float cum_prob = 0.0f;
+            float u = seeds[ix];
+            bool found = false;
+            int idx = -1;
+
+            for (int it = 0; it < (len_t + 1); ++it)
+            {
+                cum_prob += temp[row_offset + it];
+                if ((!found) && (u < cum_prob))
+                {
+                    idx = it;
+                    found = true;
+                }
+            }
+
+            x_out[ix] = q[idx];
+        }
     }
     else  // I am out of bounds!
     {
@@ -149,12 +213,14 @@ torch::Tensor uniform_forward_cuda_dispatch(
     torch::Tensor t,
     torch::Tensor fmu,
     torch::Tensor fsigma,
+    torch::Tensor strategy,
     torch::Tensor training
 )
 {
     auto x_out = torch::zeros_like(x_in);
 
-    auto temp = torch::zeros({x_in.numel(), t.numel() + 2}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device())
+    auto temp = torch::zeros({x_in.numel(), t.numel() + 2}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device());
+    auto seeds = torch::rand({x_in.numel()}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device());
 
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
@@ -164,6 +230,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
         ([&] {
             uniform_forward_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                 x_out.data_ptr<scalar_t>(),
+                seeds.data_ptr<scalar_t>(),
                 temp.data_ptr<scalar_t>(),
                 x_in.data_ptr<scalar_t>(),
                 x_in.numel(),
@@ -172,6 +239,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
                 t.numel(),
                 fmu.data_ptr<scalar_t>(),
                 fsigma.data_ptr<scalar_t>(),
+                strategy.data_ptr<scalar_t>(),
                 training.data_ptr<scalar_t>()
             );
         })
