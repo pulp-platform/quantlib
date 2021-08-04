@@ -80,12 +80,12 @@ __global__ void uniform_forward_cuda_kernel(
             {
                 if (*training && (*fsigma != 0.0f))
                 {
-                    float sigma_inv = 1.0 / (*fsigma);
+                    scalar_t sigma_inv = 1.0 / (*fsigma);
                     temp[row_offset + it] = CLAMP_0_1(0.5f * (temp[row_offset + it] * sigma_inv + 1.0f));
                 }
                 else
                 {
-                    temp[row_offset + it] = (float) (temp[row_offset + it] >= 0.0f);
+                    temp[row_offset + it] = (scalar_t) (temp[row_offset + it] >= 0.0f);
                 }
             }
         }
@@ -99,7 +99,7 @@ __global__ void uniform_forward_cuda_kernel(
         // compute outputs
         if (*strategy == 0)  // expectation
         {
-            float sum = 0.0;
+            scalar_t sum = 0.0;
 
             for (int it = 0; it < len_t + 1; ++it)
             {
@@ -111,7 +111,7 @@ __global__ void uniform_forward_cuda_kernel(
         else if (*strategy == 1)  // argmax sampling (i.e., mode)
         {
             int argmax = 0;
-            float max = temp[row_offset + argmax];
+            scalar_t max = temp[row_offset + argmax];
 
             for (int it = 1; it < (len_t + 1); ++it)
             {
@@ -126,8 +126,8 @@ __global__ void uniform_forward_cuda_kernel(
         }
         else if (*strategy == 2)  // stochastic sampling
         {
-            float cum_prob = 0.0f;
-            float u = seeds[ix];
+            scalar_t cum_prob = 0.0f;
+            scalar_t u = seeds[ix];
             bool found = false;
             int idx = -1;
 
@@ -167,19 +167,19 @@ __global__ void uniform_backward_cuda_kernel(
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
     if (ix < len_x)
     {
-        float sum = 0.0f;
+        scalar_t sum = 0.0f;
 
         for (int it = 0; it < len_t; ++it)
         {
             // input position relative to the threshold
-            float x_minus_t = x_in[ix] - t[it] - *bmu;
+            scalar_t x_minus_t = x_in[ix] - t[it] - *bmu;
 
             // the derivative of the expected (i.e., regularised) step function is the PDF of the uniform distribution
-            float pdf;
+            scalar_t pdf;
             if (*bsigma != 0.0f)
             {
-                float sigma_inv = 1.0f / (*bsigma);
-                float local_derivative = (float) (ABS(x_minus_t) <= (*bsigma));
+                scalar_t sigma_inv = 1.0f / (*bsigma);
+                scalar_t local_derivative = (scalar_t) (ABS(x_minus_t) <= (*bsigma));
                 pdf = 0.5f * sigma_inv * local_derivative;
             }
             else
@@ -188,7 +188,7 @@ __global__ void uniform_backward_cuda_kernel(
             }
 
             // dilate and accumulate expected derivative
-            float dq = q[it + 1] - q[it];
+            scalar_t dq = q[it + 1] - q[it];
             sum += dq * pdf;
         }
 
@@ -221,7 +221,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
     auto x_out = torch::zeros_like(x_in);
 
     auto temp = torch::zeros({x_in.numel(), t.numel() + 2}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
-    auto seeds = torch::zeros_like(x_in); //torch::rand_like(x_in);
+    auto seeds = torch::rand_like(x_in);
 
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
