@@ -49,7 +49,7 @@ __global__ void uniform_forward_cuda_kernel(
     const int64_t len_t,
     const scalar_t * __restrict__ fmu,
     const scalar_t * __restrict__ fsigma,
-    const int32_t strategy,
+    const int32_t * __restrict__ strategy,
     const scalar_t * __restrict__ training
 )
 {
@@ -72,7 +72,7 @@ __global__ void uniform_forward_cuda_kernel(
             {
                 temp[row_offset + it] = 0.0f;
             }
-            else if (it == (PLUS2(len_t) - 1)
+            else if (it == (PLUS2(len_t) - 1))
             {
                 temp[row_offset + it] = 1.0f;
             }
@@ -91,24 +91,24 @@ __global__ void uniform_forward_cuda_kernel(
         }
 
         // compute probability mass in each bin
-        for (it = 0; it < len_t + 1; ++it)
+        for (int it = 0; it < len_t + 1; ++it)
         {
             temp[row_offset + it] = temp[row_offset + it + 1] - temp[row_offset + it];
         }
 
         // compute outputs
-        if (strategy == 0)  // expectation
+        if (*strategy == 0)  // expectation
         {
             float sum = 0.0;
 
-            for (it = 0; it < len_t + 1; ++it)
+            for (int it = 0; it < len_t + 1; ++it)
             {
                 sum += q[it] * temp[row_offset + it];
             }
 
             x_out[ix] = sum;
         }
-        else if (strategy == 1)  // argmax sampling (i.e., mode)
+        else if (*strategy == 1)  // argmax sampling (i.e., mode)
         {
             int argmax = 0;
             float max = temp[row_offset + argmax];
@@ -124,7 +124,7 @@ __global__ void uniform_forward_cuda_kernel(
 
             x_out[ix] = q[argmax];
         }
-        else if (strategy == 2)  // stochastic sampling
+        else if (*strategy == 2)  // stochastic sampling
         {
             float cum_prob = 0.0f;
             float u = seeds[ix];
@@ -220,8 +220,8 @@ torch::Tensor uniform_forward_cuda_dispatch(
 {
     auto x_out = torch::zeros_like(x_in);
 
-    auto temp = torch::zeros({x_in.numel(), t.numel() + 2}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device());
-    auto seeds = torch::rand({x_in.numel()}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device());
+    auto temp = torch::zeros({x_in.numel(), t.numel() + 2}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
+    auto seeds = torch::zeros_like(x_in); //torch::rand_like(x_in);
 
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
@@ -240,7 +240,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
                 t.numel(),
                 fmu.data_ptr<scalar_t>(),
                 fsigma.data_ptr<scalar_t>(),
-                strategy.data_ptr<scalar_t>(),
+                strategy.data_ptr<int32_t>(),
                 training.data_ptr<scalar_t>()
             );
         })
