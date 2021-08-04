@@ -4,7 +4,8 @@
 # Author(s):
 # Francesco Conti <f.conti@unibo.it>
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
-# 
+# Moritz Scherer <scheremo@iis.ee.ethz.ch>
+#
 # Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +27,7 @@ from torch import nn
 
 from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
 from .util import assert_param_valid
+import math
 
 
 __all__ = [
@@ -35,8 +37,10 @@ __all__ = [
     'PACTConv1d',
     'PACTLinear',
     'PACTQuantize',
+    'PACTIntegerAdd',
+    'PACTIntegerConcat',
+    'PACTIntegerMatmul'
 ]
-
 
 class PACTUnsignedAct(nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.
@@ -56,7 +60,7 @@ class PACTUnsignedAct(nn.Module):
 
     def __init__(
             self,
-            n_levels=256,
+            n_levels = 256,
             init_clip='max',
             learn_clip=True,
             act_kind='relu',
@@ -140,10 +144,10 @@ class PACTUnsignedAct(nn.Module):
             with torch.no_grad():
                 cur_max = torch.max(x)
                 cur_min = torch.min(x)
-                self.max.data[:] = torch.maximum(self.max.data, cur_max)
-                self.min.data[:] = torch.minimum(self.min.data, cur_min)
-                self.running_mean.data[:] = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
-                self.running_var.data[:] = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
+                self.max.data = torch.maximum(self.max.data, cur_max)
+                self.min.data = torch.minimum(self.min.data, cur_min)
+                self.running_mean.data = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
+                self.running_var.data = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
             return x
         # in normal mode, PACTUnsignedAct uses the PACTQuantFunc
         else:
@@ -216,9 +220,8 @@ class PACTAsymmetricAct(nn.Module):
         self.min          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_mean = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
-
         self.register_buffer('clip_gradient', torch.tensor(True))
-
+        
     def get_eps(self, *args):
         return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
 
@@ -265,7 +268,159 @@ class PACTAsymmetricAct(nn.Module):
             #TODO: why was this clip_hi+eps??
             return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=self.clip_gradient)
 
+class PACTIntegerConcat(torch.nn.Module):
 
+    def __init__(
+            self,
+            n_levels: int = 256,
+            num_args = 1,
+            dim: int = 0,
+            stack_flag: bool = False,
+            init_clip='max',
+            learn_clip=True,
+            symm=False,
+            act_kind='relu',
+            leaky=0,
+            nb_std=3
+    ):
+
+        super().__init__()
+        self.dim = dim
+        self.stack_flag = False
+        
+        self.acts = torch.nn.ModuleList([])
+        for i in range(num_args):
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
+            
+        self.clip_lo = self.acts[0].clip_lo
+        self.clip_hi = self.acts[0].clip_hi
+        self.n_levels = self.acts[0].n_levels
+            
+    def reassign_epsilons(self):
+        max_clip = -math.inf
+        min_clip = math.inf
+        
+        for i in self.acts:
+            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
+                max_clip = i.clip_hi.data
+                min_clip = i.clip_lo.data
+
+        for i in self.acts:
+            i.clip_hi.data = max_clip
+            i.clip_lo.data = min_clip
+            
+        self.clip_hi.data = max_clip
+        self.clip_lo.data = min_clip
+
+        self.act_out.eps_in = self.acts[0].get_eps()
+        
+    def forward(self, *x):
+        if self.stack_flag:
+            z = list(map(lambda x: torch.unsqueeze(x, self.dim), x))
+        else:
+            z = list(x)
+
+        for idx, i in enumerate(z):
+            z[idx] = self.acts[idx](i)
+        y = torch.cat(z, dim=self.dim)
+        return y
+        
+class PACTIntegerAdd(torch.nn.Module):
+
+    def __init__(
+            self,
+            n_levels=256,
+            num_args = 1,
+            init_clip='max',
+            learn_clip=True,
+            act_kind='relu',
+            symm=False,
+            leaky=0,
+            nb_std=3
+    ):
+
+        super().__init__()
+        self.acts = torch.nn.ModuleList([])
+        for i in range(num_args):
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
+            
+        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
+        self.act_out.register_buffer("eps_in", torch.Tensor())
+        
+        self.clip_lo = self.acts[0].clip_lo
+        self.clip_hi = self.acts[0].clip_hi
+        self.n_levels = self.acts[0].n_levels
+
+    def reassign_epsilons(self):
+        max_clip = -math.inf
+        min_clip = math.inf
+        
+        for i in self.acts:
+            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
+                max_clip = i.clip_hi.data
+                min_clip = i.clip_lo.data
+
+        for i in self.acts:
+            i.clip_hi.data = max_clip
+            i.clip_lo.data = min_clip
+            
+        self.clip_hi.data = max_clip
+        self.clip_lo.data = min_clip
+        self.act_out.eps_in = self.acts[0].get_eps()
+        
+    def forward(self, *x: torch.Tensor):
+        total = 0
+        for idx, i in enumerate(x):
+            total += self.acts[idx](i)
+        return self.act_out(total)
+
+class PACTIntegerMatmul(torch.nn.Module):
+    def __init__(
+            self,
+            n_levels=256,
+            init_clip='max',
+            learn_clip=True,
+            act_kind='relu',
+            symm=False,
+            leaky=0,
+            nb_std=3
+    ):
+
+        super().__init__()
+        self.acts = torch.nn.ModuleList([])
+        for i in range(2):
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
+            
+        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
+        self.act_out.register_buffer("eps_in", torch.Tensor())
+        
+        self.clip_lo = self.acts[0].clip_lo
+        self.clip_hi = self.acts[0].clip_hi
+        self.n_levels = self.acts[0].n_levels
+
+    def reassign_epsilons(self):
+        max_clip = -math.inf
+        min_clip = math.inf
+        
+        for i in self.acts:
+            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
+                max_clip = i.clip_hi.data
+                min_clip = i.clip_lo.data
+
+        for i in self.acts:
+            i.clip_hi.data = max_clip
+            i.clip_lo.data = min_clip
+            
+        self.clip_hi.data = max_clip
+        self.clip_lo.data = min_clip
+
+        self.act_out.eps_in = self.acts[0].get_eps()
+        
+    def forward(self, x: torch.Tensor, y: torch.Tensor):
+        mulresult = torch.matmul(x,y)
+        return self.act_out(mulresult)
+
+    
 class PACTConv2d(nn.Conv2d):
     def __init__(
             self,
@@ -463,6 +618,8 @@ class PACTConv1d(nn.Conv1d):
         # DataParallel, ...)
         self.register_buffer('clip_gradient', torch.tensor(True))
 
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
@@ -580,6 +737,8 @@ class PACTLinear(nn.Linear):
         # this member indicates that the module's clipping bounds should not be
         # touched. it is set by the controller
         self.register_buffer('frozen', torch.tensor(False))
+
+        self.register_buffer('clip_gradient', torch.tensor(True))
 
         self.register_buffer('clip_gradient', torch.tensor(True))
 

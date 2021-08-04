@@ -25,6 +25,8 @@ import torch
 import torch.nn as nn
 import networkx as nx
 
+from .lutactivation import LUTActivation
+
 from .folding import fold_anaact_anaconv2d_bn2d_anaact, fold_anaact_analinear_bn1d_anaact
 from quantlib.editing.graphs.graphs import Bipartite, PyTorchNode, __NODE_ID_FORMAT__
 from quantlib.editing.graphs.grrules.dporules import DPORule
@@ -179,7 +181,6 @@ class FoldANAConvBNANAActRule(DPORule):
         assert len(JI2RK_morphisms) == 1
         g_JI2RK = JI2RK_morphisms[0]
         g_RK2JI = {vRK: vJI for vJI, vRK in g_JI2RK.items()}
-
         for vI in VI:  # for each node in the interface subgraph of G
             vK = g[vI]
             G.add_edges_from({(vI, g_RK2JI[vRK]) for (_, vRK) in
@@ -533,13 +534,9 @@ class FoldANAActANAConvBNANAActTypeBRule(DPORule):  # w/ max pooling
         VHI = {vH for vH, vL in g.items() if vL not in set(self.K.nodes)}  # Occurence of core template
         HI = G.subgraph(VHI)  # HI is the subgraph induced by the set of nodes VHI
 
-        print(HI.nodes)
-
         # generate the substitute (sub-)graph J\I (completely detached from G)
         # Instantiate blueprint of the replacement graph
         JI, vJI_2_ptnode = self.core(HI, g, nodes_dict)
-
-        print(JI.nodes)
 
         # add the substitute (sub-)graph J\I to the main graph G
         G = nx.compose(G, JI)  # G now has two connected but 'independent' subgraphs
@@ -550,20 +547,8 @@ class FoldANAActANAConvBNANAActTypeBRule(DPORule):  # w/ max pooling
         assert len(JI2RK_morphisms) == 1
         g_JI2RK = JI2RK_morphisms[0]
         g_RK2JI = {vRK: vJI for vJI, vRK in g_JI2RK.items()}
-
-        for k, v in g_RK2JI.items():
-            print(k, v)
-
         for vI in VI:  # for each node in the interface subgraph of G
             vK = g[vI]
-
-            print(vI)
-            print(vK, self.F_K2RK[vK], self.F_RK2K[vK])
-            for a in {(vI, g_RK2JI[vRK]) for (_, vRK) in self.F_K2RK[vK]}:
-                print(a)
-            for b in {(g_RK2JI[vRK], vI) for (vRK, _) in self.F_RK2K[vK]}:
-                print(b)
-
             G.add_edges_from({(vI, g_RK2JI[vRK]) for (_, vRK) in
                               self.F_K2RK[vK]})  # incoming interface connections from G to substitute graph
             G.add_edges_from({(g_RK2JI[vRK], vI) for (vRK, _) in
@@ -1094,7 +1079,6 @@ class FoldANAActLinearRule(DPORule):
         assert len(JI2RK_morphisms) == 1
         g_JI2RK = JI2RK_morphisms[0]
         g_RK2JI = {vRK: vJI for vJI, vRK in g_JI2RK.items()}
-
         for vI in VI:  # for each node in the interface subgraph of G
             vK = g[vI]
             G.add_edges_from({(vI, g_RK2JI[vRK]) for (_, vRK) in
