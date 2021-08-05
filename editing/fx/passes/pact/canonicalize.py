@@ -1,0 +1,154 @@
+from typing import Optional, Union
+import operator
+
+import torch
+from torch import nn, fx
+
+from quantlib.algorithms.pact.pact_ops import *
+from .. import FxPass, SequentialPass
+
+class OpTree:
+
+    def __init__(self, end_node : fx.Node):
+        self.end_node = end_node
+        self.nodes = [end_node]
+        self.open_branches = len(end_node.all_input_nodes)
+        assert self.open_branches > 0, "Tried to create OpTree with no branches - something is wrong!"
+        # assume that order and assignment of args and kwargs does not matter
+        # and they are all treated the same.
+        self._args = list(end_node.args) + [v for v in end_node.kwargs.values()]
+        # note the users of the final node now - it may get
+        # deleted and then end_node.users becomes useless
+        self.users = [u for u in end_node.users]
+
+    def add_node(self, node : fx.Node):
+        assert node not in self.nodes, "OpTree.add_node(): something went wrong: you tried to add the same node to a tree twice..."
+        assert not self.is_terminated, "Tried to add a node to a terminated tree!"
+        self.nodes.append(node)
+        # we assume that no node in our tree has more than 1 user
+        self.open_branches += (len(node.all_input_nodes) - 1)
+
+    def terminate_branch(self):
+        # one branch has reached a node which is not part of the tree, so one
+        # branch can be subtracted
+        assert not self.is_terminated, "Tried to terminate a branch in an already-terminated tree!"
+        self.open_branches -= 1
+
+    @property
+    def is_terminated(self):
+        return self.open_branches == 0
+
+    @property
+    def args(self):
+        # really ugly list comprehensions:
+        # the inputs to the tree is the list of all inputs to all nodes in the
+        # tree, except those inputs which are tree nodes themselves.
+        all_args = [arg for node in self.nodes for arg in node.args if arg not in self.nodes] + [v for node in self.nodes for v in node.kwargs.values() if v not in self.nodes]
+        return tuple(all_args)
+
+
+class OpTreeReplacementPass(FxPass):
+
+    def __init__(self, node_specs : list, replacement_fn : callable, name : str = ''):
+        super(OpTreeReplacementPass, self).__init__()
+        self.node_specs = node_specs
+        self.replacement_fn = replacement_fn
+        self.name = name
+
+    @staticmethod
+    def node_matches_spec(node : fx.Node, node_spec : tuple):
+        return node.op == node_spec[0] and node.target in node_spec[1]
+
+    @staticmethod
+    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : Optional[set]):
+        if node in seen_nodes:
+            # if we have already seen this node, it is either already part of a
+            # tree or it will never be, so if we exited a tree, terminate the
+            # branch and return
+            if cur_tree is not None:
+                cur_tree.terminate_branch()
+                if cur_tree.is_terminated:
+                    op_trees.append(cur_tree)
+            return
+        seen_nodes.add(node)
+        if any(OpTreeReplacementPass.node_matches_spec(node, spec) for spec in node_specs):
+            # the current node belongs to a tree
+            if cur_tree is not None and len(node.users) > 1:
+                # there is a branch, so we need to cut the tree and start a new one
+                cur_tree.terminate_branch()
+                if cur_tree.is_terminated:
+                    op_trees.append(cur_tree)
+                cur_tree = OpTree(end_node=node)
+            elif cur_tree is None:
+                cur_tree = OpTree(end_node=node)
+            else:
+                cur_tree.add_node(node)
+        elif cur_tree is not None:
+            # we exited a tree => terminate this branch
+            cur_tree.terminate_branch()
+            if cur_tree.is_terminated:
+                op_trees.append(cur_tree)
+            cur_tree = None
+
+        # follow the graph upstream
+        for inp in node.all_input_nodes:
+            OpTreeReplacementPass.trace_op_trees(inp, node_specs, cur_tree, op_trees, seen_nodes)
+
+
+    def run_pass(self, gm : fx.GraphModule):
+        out_node = list(gm.graph.nodes)[-1]
+        op_trees = []
+        self.trace_op_trees(out_node, self.node_specs, None, op_trees, set())
+        # we have the op trees, now replace them with a module
+        for i, tree in enumerate(op_trees):
+            # then add the submodule
+            module = self.replacement_fn(tree)
+            new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper()}{'_' if self.name != '' else ''}{i}"
+            gm.add_submodule(new_target, module)
+            # add a node for the submodule call
+            with gm.graph.inserting_before(tree.users[0]):
+                new_node = gm.graph.call_module(new_target, args=tree.args)
+            # attach the module to the previous users of the tree's end node
+            tree.end_node.replace_all_uses_with(new_node)
+            # finally, delete the nodes in the tree
+            for node in tree.nodes:
+                gm.graph.erase_node(node)
+
+        # and we're done...
+        return gm
+
+
+class AddTreeReplacementPass(OpTreeReplacementPass):
+    add_node_specs = [('call_function', (torch.add, operator.add)),
+                      ('call_method', ('add',))]
+
+    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3.):
+        self.n_levels = n_levels
+        self.init_clip = init_clip
+        self.nb_std = nb_std
+        super(AddTreeReplacementPass, self).__init__(node_specs=self.add_node_specs, replacement_fn=self.add_replacement_fn, name="ADDITION")
+
+
+    def add_replacement_fn(self, tree):
+        return PACTIntegerAdd(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, learn_clip=False, symm=True)
+
+
+class ConcatTreeReplacementPass(SequentialPass):
+    cat_node_specs = [('call_function', (torch.cat,))]
+    stack_node_specs = [('call_function', (torch.stack,))]
+
+    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3.):
+        self.n_levels = n_levels
+        self.init_clip = init_clip
+        self.nb_std = nb_std
+        passes = []
+        passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT"))
+        passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK"))
+        super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
+
+    def cat_replacement_fn(self, tree):
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False)
+
+    def stack_replacement_fn(self, tree):
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True)
+
