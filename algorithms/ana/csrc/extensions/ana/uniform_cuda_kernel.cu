@@ -300,7 +300,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
         })
     );
 
-    switch(strategy.item<int32_t>())
+    switch(strategy.item<int32_t>())  // how to read tensor's content using the C++ API: https://stackoverflow.com/a/54208912
     {
         case 0:  // expectation
             AT_DISPATCH_FLOATING_TYPES(
