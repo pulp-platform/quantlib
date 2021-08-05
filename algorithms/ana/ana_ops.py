@@ -80,7 +80,7 @@ class ANAModule(nn.Module):
         anamod.register_parameter('mi',    nn.Parameter(torch.zeros(1), requires_grad=False))
         anamod.register_parameter('sigma', nn.Parameter(torch.ones(1),  requires_grad=False))
 
-        anamod.register_parameter('strategy', nn.Parameter(torch.Tensor([strategy])), requires_grad=False)
+        anamod.register_parameter('strategy', nn.Parameter(torch.Tensor([strategy]).to(torch.int32), requires_grad=False))
 
     def set_noise(self, mi, sigma):
         self.mi.data    = torch.Tensor([mi]).to(device=self.mi.device)
