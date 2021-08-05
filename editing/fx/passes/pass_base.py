@@ -71,15 +71,15 @@ class FxPass:
         gm.graph.lint()
         return gm
 
-    # overwrite this if your pass is specific to a graph instance (most
+    def __call__(self, gm : fx.GraphModule):
+        return self.apply(gm)
+
+    # overwrite this if your pass is specific to a graph instance (e.g., most
     # "dynamic" SequentialPass derivatives will be, as the list of passes to
     # execute probably depends on the graph. See e.g.
     # ReplaceSequentialPatternPass for an example)
     def retarget(self, gm : fx.GraphModule):
         pass
-
-    def __call__(self, gm : fx.GraphModule):
-        self.apply(gm)
 
 class SequentialPass(FxPass):
     def __init__(self, *passes, name_prefix = ''):

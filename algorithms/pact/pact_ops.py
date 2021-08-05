@@ -319,10 +319,10 @@ class PACTIntegerConcat(torch.nn.Module):
             z = list(map(lambda x: torch.unsqueeze(x, self.dim), x))
         else:
             z = list(x)
-
+        z_act = []
         for idx, i in enumerate(z):
-            z[idx] = self.acts[idx](i)
-        y = torch.cat(z, dim=self.dim)
+            z_act.append(self.acts[idx](i))
+        y = torch.cat(z_act, dim=self.dim)
         return y
 
 class PACTIntegerAdd(torch.nn.Module):

@@ -44,23 +44,32 @@ class OpTree:
         # the inputs to the tree is the list of all inputs to all nodes in the
         # tree, except those inputs which are tree nodes themselves.
         all_args = [arg for node in self.nodes for arg in node.args if arg not in self.nodes] + [v for node in self.nodes for v in node.kwargs.values() if v not in self.nodes]
-        return tuple(all_args)
+        # in the case of concat nodes, the arguments are lists or tuples, so we
+        # unpack them
+        all_args_unpacked = []
+        for arg in all_args:
+            if isinstance(arg, (list, tuple)):
+                all_args_unpacked += [a for a in arg]
+            else:
+                all_args_unpacked.append(arg)
+        return tuple(all_args_unpacked)
 
 
 class OpTreeReplacementPass(FxPass):
 
-    def __init__(self, node_specs : list, replacement_fn : callable, name : str = ''):
+    def __init__(self, node_specs : list, replacement_fn : callable, name : str = '', always_terminate : bool = False):
         super(OpTreeReplacementPass, self).__init__()
         self.node_specs = node_specs
         self.replacement_fn = replacement_fn
         self.name = name
+        self.always_terminate = always_terminate
 
     @staticmethod
     def node_matches_spec(node : fx.Node, node_spec : tuple):
         return node.op == node_spec[0] and node.target in node_spec[1]
 
     @staticmethod
-    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : Optional[set]):
+    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : Optional[set], always_terminate : bool = False):
         if node in seen_nodes:
             # if we have already seen this node, it is either already part of a
             # tree or it will never be, so if we exited a tree, terminate the
@@ -73,7 +82,7 @@ class OpTreeReplacementPass(FxPass):
         seen_nodes.add(node)
         if any(OpTreeReplacementPass.node_matches_spec(node, spec) for spec in node_specs):
             # the current node belongs to a tree
-            if cur_tree is not None and len(node.users) > 1:
+            if cur_tree is not None and (len(node.users) > 1 or always_terminate):
                 # there is a branch, so we need to cut the tree and start a new one
                 cur_tree.terminate_branch()
                 if cur_tree.is_terminated:
@@ -92,13 +101,13 @@ class OpTreeReplacementPass(FxPass):
 
         # follow the graph upstream
         for inp in node.all_input_nodes:
-            OpTreeReplacementPass.trace_op_trees(inp, node_specs, cur_tree, op_trees, seen_nodes)
+            OpTreeReplacementPass.trace_op_trees(inp, node_specs, cur_tree, op_trees, seen_nodes, always_terminate)
 
 
     def run_pass(self, gm : fx.GraphModule):
         out_node = list(gm.graph.nodes)[-1]
         op_trees = []
-        self.trace_op_trees(out_node, self.node_specs, None, op_trees, set())
+        self.trace_op_trees(out_node, self.node_specs, None, op_trees, set(), self.always_terminate)
         # we have the op trees, now replace them with a module
         for i, tree in enumerate(op_trees):
             # then add the submodule
@@ -106,7 +115,7 @@ class OpTreeReplacementPass(FxPass):
             new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper()}{'_' if self.name != '' else ''}{i}"
             gm.add_submodule(new_target, module)
             # add a node for the submodule call
-            with gm.graph.inserting_before(tree.users[0]):
+            with gm.graph.inserting_before(tree.end_node):
                 new_node = gm.graph.call_module(new_target, args=tree.args)
             # attach the module to the previous users of the tree's end node
             tree.end_node.replace_all_uses_with(new_node)
@@ -142,8 +151,8 @@ class ConcatTreeReplacementPass(SequentialPass):
         self.init_clip = init_clip
         self.nb_std = nb_std
         passes = []
-        passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT"))
-        passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK"))
+        passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT", always_terminate=True))
+        passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
         super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
     def cat_replacement_fn(self, tree):
