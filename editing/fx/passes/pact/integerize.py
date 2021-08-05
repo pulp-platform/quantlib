@@ -14,21 +14,14 @@ from .. import MergeConvBNPass
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
+from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
+
 __all__ = ['IntegerizePACTConvPass',
            'IntegerizePACTLinearPass',
            'IntegerizeBNActPass',
            'IntegerizePACTNetPass',
            'PACTTracer',
            'PACT_symbolic_trace']
-
-_PACT_OPS = [PACTUnsignedAct,
-             PACTAsymmetricAct,
-             PACTConv2d,
-             PACTConv1d,
-             PACTLinear]
-
-PACTTracer = LeafTracer(leaf_types=_PACT_OPS)
-PACT_symbolic_trace = partial(custom_symbolic_trace, tracer=PACTTracer)
 
 class RequantShift(nn.Module):
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
