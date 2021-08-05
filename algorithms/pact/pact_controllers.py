@@ -34,6 +34,7 @@ from .util import assert_param_valid, almost_symm_quant
 __all__ = [
     'PACTActController',
     'PACTLinearController',
+    'PACTIntegerModulesController'
 ]
 
 
