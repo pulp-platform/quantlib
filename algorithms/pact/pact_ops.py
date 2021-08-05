@@ -135,6 +135,7 @@ class PACTUnsignedAct(nn.Module):
         # in statistics collection mode, the activation works like a
         # relu/relu6/leaky_relu
         if not self.started:
+            x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             if self.act_kind == 'relu':
                 x = torch.nn.functional.relu(x)
             elif self.act_kind == 'relu6':
@@ -142,12 +143,12 @@ class PACTUnsignedAct(nn.Module):
             elif self.act_kind == 'leaky_relu':
                 x = torch.nn.functional.leaky_relu(x, self.leaky)
             with torch.no_grad():
-                cur_max = torch.max(x)
-                cur_min = torch.min(x)
+                cur_max = torch.max(x_stat)
+                cur_min = torch.min(x_stat)
                 self.max.data = torch.maximum(self.max.data, cur_max)
                 self.min.data = torch.minimum(self.min.data, cur_min)
-                self.running_mean.data = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
-                self.running_var.data = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
+                self.running_mean.data = 0.9 * self.running_mean.data + 0.1 * torch.mean(x_stat)
+                self.running_var.data = 0.9 * self.running_var.data  + 0.1 * torch.std(x_stat)**2
             return x
         # in normal mode, PACTUnsignedAct uses the PACTQuantFunc
         else:
@@ -245,11 +246,12 @@ class PACTAsymmetricAct(nn.Module):
 
         # in statistics collection mode, the activation works like an identity function (is this intended?)
         if not self.started:
+            x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             with torch.no_grad():
-                self.max[:] = max(self.max.item(), x.max())
-                self.min[:] = min(self.min.item(), x.min())
-                self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x.mean()
-                self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x.std()*x.std()
+                self.max[:] = max(self.max.item(), x_stat.max())
+                self.min[:] = min(self.min.item(), x_stat.min())
+                self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
+                self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
             if self.act_kind == 'identity':
                 return x
             elif self.act_kind == 'relu':
