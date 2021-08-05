@@ -40,10 +40,10 @@ __all__ = [
 
 class ANAModule(nn.Module):
 
-    def __init__(self, quantizer_spec, noise_type):
+    def __init__(self, quantizer_spec, noise_type, strategy):
         super(ANAModule, self).__init__()
         ANAModule.setup_quantizer(self, quantizer_spec)
-        ANAModule.setup_noise(self, noise_type)
+        ANAModule.setup_noise(self, noise_type, strategy)
 
     @staticmethod
     def setup_quantizer(anamod, quantizer_spec):
@@ -71,32 +71,26 @@ class ANAModule(nn.Module):
         anamod.register_parameter('eps', nn.Parameter(eps, requires_grad=False))
 
     @staticmethod
-    def setup_noise(anamod, noise_type):
+    def setup_noise(anamod, noise_type, strategy):
 
         # noise type
         anamod.ana_op = getattr(ana_lib, 'ANA' + noise_type.capitalize()).apply
 
-        # initialise forward noise parameters
-        anamod.register_parameter('fnoise_mi',    nn.Parameter(torch.zeros(1), requires_grad=False))
-        anamod.register_parameter('fnoise_sigma', nn.Parameter(torch.ones(1),  requires_grad=False))
+        # initialise noise hyper-parameters
+        anamod.register_parameter('mi',    nn.Parameter(torch.zeros(1), requires_grad=False))
+        anamod.register_parameter('sigma', nn.Parameter(torch.ones(1),  requires_grad=False))
 
-        # initialise backward noise parameters
-        anamod.register_parameter('bnoise_mi',    nn.Parameter(torch.zeros(1), requires_grad=False))
-        anamod.register_parameter('bnoise_sigma', nn.Parameter(torch.ones(1),  requires_grad=False))
+        anamod.register_parameter('strategy', nn.Parameter(torch.Tensor([strategy])), requires_grad=False)
 
-    def set_fnoise(self, mi, sigma):
-        self.fnoise_mi.data    = torch.Tensor([mi]).to(device=self.fnoise_mi.device)
-        self.fnoise_sigma.data = torch.Tensor([sigma]).to(device=self.fnoise_sigma.device)
-
-    def set_bnoise(self, mi, sigma):
-        self.bnoise_mi.data    = torch.Tensor([mi]).to(device=self.bnoise_mi.device)
-        self.bnoise_sigma.data = torch.Tensor([sigma]).to(device=self.bnoise_sigma.device)
+    def set_noise(self, mi, sigma):
+        self.mi.data    = torch.Tensor([mi]).to(device=self.mi.device)
+        self.sigma.data = torch.Tensor([sigma]).to(device=self.sigma.device)
 
 
 class ANAActivation(ANAModule):
     """Quantize scores."""
-    def __init__(self, quantizer_spec, noise_type):
-        super(ANAActivation, self).__init__(quantizer_spec, noise_type)
+    def __init__(self, quantizer_spec, noise_type, strategy):
+        super(ANAActivation, self).__init__(quantizer_spec, noise_type, strategy)
 
     def forward(self, x):
 
@@ -104,9 +98,8 @@ class ANAActivation(ANAModule):
 
         x_out = self.ana_op(x,
                             self.quant_levels, self.thresholds,
-                            self.fnoise_mi, self.fnoise_sigma,
-                            self.bnoise_mi, self.bnoise_sigma,
-                            self.training)
+                            self.mi, self.sigma,
+                            self.strategy, self.training)
 
         x_out = x_out * self.eps
 
@@ -115,11 +108,11 @@ class ANAActivation(ANAModule):
 
 class ANALinear(ANAModule):
     """Affine transform with quantized parameters."""
-    def __init__(self, quantizer_spec, noise_type,
+    def __init__(self, quantizer_spec, noise_type, strategy,
                  in_features, out_features, bias=True):
 
         # set quantizer + ANA properties
-        super(ANALinear, self).__init__(quantizer_spec, noise_type)
+        super(ANALinear, self).__init__(quantizer_spec, noise_type, strategy)
 
         # set linear layer parameters
         self.in_features  = in_features
@@ -149,9 +142,8 @@ class ANALinear(ANAModule):
         weight = self.weight / self.eps
         weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
-                             self.fnoise_mi, self.fnoise_sigma,
-                             self.bnoise_mi, self.bnoise_sigma,
-                             self.training)
+                             self.mi, self.sigma,
+                             self.strategy, self.training)
         return weight
 
     def forward(self, input):
@@ -160,11 +152,11 @@ class ANALinear(ANAModule):
 
 class _ANAConvNd(ANAModule):
     """Cross-correlation transform with quantized parameters."""
-    def __init__(self, quantizer_spec, noise_type,
+    def __init__(self, quantizer_spec, noise_type, strategy,
                  in_channels, out_channels, kernel_size, stride, padding, dilation, transposed, output_padding, groups, bias):
 
         # set quantizer + ANA properties
-        super(_ANAConvNd, self).__init__(quantizer_spec, noise_type)
+        super(_ANAConvNd, self).__init__(quantizer_spec, noise_type, strategy)
 
         # set convolutional layer parameters
         if in_channels % groups != 0:
@@ -213,14 +205,13 @@ class _ANAConvNd(ANAModule):
         weight = self.weight / self.eps
         weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
-                             self.fnoise_mi, self.fnoise_sigma,
-                             self.bnoise_mi, self.bnoise_sigma,
-                             self.training)
+                             self.mi, self.sigma,
+                             self.strategy, self.training)
         return weight
 
 
 class ANAConv1d(_ANAConvNd):
-    def __init__(self, quantizer_spec, noise_type,
+    def __init__(self, quantizer_spec, noise_type, strategy,
                  in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
 
         kernel_size = _single(kernel_size)
@@ -229,7 +220,7 @@ class ANAConv1d(_ANAConvNd):
         dilation    = _single(dilation)
 
         super(ANAConv1d, self).__init__(
-            quantizer_spec, noise_type,
+            quantizer_spec, noise_type, strategy,
             in_channels, out_channels, kernel_size, stride, padding, dilation, False, _single(0), groups, bias
         )
 
@@ -238,7 +229,7 @@ class ANAConv1d(_ANAConvNd):
 
 
 class ANAConv2d(_ANAConvNd):
-    def __init__(self, quantizer_spec, noise_type,
+    def __init__(self, quantizer_spec, noise_type, strategy,
                  in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
 
         kernel_size = _pair(kernel_size)
@@ -247,7 +238,7 @@ class ANAConv2d(_ANAConvNd):
         dilation    = _pair(dilation)
 
         super(ANAConv2d, self).__init__(
-            quantizer_spec, noise_type,
+            quantizer_spec, noise_type, strategy,
             in_channels, out_channels, kernel_size, stride, padding, dilation, False, _pair(0), groups, bias
         )
 
@@ -256,7 +247,7 @@ class ANAConv2d(_ANAConvNd):
 
 
 class ANAConv3d(_ANAConvNd):
-    def __init__(self, quantizer_spec, noise_type,
+    def __init__(self, quantizer_spec, noise_type, strategy,
                  in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
 
         kernel_size = _triple(kernel_size)
@@ -265,10 +256,9 @@ class ANAConv3d(_ANAConvNd):
         dilation    = _triple(dilation)
 
         super(ANAConv3d, self).__init__(
-            quantizer_spec, noise_type,
+            quantizer_spec, noise_type, strategy,
             in_channels, out_channels, kernel_size, stride, padding, dilation, False, _triple(0), groups, bias
         )
 
     def forward(self, input):
         return F.conv3d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
-
