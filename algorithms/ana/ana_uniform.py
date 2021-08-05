@@ -21,20 +21,31 @@
 
 import torch
 
+import ana_forward
 
-def forward(x_in, q, t, fmu, fsigma, training):
+
+def forward(x_in, q, t, mu, sigma, strategy, training):
 
     t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]  # dimensions with size 1 enable broadcasting
-    x_minus_t = x_in - t.reshape(t_shape) - fmu
+    x_minus_t = x_in - mu - t.reshape(t_shape)
 
-    if training and fsigma != 0.:
-        s_inv = 1 / fsigma
+    if training and sigma != 0.:
+        s_inv = 1 / sigma
         cdf = torch.clamp(0.5 * (x_minus_t * s_inv + 1), 0., 1.)
     else:
         cdf = (x_minus_t >= 0.).float()
 
-    d = q[1:] - q[:-1]
-    x_out = q[0] + torch.sum(d.reshape(t_shape) * cdf, 0)
+    cdf = torch.vstack([torch.ones_like(cdf[0])[None, :], cdf, torch.zeros_like(cdf[-1][None, :])])
+    pmf = cdf[:-1] - cdf[1:]
+
+    if strategy == 0:  # expectation
+        x_out = ana_forward.forward_expectation(pmf, q)
+    elif strategy == 1:  # argmax sampling (i.e., mode)
+        x_out = ana_forward.forward_mode(pmf, q)
+    elif strategy == 2:  # random sampling
+        x_out = ana_forward.forward_random(pmf, q)
+    else:
+        raise ValueError  # undefined strategy
 
     return x_out
 
