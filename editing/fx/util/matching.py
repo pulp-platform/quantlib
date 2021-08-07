@@ -46,7 +46,7 @@ class SequentialMatcher:
         return mm
 
 
-    def _match_nodes(self, pn : fx.Node, gn : fx.Node, first_active_node : bool = False, nodes_map : dict = None):
+    def _match_nodes(self, pn : fx.Node, gn : fx.Node, last_active_node : bool = False, nodes_map : dict = None):
         nodes_map = {} if nodes_map is None else nodes_map
         # as we do sequential traversal, the first step (checking if nodes
         # already traversed) of the original _match_nodes function can be
@@ -74,12 +74,18 @@ class SequentialMatcher:
             return None
 
         nodes_map[pn] = gn
+        pn_users = [u for u in pn.users]
 
         if pn.op == "placeholder":
             return nodes_map
         # if we are in the "active" pattern, the graph node has to be
         # single-input and single-use
-        if (pn.op not in ("output", "placeholder") and (len(gn.all_input_nodes) != 1) or (len(gn.users) > 1 and not first_active_node)):
+        # if (pn.op not in ("output", "placeholder") and
+        # (len(gn.all_input_nodes) != 1) or (len(gn.users) > 1 and not
+        # first_active_node)):
+        if pn.op != "output" and ((len(gn.users) > 1 and not last_active_node) or len(gn.all_input_nodes) > 1):
+            # if the gn has >1 users, the pattern is "leaking" and we don't
+            # want to match it
             return None
         if pn.op == "output":
             # if the pattern node is an output, any of the branches leading to
