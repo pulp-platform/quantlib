@@ -113,7 +113,7 @@ class PACTUnsignedAct(nn.Module):
         self.register_buffer('clip_lo', torch.zeros(1))
 
     def get_eps(self, *args):
-        return self.clip_hi/(self.n_levels-1)
+        return (self.clip_hi/(self.n_levels-1)).detach().clone()
 
     def extra_repr(self):
         r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, nb_std={nb_std}".format(**self.__dict__)
@@ -224,7 +224,7 @@ class PACTAsymmetricAct(nn.Module):
         self.register_buffer('clip_gradient', torch.tensor(True))
 
     def get_eps(self, *args):
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def extra_repr(self):
         r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, symm={symm}, nb_std={nb_std}".format(**self.__dict__)
@@ -493,7 +493,7 @@ class PACTConv2d(nn.Conv2d):
         """
         :return: epsilon of the weight quantization.
         """
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def get_eps_out(self, eps_in, *args, **kwargs):
         """
@@ -517,7 +517,7 @@ class PACTConv2d(nn.Conv2d):
 
     @property
     def weight_int(self):
-        return (self.weight_q / self.get_eps_w()).round()
+        return (self.weight_q / self.get_eps_w()).detach().clone().round()
 
 
     def forward(self, x):
@@ -629,7 +629,7 @@ class PACTConv1d(nn.Conv1d):
         """
         :return: epsilon of the weight quantization.
         """
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def get_eps_out(self, eps_in, *args, **kwargs):
         """
@@ -751,7 +751,7 @@ class PACTLinear(nn.Linear):
         """
         :return: epsilon of the weight quantization.
         """
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def get_eps_out(self, eps_in, *args, **kwargs):
         """
