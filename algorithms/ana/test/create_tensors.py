@@ -1,14 +1,9 @@
 from enum import IntEnum
+from collections import namedtuple
 import torch
 
 from typing import Tuple
-
-
-class Kind(IntEnum):
-    ZEROS    = 0
-    ONES     = 1
-    RANDN    = 2
-    LINSPACE = 3
+from typing import Union
 
 
 class BatchSize(IntEnum):
@@ -46,14 +41,26 @@ class Conv2dSpatialSize(IntEnum):
     LARGE  = 2 ** 9  # ~ ImageNet * 2
 
 
+class Kind(IntEnum):
+    ZEROS    = 0
+    ONES     = 1
+    RANDN    = 2
+    LINSPACE = 3
+
+
+Range = namedtuple('Range', ['start', 'end'])
+
+
 class TensorGenerator(object):
 
     def __init__(self,
                  device: torch.device,
-                 kind: Kind):
+                 kind: Kind,
+                 range_: Union[Range, None] = None):
 
         self._device = device
         self._kind   = kind
+        self._range  = range_
 
     @property
     def size(self):
@@ -71,9 +78,10 @@ class TensorGenerator(object):
             x = torch.randn(*self.size)
 
         elif self._kind == Kind.LINSPACE:
+            assert self._range is not None
             from functools import reduce
             n = reduce(lambda x, y: x * y, self.size)
-            x = torch.arange(0, n).reshape(*self.size)  # x.view(-1) returns the linearly spaced values in a one-dimensional array
+            x = torch.linspace(self._range.start, self._range.end, n).reshape(*self.size)  # x.view(-1) returns the linearly spaced values in a one-dimensional array
 
         else:
             raise ValueError
@@ -85,11 +93,12 @@ class LinearTensorGenerator(TensorGenerator):
 
     def __init__(self,
                  device: torch.device,
-                 kind: Kind,
                  batch_size: int,
-                 n_channels: int):
+                 n_channels: int,
+                 kind: Kind,
+                 range_: Union[Range, None] = None):
 
-        super(LinearTensorGenerator, self).__init__(device, kind)
+        super(LinearTensorGenerator, self).__init__(device, kind, range_)
         self._batch_size = batch_size
         self._n_channels = n_channels
 
@@ -102,12 +111,13 @@ class Conv2dTensorGenerator(TensorGenerator):
 
     def __init__(self,
                  device: torch.device,
-                 kind: Kind,
                  batch_size: int,
                  n_channels: int,
-                 spatial_size: int):  # I assume squared images
+                 spatial_size: int,
+                 kind: Kind,
+                 range_: Union[Range, None] = None):  # I assume squared images
 
-        super(Conv2dTensorGenerator, self).__init__(device, kind)
+        super(Conv2dTensorGenerator, self).__init__(device, kind, range_)
 
         self._batch_size   = batch_size
         self._n_channels   = n_channels

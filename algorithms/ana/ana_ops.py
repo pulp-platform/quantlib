@@ -122,20 +122,28 @@ class ANALinear(ANAModule):
             self.bias = nn.Parameter(torch.Tensor(out_features))
         else:
             self.register_parameter('bias', None)
+
+        self._is_initialised = False
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self, mi: float = 0.0):
 
         stdv = 1. / math.sqrt(self.weight.size(1))
 
         # init weights near thresholds
         self.weight.data.random_(to=len(self.thresholds.data))
-        self.weight.data = self.thresholds[self.weight.data.to(torch.long)]
+        self.weight.data = self.thresholds[self.weight.data.to(torch.long)] + mi
         self.weight.data = torch.add(self.weight.data, torch.zeros_like(self.weight.data).uniform_(-stdv, stdv))
 
         # init biases
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
+
+    def set_noise(self, mi, sigma):
+        super().set_noise(mi, sigma)
+        if not self._is_initialised:
+            self.reset_parameters(mi)
+            self._is_initialised = True
 
     @property
     def weight_maybe_quant(self):
@@ -182,9 +190,11 @@ class _ANAConvNd(ANAModule):
             self.bias = nn.Parameter(torch.Tensor(out_channels))
         else:
             self.register_parameter('bias', None)
+
+        self._is_initialised = False
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self, mi: float = 0.0):
 
         n = self.in_channels
         for k in self.kernel_size:
@@ -193,12 +203,18 @@ class _ANAConvNd(ANAModule):
 
         # init weights near thresholds
         self.weight.data.random_(to=len(self.thresholds.data))
-        self.weight.data = self.thresholds[self.weight.data.to(torch.long)]
+        self.weight.data = self.thresholds[self.weight.data.to(torch.long)] + mi
         self.weight.data = torch.add(self.weight.data, torch.zeros_like(self.weight.data).uniform_(-stdv, stdv))
 
         # init biases
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
+
+    def set_noise(self, mi, sigma):
+        super().set_noise(mi, sigma)
+        if not self._is_initialised:
+            self.reset_parameters(mi)
+            self._is_initialised = True
 
     @property
     def weight_maybe_quant(self):
