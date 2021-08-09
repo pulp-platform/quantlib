@@ -1,6 +1,8 @@
-from typing import Union, Optional
+from typing import Union, Optional, Tuple, List
 
+import torch
 from torch import nn, fx
+from torch.fx.passes.shape_prop import ShapeProp
 from torch.nn import functional as F
 from .pass_base import FxPass, SequentialPass, ModifySequentialPatternPass, ModularizePass
 from ..util import module_of_node, get_qualified_prefix
@@ -10,7 +12,8 @@ __all__ = ['MergeConvBNPass',
            'RetracePass',
            'InsertModuleAfterNodePass',
            'InsertModuleBetweenNodesPass',
-           'InsertModuleBetweenModulesPass']
+           'InsertModuleBetweenModulesPass',
+           'ShapePropPass']
 
 def merge_conv_bn_fun(ml : list):
     assert len(ml) == 2, "List passed to merge_conv_bn_fun should have length 2"
@@ -203,3 +206,16 @@ class InsertModuleBetweenModulesPass(SequentialPass):
                             idx += 1
 
         super(InsertModuleBetweenModulesPass, self).setup_passes(passes)
+
+class ShapePropPass(FxPass):
+    # a wrapper for the shape propagation pass of torch.fx
+    def __init__(self, *shapes_in : Union[Tuple[int], List[int], torch.Size], dtype_in : torch.dtype = torch.float32):
+        super(ShapePropPass, self).__init__()
+        self.shapes_in = [torch.Size(s) for s in shapes_in]
+        self.dtype_in = dtype_in
+
+    def run_pass(self, gm : fx.GraphModule):
+        sp = ShapeProp(gm)
+        inp = [torch.rand(s, dtype=self.dtype_in) for s in self.shapes_in]
+        sp.run(*inp)
+        return gm

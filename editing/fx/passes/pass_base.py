@@ -209,14 +209,7 @@ class ModularizeNodePass(FxPass):
         super(ModularizeNodePass, self).__init__()
         self.node = node
         self.new_target = new_target
-        self.module, self.node_args, self.node_kwargs = arg_conversion(node)
-
-
-    @staticmethod
-    def default_arg_conversion(node):
-        args = node.args
-        kwargs = {}
-        return (args, kwargs)
+        self.module, self.node_args, self.node_kwargs = replacement_fn(node)
 
     def run_pass(self, gm : fx.GraphModule):
         submodule_names = [m[0] for m in gm.named_modules()]

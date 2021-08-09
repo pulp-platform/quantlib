@@ -1,6 +1,8 @@
-from typing import Union, Optional
+from typing import Union, Optional, Tuple, List
 from dataclasses import dataclass
 from functools import partial
+
+import numpy as np
 
 import torch
 from torch import fx, nn
@@ -8,9 +10,9 @@ from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
 
-from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass
+from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
 from .. import AnnotateEpsPass, extract_eps
-from .. import MergeConvBNPass
+from .. import MergeConvBNPass, RetracePass
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
@@ -123,14 +125,15 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
         act = matched_modules[1]
         act_node = matched_nodes[1]
         bn = matched_modules[0]
+        bn_node = matched_nodes[0]
         assert isinstance(bn, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)), f"bn_act_to_requant called on incompatible BN layer {type(bn)}"
     assert isinstance(act, (PACTUnsignedAct, PACTAsymmetricAct)), f"bn_act_to_requant called on incompatible activation {type(act)}"
 
     signed_act = isinstance(act, PACTAsymmetricAct)
     eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze()
-    eps_out = act_node.meta['quant'].eps_out
-    if eps_out.shape == torch.Size([1]):
-        eps_out = eps_out[0]
+    eps_out = act_node.meta['quant'].eps_out.cpu().clone().detach().squeeze()
+#    if eps_out.shape == torch.Size([1]):
+        #eps_out = eps_out[0]
 
     gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
     beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
@@ -143,8 +146,20 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
     beta_h = torch.round(beta_h)
     if bn and gamma_h.numel() > 1:
         if isinstance(bn, nn.BatchNorm1d):
-            gamma_h = gamma_h.reshape((gamma_h.numel(), 1))
-            beta_h = beta_h.reshape((beta_h.numel(), 1))
+            # BN1D can take two shape formats:
+            # 1. [N_B, N_C, L], e.g. if it comes after a Conv1d layer
+            # 2. [N_B, L], e.g. if it comes after a linear layer
+            # depending on how it is used in the network we are processing, the
+            # mul/add parameters must have different shape. we use the
+            # information stored in the graph by the ShapePropPass to determine
+            # this.
+            bn_outshape = bn_node.meta['tensor_meta'].shape
+            if len(bn_outshape) == 3:
+                gamma_h = gamma_h.reshape((gamma_h.numel(), 1))
+                beta_h = beta_h.reshape((beta_h.numel(), 1))
+            elif len(bn_outshape) == 2:
+                gamma_h = gamma_h.reshape((gamma_h.numel(),))
+                beta_h = beta_h.reshape((beta_h.numel(),))
         elif isinstance(bn, nn.BatchNorm2d):
             gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1))
             beta_h = beta_h.reshape((beta_h.numel(), 1, 1))
@@ -170,8 +185,13 @@ class IntegerizeBNActPass(SequentialPass):
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, gm : fx.GraphModule, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
+    def __init__(self, gm : fx.GraphModule, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
         passes = []
+        # start by retracing the network to dissolve any integer ops
+        passes.append(RetracePass(PACT_symbolic_trace))
+        # then run a shape propagation pass so the conversion functions can
+        # know what shape a node's output has
+        passes.append(ShapePropPass(shape_in))
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
         # second step: annotate epsilons
