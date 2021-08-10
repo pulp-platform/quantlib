@@ -28,6 +28,7 @@ from torch import nn
 from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
 from .util import assert_param_valid, almost_symm_quant
 import math
+import copy
 
 
 __all__ = [
@@ -39,8 +40,78 @@ __all__ = [
     'PACTQuantize',
     'PACTIntegerAdd',
     'PACTIntegerConcat',
-    'PACTIntegerMatmul'
+    'PACTIntegerMatmul',
+    'PACTIntegerSoftmax',
+    'PACTIntegerLayerNorm',
 ]
+
+class PACTIntegerLayerNorm(torch.nn.Module):
+
+    def __init__(self, module, n_levels: int = 256):
+        super().__init__()
+
+        self.n_levels = n_levels
+        self.frozen = False
+        self.eps_in = 1.
+        self.eps = 1.
+        self.module = copy.deepcopy(module)
+
+        self.register_buffer('totScaler', torch.Tensor((255.,)))
+        self.register_buffer('D', torch.Tensor((2**24,)))
+        self.register_buffer('maxval', torch.Tensor((1.,)))
+        
+    def forward(self, x):
+        if self.frozen:
+            nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
+            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
+            y = torch.floor((self.totScaler*torch.floor(torch.div(nom,denom)))/self.D)
+            y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
+        else:
+            y = self.module(x)
+            
+            self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
+            scaler = (self.n_levels)/self.maxval
+            self.totScaler.data[0] = math.floor(self.D * scaler)
+            
+        return y
+
+class PACTIntegerSoftmax(torch.nn.Module):
+
+    def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
+        super().__init__()
+        self.n_levels = n_levels
+        self.module = copy.deepcopy(module)
+        self.frozen = False
+        self.eps_in = eps_in
+
+        self.register_buffer('coeffA', torch.Tensor((0.3585,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC', torch.Tensor((0.344,)))
+        self.register_buffer('log2', torch.Tensor((4.,)))
+
+    def updateCoeffs(self, eps):
+
+        eps2 = (1./(2**8))/(eps**2)
+        
+        self.coeffA.data[0] = math.floor(0.3585/eps2)
+        self.coeffB.data[0] = math.floor(1.353/eps)
+        self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
+        
+    def forward(self, x):
+        
+        if self.frozen:
+            xTilde = (x - torch.max(x))
+            z = torch.floor(-xTilde / self.log2)
+            p = xTilde + z * self.log2
+            y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
+            ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+            return torch.floor(y*(self.n_levels-1)/ysum)
+        
+        else:
+            y = self.module(x)
+            
+        return y
+
 
 class PACTUnsignedAct(nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.
