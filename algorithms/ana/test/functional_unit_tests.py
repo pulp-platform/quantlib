@@ -18,6 +18,9 @@ def compare_tensors(t1: torch.Tensor,
     are considered equivalent if all their components differ by less than a
     given threshold. Those components whose difference surpasses the threshold
     are printed to screen.
+
+    This function is meant to be a helper function for
+    `numerical_equivalence`.
     """
 
     assert t1.shape == t2.shape
@@ -44,9 +47,9 @@ def numerical_equivalence(x_gen_cpu: TensorGenerator,
     """Compute whether the CPU and GPU versions of ANA modules are equivalent."""
 
     assert type(module_cpu) == type(module_gpu)
-    assert module_cpu.strategy == module_gpu.strategy
+    assert module_cpu.strategy == module_gpu.strategy.cpu()
     assert module_cpu.strategy != 2  # automatically comparing numerical functional equivalence for non-deterministic functions is complicated;
-                                     # see `visual_equivalence` function instead
+                                     # for the moment, I leave this responsibility to humans: see the `visual_equivalence` function
 
     if hasattr(module_cpu, 'weight'):  # `ANALinear` and `ANAConv2d` modules
         assert (module_cpu.bias is None) and (module_gpu.bias is None)
@@ -102,6 +105,8 @@ def scatterplot2d(x: torch.Tensor,
     plot is more precise than a line plot, which would "interpolate" the value
     of the function on points comprised in-between points where the function
     has actually been computed.
+
+    This function is meant to be a helper function for `visual_equivalence`.
     """
 
     plt.scatter(x, y, s=4, marker='.')
@@ -119,6 +124,8 @@ def distribution2d(x_all: torch.Tensor,
     (i.e., it does not satisfy the definition of function), it can still be
     visualised by plotting the empirical distribution obtained by sampling
     from it multiple `times.
+
+    This function is meant to be a helper function for `visual_equivalence`.
     """
 
     x = x_all[0]
@@ -139,6 +146,15 @@ def distribution2d(x_all: torch.Tensor,
 
 
 def distribution1d(t: torch.Tensor):
+    """Show the one-dimensional distribution of an array's components.
+
+    When the objects stored in the components of an array are numbers, it is
+    possible to interpret the array as a finite sample from a probability
+    distribution on the numeric set. The natural way to represent such sample
+    distributions is a histogram.
+
+    This function is meant to be a helper function for `visual_equivalence`.
+    """
     edges = torch.linspace(t.min(), t.max(), steps=t.numel() // 10)
     counts, edges = np.histogram(t, edges)
     plt.hist(edges[:-1], edges, weights=counts)
@@ -151,9 +167,12 @@ def visual_equivalence(x_gen_cpu: TensorGenerator,
                        module_gpu: nn.Module,
                        grad_gen_gpu: TensorGenerator,
                        N: int = 1000) -> None:
+    """Provide information that humans can use to decide whether the CPU and
+    GPU implementations are equivalent.
+    """
 
     assert type(module_cpu) == type(module_gpu)
-    assert module_cpu.strategy == module_gpu.strategy
+    assert module_cpu.strategy == module_gpu.strategy.cpu()
 
     if isinstance(module_cpu, ana.ANAActivation):
 
