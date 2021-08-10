@@ -34,6 +34,7 @@ from .util import assert_param_valid, almost_symm_quant
 __all__ = [
     'PACTActController',
     'PACTLinearController',
+    'PACTIntegerModulesController'
 ]
 
 
@@ -395,3 +396,26 @@ class PACTLinearController(Controller):
             self.verbose = vo
 
 
+class PACTIntegerModulesController(Controller):
+    # a very simple controller which keeps the epsilons of PACTIntegerXXX nodes
+    # synchronized before every inference
+    def __init__(self, modules):
+        self.modules = modules
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict):
+        pass
+
+    def step_pre_training_epoch(self, *args, **kwargs):
+        pass
+
+    def step_pre_training_batch(self, *args, **kwargs):
+        # this is the only thing we do here...
+        for m in self.modules:
+            m.reassign_epsilons()
+
+    def step_pre_validation_epoch(self, *args, **kwargs):
+        # we need to sync the epsilons also after the last batch of a training epoch
+        self.step_pre_training_batch(self, *args, **kwargs)

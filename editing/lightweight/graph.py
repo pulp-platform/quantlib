@@ -23,7 +23,7 @@ import torch
 
 from .node import LightweightNode
 
-from typing import List
+from typing import List, Tuple, Union
 
 
 class LightweightGraph(object):
@@ -42,19 +42,16 @@ class LightweightGraph(object):
         return self._nodes_list
 
     @staticmethod
-    def build_nodes_list(parent_module: torch.nn.Module, parent_name: str = '', nodes_list: List[LightweightNode] = None):
-        # this is a workaround for a bug (?) where nodes_list is treated like a
-        # static variable: if nodes_list defaults to [] or list(), calling
-        # build_nodes_list multiple times with no nodes_list argument gives the
-        # same ID for nodes_list, resulting in the net being duplicated in the
-        # list
+    def build_nodes_list(parent_module: torch.nn.Module, parent_name: str = '', nodes_list: List[LightweightNode] = None, leaf_types: Union[List[type], Tuple[type]] = ()):
+        # if nodes_list's default value is `[]`, the empty list is initialized
+        # only once. See https://stackoverflow.com/questions/32326777/python-default-arguments-evaluation
         nodes_list = nodes_list if nodes_list is not None else []
 
         for name, child in parent_module.named_children():
-            if len(list(child.children())) == 0:
+            if len(list(child.children())) == 0 or isinstance(child, tuple(leaf_types)):
                 nodes_list.append(LightweightNode(name=parent_name + name, module=child))
             else:
-                LightweightGraph.build_nodes_list(child, parent_name=parent_name + name + '.', nodes_list=nodes_list)
+                LightweightGraph.build_nodes_list(child, parent_name=parent_name + name + '.', nodes_list=nodes_list, leaf_types=leaf_types)
 
         return nodes_list
 

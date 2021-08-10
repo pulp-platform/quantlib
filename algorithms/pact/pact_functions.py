@@ -65,7 +65,7 @@ class PACTQuantFunc(torch.autograd.Function):
     :param clip_gradient: if True, zero-out gradients outside of the clipping range.
     :type  clip_gradient: bool
 
-    :return: The quantized weights tensor.
+    :return: The quantized tensor.
     :rtype:  `torch.Tensor`
 
     """
@@ -81,7 +81,7 @@ class PACTQuantFunc(torch.autograd.Function):
         # eps.
         # to ensure hardware compatibility, it is the downstream user's
         # responsibility to ensure that clip_lo/clip_hi are multiples of eps!
-        input_unrounded_int = (input.clamp(clip_lo, clip_hi) - clip_lo )/ eps
+        input_unrounded_int = (input.clamp(clip_lo, clip_hi + 1e-7) - clip_lo)/ eps
         # for weights, we want to use rounding - for activations, we will round
         # in hardware so represent this here too
         input_rounded_int = input_unrounded_int.floor() if floor else input_unrounded_int.round()
@@ -117,9 +117,22 @@ def PACTQuantize(x, eps, clip_lo, clip_hi, floor=True, clip_gradient=True):
 
 
 class AlmostSymmQuantFunc(torch.autograd.Function):
+    r"""Helper functional which returns an upper clipping bound which is
+    'quasy-symmetrical' to the :math: `clip_{lo}` provided. The quantization levels
+    generated from the clipping bounds :math: `(clip_{lo}, clip_{hi})` will map to an
+    integer range with just multiplicative scaling (no zero-point offset) if
+    n_levels is a power of 2.
+    :math: `clip_{lo}` must be :math: `<0`!
+    """
 
     @staticmethod
     def forward(ctx, clip_lo, n_levels):
+        r"""
+        Returns the 'quasi-symmetric' upper clipping bound :math: `clip_{hi}` to the supplied :math: `clip_{lo}`:
+
+        :math: `clip_{hi} = -clip_{lo} * \frac{n_{levels}/2 - 1}{n_levels/2}` if n_levels is even (e.g., 127 if clip_lo is -128)
+        :math: `clip_{hi} = -clip_{lo}` if n_levels is odd
+        """
 
         torch._assert(torch.all(clip_lo <= 0), "Big problem: `clip_lo` passed to AlmostSymmQuantFunc is not negative: everything will break!")
 

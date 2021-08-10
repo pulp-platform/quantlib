@@ -113,7 +113,7 @@ class PACTUnsignedAct(nn.Module):
         self.register_buffer('clip_lo', torch.zeros(1))
 
     def get_eps(self, *args):
-        return self.clip_hi/(self.n_levels-1)
+        return (self.clip_hi/(self.n_levels-1)).detach().clone()
 
     def extra_repr(self):
         r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, nb_std={nb_std}".format(**self.__dict__)
@@ -135,6 +135,7 @@ class PACTUnsignedAct(nn.Module):
         # in statistics collection mode, the activation works like a
         # relu/relu6/leaky_relu
         if not self.started:
+            x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             if self.act_kind == 'relu':
                 x = torch.nn.functional.relu(x)
             elif self.act_kind == 'relu6':
@@ -142,12 +143,12 @@ class PACTUnsignedAct(nn.Module):
             elif self.act_kind == 'leaky_relu':
                 x = torch.nn.functional.leaky_relu(x, self.leaky)
             with torch.no_grad():
-                cur_max = torch.max(x)
-                cur_min = torch.min(x)
+                cur_max = torch.max(x_stat)
+                cur_min = torch.min(x_stat)
                 self.max.data = torch.maximum(self.max.data, cur_max)
                 self.min.data = torch.minimum(self.min.data, cur_min)
-                self.running_mean.data = 0.9 * self.running_mean.data + 0.1 * torch.mean(x)
-                self.running_var.data = 0.9 * self.running_var.data  + 0.1 * torch.std(x)**2
+                self.running_mean.data = 0.9 * self.running_mean.data + 0.1 * torch.mean(x_stat)
+                self.running_var.data = 0.9 * self.running_var.data  + 0.1 * torch.std(x_stat)**2
             return x
         # in normal mode, PACTUnsignedAct uses the PACTQuantFunc
         else:
@@ -221,9 +222,9 @@ class PACTAsymmetricAct(nn.Module):
         self.running_mean = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
         self.register_buffer('clip_gradient', torch.tensor(True))
-        
+
     def get_eps(self, *args):
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def extra_repr(self):
         r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, symm={symm}, nb_std={nb_std}".format(**self.__dict__)
@@ -245,11 +246,12 @@ class PACTAsymmetricAct(nn.Module):
 
         # in statistics collection mode, the activation works like an identity function (is this intended?)
         if not self.started:
+            x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             with torch.no_grad():
-                self.max[:] = max(self.max.item(), x.max())
-                self.min[:] = min(self.min.item(), x.min())
-                self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x.mean()
-                self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x.std()*x.std()
+                self.max[:] = max(self.max.item(), x_stat.max())
+                self.min[:] = min(self.min.item(), x_stat.min())
+                self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
+                self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
             if self.act_kind == 'identity':
                 return x
             elif self.act_kind == 'relu':
@@ -287,19 +289,19 @@ class PACTIntegerConcat(torch.nn.Module):
         super().__init__()
         self.dim = dim
         self.stack_flag = False
-        
+
         self.acts = torch.nn.ModuleList([])
         for i in range(num_args):
             self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
-            
+
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
         self.n_levels = self.acts[0].n_levels
-            
+
     def reassign_epsilons(self):
         max_clip = -math.inf
         min_clip = math.inf
-        
+
         for i in self.acts:
             if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
                 max_clip = i.clip_hi.data
@@ -327,12 +329,12 @@ class PACTIntegerConcat(torch.nn.Module):
             z = list(map(lambda x: torch.unsqueeze(x, self.dim), x))
         else:
             z = list(x)
-
+        z_act = []
         for idx, i in enumerate(z):
-            z[idx] = self.acts[idx](i)
-        y = torch.cat(z, dim=self.dim)
+            z_act.append(self.acts[idx](i))
+        y = torch.cat(z_act, dim=self.dim)
         return y
-        
+
 class PACTIntegerAdd(torch.nn.Module):
 
     def __init__(
@@ -352,9 +354,6 @@ class PACTIntegerAdd(torch.nn.Module):
         for i in range(num_args):
             self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
             
-#         self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
-#         self.act_out.register_buffer("eps_in", torch.Tensor())
-        
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
         self.n_levels = self.acts[0].n_levels
@@ -362,7 +361,7 @@ class PACTIntegerAdd(torch.nn.Module):
     def reassign_epsilons(self):
         max_clip = -math.inf
         min_clip = math.inf
-        
+
         for i in self.acts:
             if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
                 max_clip = i.clip_hi.data
@@ -401,6 +400,7 @@ class PACTIntegerAdd(torch.nn.Module):
             total = total + self.acts[idx](i)
         return total
 
+
 class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
             self,
@@ -414,25 +414,15 @@ class PACTIntegerMatmul(torch.nn.Module):
     ):
 
         super().__init__()
-#        self.acts = torch.nn.ModuleList([])
-#         for i in range(2):
-#             self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
-        
-#         self.clip_lo = self.acts[0].clip_lo
-#         self.clip_hi = self.acts[0].clip_hi
-#         self.n_levels = self.acts[0].n_levels
         
     def reassign_epsilons(self):
         pass
-#         self.eps_out = self.acts[0].get_eps()*self.acts[1].get_eps()
         
     def forward(self, x: torch.Tensor, y: torch.Tensor):
-#         x = self.acts[0](x)
-#         y = self.acts[1](y)
         mulresult = torch.matmul(x,y)
         return mulresult
 
-    
+
 class PACTConv2d(nn.Conv2d):
     def __init__(
             self,
@@ -508,7 +498,7 @@ class PACTConv2d(nn.Conv2d):
         """
         :return: epsilon of the weight quantization.
         """
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def get_eps_out(self, eps_in, *args, **kwargs):
         """
@@ -532,7 +522,7 @@ class PACTConv2d(nn.Conv2d):
 
     @property
     def weight_int(self):
-        return self.weight_q / self.get_eps_w()
+        return (self.weight_q / self.get_eps_w()).detach().clone().round()
 
 
     def forward(self, x):
@@ -631,7 +621,7 @@ class PACTConv1d(nn.Conv1d):
         self.register_buffer('clip_gradient', torch.tensor(True))
 
         self.register_buffer('clip_gradient', torch.tensor(True))
-        
+
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
@@ -644,7 +634,7 @@ class PACTConv1d(nn.Conv1d):
         """
         :return: epsilon of the weight quantization.
         """
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def get_eps_out(self, eps_in, *args, **kwargs):
         """
@@ -663,7 +653,7 @@ class PACTConv1d(nn.Conv1d):
 
     @property
     def weight_int(self):
-        return self.weight_q / self.get_eps_w()
+        return (self.weight_q / self.get_eps_w()).round()
 
     def forward(self, x):
         if self.started:
@@ -766,7 +756,7 @@ class PACTLinear(nn.Linear):
         """
         :return: epsilon of the weight quantization.
         """
-        return (self.clip_hi-self.clip_lo)/(self.n_levels-1)
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def get_eps_out(self, eps_in, *args, **kwargs):
         """
@@ -784,7 +774,7 @@ class PACTLinear(nn.Linear):
 
     # do not use in training!
     def get_bias_int(self, eps_in):
-        return self.get_bias_q(eps_in)*self.get_eps_out(eps_in)
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
 
     @property
     def weight_q(self):
@@ -797,7 +787,7 @@ class PACTLinear(nn.Linear):
 
     @property
     def weight_int(self):
-        return self.weight_q / self.get_eps_w()
+        return (self.weight_q / self.get_eps_w()).round()
 
     def forward(self, x):
         if self.started:
@@ -823,4 +813,3 @@ class PACTLinear(nn.Linear):
         if l.bias is not None:
             pact_linear.bias.data.copy_(l.bias.data)
         return pact_linear
-
