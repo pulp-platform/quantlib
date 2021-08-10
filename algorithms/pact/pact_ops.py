@@ -57,14 +57,14 @@ class PACTIntegerLayerNorm(torch.nn.Module):
         self.module = copy.deepcopy(module)
 
         self.register_buffer('totScaler', torch.Tensor((255.,)))
-        self.register_buffer('D', torch.Tensor((2**24,)))
+        self.register_buffer('D', torch.Tensor((2**16,)))
         self.register_buffer('maxval', torch.Tensor((1.,)))
         
     def forward(self, x):
         if self.frozen:
             nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
             denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
-            y = torch.floor((self.totScaler*torch.floor(torch.div(nom,denom)))/self.D)
+            y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
             y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
         else:
             y = self.module(x)
@@ -96,6 +96,7 @@ class PACTIntegerSoftmax(torch.nn.Module):
         self.coeffA.data[0] = math.floor(0.3585/eps2)
         self.coeffB.data[0] = math.floor(1.353/eps)
         self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
+        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
         
     def forward(self, x):
         
@@ -105,8 +106,8 @@ class PACTIntegerSoftmax(torch.nn.Module):
             p = xTilde + z * self.log2
             y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
             ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-            return torch.floor(y*(self.n_levels-1)/ysum)
-        
+            out = torch.floor(y*(self.n_levels-1)/ysum)
+            return out
         else:
             y = self.module(x)
             
