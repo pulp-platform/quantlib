@@ -1,8 +1,7 @@
+from .create_modules        import create_quantizer_spec, ANAModuleFactory
+from .create_test_units     import FunctionalEquivalenceUnitGenerator
 from .create_tensors        import BatchSize, InputSize
 from .create_test_units     import TestModule
-from .create_modules        import create_quantizer_spec
-from .create_modules        import ANAModuleFactory
-from .create_test_units     import FunctionalEquivalenceUnitGenerator
 from .functional_unit_tests import numerical_equivalence, visual_equivalence
 
 

@@ -1,10 +1,10 @@
 import torch
 
-from .create_tensors         import BatchSize, InputSize
-from .create_test_units      import TestModule
 from .create_modules         import FloatingPointModuleFactory
 from .create_modules         import create_quantizer_spec, ANAModuleFactory
 from .create_test_units      import ProfilingUnitGenerator
+from .create_tensors         import BatchSize, InputSize
+from .create_test_units      import TestModule
 from .performance_unit_tests import profile
 
 
