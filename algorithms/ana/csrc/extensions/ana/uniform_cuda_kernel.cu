@@ -280,4 +280,3 @@ torch::Tensor uniform_backward_cuda_dispatch(
 
     return grad_out;
 }
-

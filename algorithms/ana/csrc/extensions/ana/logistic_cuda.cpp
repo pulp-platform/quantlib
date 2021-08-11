@@ -33,6 +33,7 @@ torch::Tensor logistic_forward_cuda_dispatch(
     torch::Tensor t,
     torch::Tensor mi,
     torch::Tensor sigma,
+    torch::Tensor strategy,
     torch::Tensor training
 );
 
@@ -104,4 +105,3 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("forward", &logistic_forward_cuda, "ANA logistic noise forward (CUDA)");
     m.def("backward", &logistic_backward_cuda, "ANA logistic noise backward (CUDA)");
 }
-

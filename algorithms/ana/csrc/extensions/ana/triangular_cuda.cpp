@@ -105,4 +105,3 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("forward", &triangular_forward_cuda, "ANA triangular noise forward (CUDA)");
     m.def("backward", &triangular_backward_cuda, "ANA triangular noise backward (CUDA)");
 }
-

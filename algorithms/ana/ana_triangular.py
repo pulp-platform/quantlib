@@ -26,15 +26,17 @@ from .ana_forward import forward_expectation, forward_mode, forward_random
 
 def forward(x_in, q, t, mi, sigma, strategy, training):
 
-    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
+    # shift points with respect to the distribution's mean
+    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]  # dimensions with size 1 enable broadcasting
     shifted_x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if training and sigma != 0.:
-        shifted_x_minus_t_over_s = torch.abs(shifted_x_minus_t / sigma)
-        cdf_temp = (torch.sign(shifted_x_minus_t) * shifted_x_minus_t_over_s * (2 - shifted_x_minus_t_over_s) + 1) / 2
-        cdf = torch.where(shifted_x_minus_t_over_s <= 1., cdf_temp, (shifted_x_minus_t >= 0.).float())
+    # compute cumulative distribution function
+    if training and sigma != 0.0:
+        abs_shifted_x_minus_t_over_s = torch.abs(shifted_x_minus_t / sigma)
+        cdf_temp = (torch.sign(shifted_x_minus_t) * abs_shifted_x_minus_t_over_s * (2 - abs_shifted_x_minus_t_over_s) + 1.0) / 2
+        cdf = torch.where(abs_shifted_x_minus_t_over_s < 1.0, cdf_temp, (shifted_x_minus_t >= 0.0).float())
     else:
-        cdf = (shifted_x_minus_t >= 0.).float()
+        cdf = (shifted_x_minus_t >= 0.0).float()
 
     # compute probability mass function over bins
     cdf = torch.vstack([torch.ones_like(cdf[0])[None, :], cdf, torch.zeros_like(cdf[-1][None, :])])
@@ -55,17 +57,20 @@ def forward(x_in, q, t, mi, sigma, strategy, training):
 
 def backward(grad_in, x_in, q, t, mi, sigma):
 
-    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
+    # shift points with respect to the distribution's mean
+    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]  # dimensions with size 1 enable broadcasting
     shifted_x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if sigma != 0.:
+    # compute probability density function
+    if sigma != 0.0:
         shifted_x_minus_t_over_s = torch.abs(shifted_x_minus_t / sigma)
         pdf = torch.max(torch.Tensor([0.0]).to(device=grad_in.device), 1.0 - shifted_x_minus_t_over_s) / sigma
     else:
         pdf = torch.zeros_like(shifted_x_minus_t)
 
+    # compute gradient
     d = q[1:] - q[:-1]
-    local_jacobian = torch.sum(d.reshape(t_shape) * pdf, 0)
+    local_jacobian = torch.sum(d.reshape(t_shape) * pdf, dim=0)
     grad_out = grad_in * local_jacobian
 
     return grad_out

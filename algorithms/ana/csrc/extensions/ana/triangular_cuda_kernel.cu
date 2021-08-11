@@ -77,7 +77,7 @@ __global__ void triangular_forward_pmf_cuda_kernel(
                 {
                     scalar_t sigma_inv = 1.0 / (*sigma);
                     scalar_t x_minus_t_over_s = pmf[row_offset + it] * sigma_inv;
-                    scalar_t cdf = ((ABS(x_minus_t_over_s) > 1.0f) ? SIGN(x_minus_t_over_s) : (x_minus_t_over_s * (2 - ABS(x_minus_t_over_s))));
+                    scalar_t cdf = ((ABS(x_minus_t_over_s) < 1.0f) ? (x_minus_t_over_s * (2 - ABS(x_minus_t_over_s))) : SIGN(x_minus_t_over_s));
                     pmf[row_offset + it] = (cdf + 1.0f) / 2;
                 }
                 else
@@ -281,4 +281,3 @@ torch::Tensor triangular_backward_cuda_dispatch(
 
     return grad_out;
 }
-

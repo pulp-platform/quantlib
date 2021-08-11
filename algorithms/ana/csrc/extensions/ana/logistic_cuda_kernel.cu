@@ -279,4 +279,3 @@ torch::Tensor logistic_backward_cuda_dispatch(
 
     return grad_out;
 }
-

@@ -29,10 +29,12 @@ def forward(x_in, q, t, mi, sigma, strategy, training):
 
     is_cuda = x_in.is_cuda  # if one ``torch.Tensor`` operand is on GPU, all are
 
-    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
+    # shift points with respect to the distribution's mean
+    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]  # dimensions with size 1 enable broadcasting
     shifted_x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if training and sigma != 0.:
+    # compute cumulative distribution function
+    if training and sigma != 0.0:
         if is_cuda:
             shifted_x_minus_t = shifted_x_minus_t.cpu()
             sigma    = sigma.cpu()
@@ -63,10 +65,12 @@ def backward(grad_in, x_in, q, t, mi, sigma):
 
     is_cuda = grad_in.is_cuda  # if one ``torch.Tensor`` operand is on GPU, all are
 
-    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
+    # shift points with respect to the distribution's mean
+    t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]  # dimensions with size 1 enable broadcasting
     x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if sigma != 0.:
+    # compute probability density function
+    if sigma != 0.0:
         if is_cuda:
             x_minus_t = x_minus_t.cpu()
             sigma    = sigma.cpu()
@@ -76,8 +80,9 @@ def backward(grad_in, x_in, q, t, mi, sigma):
     else:
         pdf = torch.zeros_like(x_minus_t)
 
+    # compute gradient
     d = q[1:] - q[:-1]
-    local_jacobian = torch.sum(d.reshape(t_shape) * pdf, 0)
+    local_jacobian = torch.sum(d.reshape(t_shape) * pdf, dim=0)
     grad_out = grad_in * local_jacobian
 
     return grad_out
