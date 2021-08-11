@@ -1,33 +1,34 @@
-# 
+#
 # pact_ops.py
-# 
+#
 # Author(s):
 # Francesco Conti <f.conti@unibo.it>
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
 #
 # Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 
 import torch
 from torch import nn
 
 from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
-from .util import assert_param_valid
+from .util import assert_param_valid, almost_symm_quant
 import math
+import copy
 
 
 __all__ = [
@@ -39,8 +40,79 @@ __all__ = [
     'PACTQuantize',
     'PACTIntegerAdd',
     'PACTIntegerConcat',
-    'PACTIntegerMatmul'
+    'PACTIntegerMatmul',
+    'PACTIntegerSoftmax',
+    'PACTIntegerLayerNorm',
 ]
+
+class PACTIntegerLayerNorm(torch.nn.Module):
+
+    def __init__(self, module, n_levels: int = 256):
+        super().__init__()
+
+        self.n_levels = n_levels
+        self.frozen = False
+        self.eps_in = 1.
+        self.eps = 1.
+        self.module = copy.deepcopy(module)
+
+        self.register_buffer('totScaler', torch.Tensor((255.,)))
+        self.register_buffer('D', torch.Tensor((2**16,)))
+        self.register_buffer('maxval', torch.Tensor((1.,)))
+
+    def forward(self, x):
+        if self.frozen:
+            nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
+            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
+            y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
+            y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
+        else:
+            y = self.module(x)
+
+            self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
+            scaler = (self.n_levels)/self.maxval
+            self.totScaler.data[0] = math.floor(self.D * scaler)
+
+        return y
+
+class PACTIntegerSoftmax(torch.nn.Module):
+
+    def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
+        super().__init__()
+        self.n_levels = n_levels
+        self.module = copy.deepcopy(module)
+        self.frozen = False
+        self.eps_in = eps_in
+
+        self.register_buffer('coeffA', torch.Tensor((0.3585,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC', torch.Tensor((0.344,)))
+        self.register_buffer('log2', torch.Tensor((4.,)))
+
+    def updateCoeffs(self, eps):
+
+        eps2 = (1./(2**8))/(eps**2)
+
+        self.coeffA.data[0] = math.floor(0.3585/eps2)
+        self.coeffB.data[0] = math.floor(1.353/eps)
+        self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
+        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
+
+    def forward(self, x):
+
+        if self.frozen:
+            xTilde = (x - torch.max(x))
+            z = torch.floor(-xTilde / self.log2)
+            p = xTilde + z * self.log2
+            y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
+            ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+            out = torch.floor(y*(self.n_levels-1)/ysum)
+            return out
+        else:
+            y = self.module(x)
+
+        return y
+
 
 class PACTUnsignedAct(nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.
@@ -272,7 +344,7 @@ class PACTAsymmetricAct(nn.Module):
         else:
             eps = self.get_eps()
             if self.learn_clip and self.symm:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+                    clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
             #TODO: why was this clip_hi+eps??
@@ -315,12 +387,22 @@ class PACTIntegerConcat(torch.nn.Module):
                 max_clip = i.clip_hi.data
                 min_clip = i.clip_lo.data
 
+        # SCHEREMO: This is the part that I might have to think about a bit more...
         for i in self.acts:
-            i.clip_hi.data = max_clip
-            i.clip_lo.data = min_clip
+            if abs(i.min) < abs(i.max)/2:
+                i.symm = False
+                i.clip_hi.data = torch.Tensor((max_clip - min_clip,))
+                i.clip_lo.data = torch.Tensor((0.,))
+            else:
+                i.symm = True
+                if (abs(min_clip) > max_clip):
+                    # Almost symmetrically quantized:
+                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(abs(min_clip), i.n_levels)
+                else:
+                    # Unsigned quantization
+                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(max_clip/2, i.n_levels)
 
-        self.clip_hi.data = max_clip
-        self.clip_lo.data = min_clip
+        self.act_out.eps_in = self.acts[0].get_eps()
 
     def forward(self, *x):
         if self.stack_flag:
@@ -355,7 +437,6 @@ class PACTIntegerAdd(torch.nn.Module):
             self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding))
 
         self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding)
-        self.act_out.register_buffer("eps_in", torch.Tensor())
 
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
@@ -369,19 +450,40 @@ class PACTIntegerAdd(torch.nn.Module):
             if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
                 max_clip = i.clip_hi.data
                 min_clip = i.clip_lo.data
+                diff = max_clip - min_clip
 
+        # SCHEREMO: This is the part that I might have to think about a bit more...
         for i in self.acts:
-            i.clip_hi.data = max_clip
-            i.clip_lo.data = min_clip
+            # Closer to unsigned than to signed -- Is this reasonable?
+            #if abs(i.clip_lo) < abs(i.clip_hi)/2:
+            # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
+            if abs(i.clip_lo) < 5*i.get_eps():
+                i.symm = False
+                i.clip_hi.data.copy_(torch.Tensor((max_clip - min_clip,)))
+                i.clip_lo.data.copy_(torch.Tensor((0.,)))
+            # Closer to signed than unsigned
+            else:
+                i.symm = True
+                if (abs(min_clip) > max_clip):
+                    # Almost symmetrically quantized:
+                    lower_bound, upper_bound  = almost_symm_quant(abs(min_clip), i.n_levels)
+                else:
+                    # Unsigned quantization
+                    lower_bound, upper_bound  = almost_symm_quant(max_clip/2, i.n_levels)
+                i.clip_lo.data.copy_(lower_bound)
+                i.clip_hi.data.copy_(upper_bound)
 
-        self.clip_hi.data = max_clip
-        self.clip_lo.data = min_clip
 
     def forward(self, *x: torch.Tensor):
+#         total = 0
+#         for idx, i in enumerate(x):
+#             total += self.acts[idx](i)
+#         return self.act_out(total)
         total = self.acts[0](x[0])
         for idx, i in enumerate(x[1:]):
-            total = total + self.acts[idx+1](i)
-        return self.act_out(total)
+            total = total + self.acts[idx](i)
+        return total
+
 
 class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
@@ -396,36 +498,13 @@ class PACTIntegerMatmul(torch.nn.Module):
     ):
 
         super().__init__()
-        self.acts = torch.nn.ModuleList([])
-        for i in range(2):
-            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
-
-        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
-        self.act_out.register_buffer("eps_in", torch.Tensor())
-
-        self.clip_lo = self.acts[0].clip_lo
-        self.clip_hi = self.acts[0].clip_hi
-        self.n_levels = self.acts[0].n_levels
 
     def reassign_epsilons(self):
-        max_clip = -math.inf
-        min_clip = math.inf
-
-        for i in self.acts:
-            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
-                max_clip = i.clip_hi.data
-                min_clip = i.clip_lo.data
-
-        for i in self.acts:
-            i.clip_hi.data = max_clip
-            i.clip_lo.data = min_clip
-
-        self.clip_hi.data = max_clip
-        self.clip_lo.data = min_clip
+        pass
 
     def forward(self, x: torch.Tensor, y: torch.Tensor):
         mulresult = torch.matmul(x,y)
-        return self.act_out(mulresult)
+        return mulresult
 
 
 class PACTConv2d(nn.Conv2d):
