@@ -41,10 +41,9 @@
 
 template <typename scalar_t>
 __global__ void triangular_forward_pmf_cuda_kernel(
-    scalar_t * const __restrict__ x_out,
+    scalar_t * const __restrict__ pmf,
     const scalar_t * __restrict__ x_in,
     const int64_t len_x,
-    const scalar_t * __restrict__ q,
     const scalar_t * __restrict__ t,
     const int64_t len_t,
     const scalar_t * __restrict__ mi,

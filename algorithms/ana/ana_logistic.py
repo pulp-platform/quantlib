@@ -22,43 +22,55 @@
 import torch
 from scipy.stats import logistic
 
+from .ana_forward import forward_expectation, forward_mode, forward_random
 
-def forward(x_in, q, t, fmu, fsigma, training):
+
+def forward(x_in, q, t, mi, sigma, strategy, training):
 
     is_cuda = x_in.is_cuda  # if one ``torch.Tensor`` operand is on GPU, all are
 
     t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
-    x_minus_t = x_in - t.reshape(t_shape) - fmu
+    shifted_x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if training and fsigma != 0.:
+    if training and sigma != 0.:
         if is_cuda:
-            x_minus_t = x_minus_t.cpu()
-            fsigma    = fsigma.cpu()
-        cdf = torch.from_numpy(logistic.cdf(x_minus_t.numpy(), 0.0, fsigma.numpy())).to(dtype=x_in.dtype)
+            shifted_x_minus_t = shifted_x_minus_t.cpu()
+            sigma    = sigma.cpu()
+        cdf = torch.from_numpy(logistic.cdf(shifted_x_minus_t.numpy(), 0.0, sigma.numpy())).to(dtype=x_in.dtype)
         if is_cuda:
             cdf = cdf.to(device=x_in.device)
     else:
-        cdf = (x_minus_t >= 0.0).float()
-        cdf = cdf.to(dtype=x_in.dtype)
+        cdf = (shifted_x_minus_t >= 0.0).float()
 
-    d = q[1:] - q[:-1]
-    x_out = q[0] + torch.sum(d.reshape(t_shape) * cdf, 0)
+    # compute probability mass function over bins
+    cdf = torch.vstack([torch.ones_like(cdf[0])[None, :], cdf, torch.zeros_like(cdf[-1][None, :])])
+    pmf = cdf[:-1] - cdf[1:]
+
+    # compute output
+    if strategy == 0:  # expectation
+        x_out = forward_expectation(pmf, q)
+    elif strategy == 1:  # argmax sampling (i.e., mode)
+        x_out = forward_mode(pmf, q)
+    elif strategy == 2:  # random sampling
+        x_out = forward_random(pmf, q)
+    else:
+        raise ValueError  # undefined strategy
 
     return x_out
 
 
-def backward(grad_in, x_in, q, t, bmu, bsigma):
+def backward(grad_in, x_in, q, t, mi, sigma):
 
     is_cuda = grad_in.is_cuda  # if one ``torch.Tensor`` operand is on GPU, all are
 
     t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
-    x_minus_t = x_in - t.reshape(t_shape) - bmu
+    x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if bsigma != 0.:
+    if sigma != 0.:
         if is_cuda:
             x_minus_t = x_minus_t.cpu()
-            bsigma    = bsigma.cpu()
-        pdf = torch.from_numpy(logistic.pdf(x_minus_t.numpy(), 0.0, bsigma.numpy())).to(dtype=grad_in.dtype)
+            sigma    = sigma.cpu()
+        pdf = torch.from_numpy(logistic.pdf(x_minus_t.numpy(), 0.0, sigma.numpy())).to(dtype=grad_in.dtype)
         if is_cuda:
             pdf = pdf.to(device=grad_in.device)
     else:
@@ -69,4 +81,3 @@ def backward(grad_in, x_in, q, t, bmu, bsigma):
     grad_out = grad_in * local_jacobian
 
     return grad_out
-

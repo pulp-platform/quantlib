@@ -39,7 +39,6 @@
 
 // definitions of CUDA kernels (executed on: GPU)
 
-
 template <typename scalar_t>
 __global__ void uniform_forward_pmf_cuda_kernel(
     scalar_t * const __restrict__ pmf,
