@@ -59,7 +59,7 @@ __global__ void triangular_forward_pmf_cuda_kernel(
         int row_offset = ix * PLUS_1(len_t);
 
         // compute shifted thresholds
-        for (int it = 0; it < PLUS_1(len_t); ++it)
+        for (int it = 0; it < len_t; ++it)
         {
             pmf[row_offset + it + 1] = x_in[ix] - *mi - t[it];
         }
