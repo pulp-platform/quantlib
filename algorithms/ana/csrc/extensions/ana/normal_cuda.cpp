@@ -74,7 +74,7 @@ torch::Tensor normal_forward_cuda(
     CHECK_INPUT(strategy);
     CHECK_INPUT(training);
 
-    return normal_forward_cuda_dispatch(x_in, q, t, mi, sigma, training);
+    return normal_forward_cuda_dispatch(x_in, q, t, mi, sigma, strategy, training);
 }
 
 
