@@ -60,43 +60,27 @@ _AC_MAPPER = {'lws': lws, 'uws': uws}
 
 class ANATimer(object):
 
-    def __init__(self, fnoise_mi_spec: dict, fnoise_sigma_spec: dict, bnoise_mi_spec: dict, bnoise_sigma_spec: dict):
+    def __init__(self,
+                 mi_spec: dict,
+                 sigma_spec: dict):
 
-        self._fnoise_mi = None
-        assert ANATimer.check_spec(fnoise_mi_spec, is_sigma=False)
-        self._fnoise_mi_base = fnoise_mi_spec['base']
-        self._fnoise_mi_fun  = partial(_AC_MAPPER[fnoise_mi_spec['fun']], **fnoise_mi_spec['kwargs'])
+        self._mi = None
+        assert ANATimer.check_spec(mi_spec, is_sigma=False)
+        self._mi_base = mi_spec['base']
+        self._mi_fun  = partial(_AC_MAPPER[mi_spec['fun']], **mi_spec['kwargs'])
 
-        self._fnoise_sigma = None
-        assert ANATimer.check_spec(fnoise_sigma_spec, is_sigma=True)
-        self._fnoise_sigma_base = fnoise_sigma_spec['base']
-        self._fnoise_sigma_fun  = partial(_AC_MAPPER[fnoise_sigma_spec['fun']], **fnoise_sigma_spec['kwargs'])
-
-        self._bnoise_mi = None
-        assert ANATimer.check_spec(bnoise_mi_spec, is_sigma=False)
-        self._bnoise_mi_base = bnoise_mi_spec['base']
-        self._bnoise_mi_fun  = partial(_AC_MAPPER[bnoise_mi_spec['fun']], **bnoise_mi_spec['kwargs'])
-
-        self._bnoise_sigma = None
-        assert ANATimer.check_spec(bnoise_sigma_spec, is_sigma=True)
-        self._bnoise_sigma_base = bnoise_sigma_spec['base']
-        self._bnoise_sigma_fun  = partial(_AC_MAPPER[bnoise_sigma_spec['fun']], **bnoise_sigma_spec['kwargs'])
+        self._sigma = None
+        assert ANATimer.check_spec(sigma_spec, is_sigma=True)
+        self._sigma_base = sigma_spec['base']
+        self._sigma_fun  = partial(_AC_MAPPER[sigma_spec['fun']], **sigma_spec['kwargs'])
 
     @property
-    def fnoise_mi(self) -> Union[None, float]:
-        return self._fnoise_mi
+    def mi(self) -> Union[None, float]:
+        return self._mi
 
     @property
-    def fnoise_sigma(self) -> Union[None, float]:
-        return self._fnoise_sigma
-
-    @property
-    def bnoise_mi(self) -> Union[None, float]:
-        return self._bnoise_mi
-
-    @property
-    def bnoise_sigma(self) -> Union[None, float]:
-        return self._bnoise_sigma
+    def sigma(self) -> Union[None, float]:
+        return self._sigma
 
     @staticmethod
     def check_spec(spec: dict, is_sigma: bool) -> bool:
@@ -125,12 +109,8 @@ class ANATimer(object):
         return is_correct
 
     def step(self, t: int) -> None:
-
-        self._fnoise_mi    = self._fnoise_mi_base    * self._fnoise_mi_fun(t)
-        self._fnoise_sigma = self._fnoise_sigma_base * self._fnoise_sigma_fun(t)
-
-        self._bnoise_mi    = self._bnoise_mi_base    * self._bnoise_mi_fun(t)
-        self._bnoise_sigma = self._bnoise_sigma_base * self._bnoise_sigma_fun(t)
+        self._mi    = self._mi_base    * self._mi_fun(t)
+        self._sigma = self._sigma_base * self._sigma_fun(t)
 
 
 Timer2Modules = typing.NamedTuple('Timer2Modules', [('timer', ANATimer), ('modules', List[torch.nn.Module])])
@@ -150,12 +130,7 @@ class ANAController(Controller):
     For simplicity, ANA ``torch.nn.Module``s add the same noise to all the
     components of their input ``torch.Tensor``s. This reduces the number of
     hyper-parameters required by each ANA module to two (the mean and the
-    standard deviation of the distribution). However, the ANA algorithm can
-    be interpreted as a generalisation of the commonly used *straight-through
-    estimator* (STE) algorithm and of other algorithms if we allow it to use
-    different noise distributions during the forward and backward passes of
-    the training algorithm. Therefore, each ANA module is attached four
-    hyper-parameters: two for the forward pass, and two for the backward pass.
+    standard deviation of the distribution).
     """
 
     def __init__(self, module: torch.nn.Module, ctrl_spec: List) -> None:
@@ -183,7 +158,7 @@ class ANAController(Controller):
 
         # build timers and link them to the specified ANA modules
         for timer_spec in ctrl_spec:
-            timer        = ANATimer(timer_spec['fnoise']['mi'], timer_spec['fnoise']['sigma'], timer_spec['bnoise']['mi'], timer_spec['bnoise']['sigma'])
+            timer        = ANATimer(timer_spec['mi'], timer_spec['sigma'])
             modules      = list(map(lambda n: self._n2m[n], set(timer_spec['modules'])))
             self._timer2modules.append(Timer2Modules(timer=timer, modules=modules))
 
@@ -213,20 +188,13 @@ class ANAController(Controller):
         for timer, modules in self._timer2modules:
 
             timer.step(self._global_step)
-
             for m in modules:
-                # update forward noise
-                m.set_fnoise(timer.fnoise_mi, timer.fnoise_sigma)
-                # update backward noise
-                m.set_bnoise(timer.bnoise_mi, timer.bnoise_sigma)
+                m.set_noise(timer.mi, timer.sigma)
 
     def step_pre_validation_epoch(self, *args, **kwargs) -> None:
 
         for timer, modules in self._timer2modules:
 
             for m in modules:
-                # remove forward noise
-                m.set_fnoise(0.0, 0.0)
-                # # remove backward noise
-                # m.set_bnoise(0.0, 0.0)
-
+                # remove noise
+                m.set_noise(0.0, 0.0)

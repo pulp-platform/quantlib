@@ -74,7 +74,7 @@ __global__ void normal_forward_pmf_cuda_kernel(
                 if (*training && (*sigma != 0.0f))
                 {
                     scalar_t sigma_inv = 1.0f / (*sigma);
-                    scalar_t shifted_x_minus_t_over_s = shifted_x_minus_t * sigma_inv;
+                    scalar_t shifted_x_minus_t_over_s = pmf[row_offset + it] * sigma_inv;
                     pmf[row_offset + it] = (scalar_t) normcdf((double) shifted_x_minus_t_over_s);
                 }
                 else
