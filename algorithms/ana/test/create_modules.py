@@ -31,10 +31,10 @@ class ModuleFactory(object):
 
         if linear_or_conv2d == 'linear':
 
-            linear1, linear1_size = self.get_module('linear', training, device, input_size, *kwargs)
+            linear1, linear1_size = self.get_module('linear', training, device, input_size, **kwargs)
             batchnorm1 = nn.BatchNorm1d(linear1_size[-1])
-            act1, act1_size = self.get_module('activation', training, device, linear1_size, *kwargs)
-            linear2, linear2_size = self.get_module('linear', training, device, act1_size, *kwargs)
+            act1, act1_size = self.get_module('activation', training, device, linear1_size, **kwargs)
+            linear2, linear2_size = self.get_module('linear', training, device, act1_size, **kwargs)
 
             network = nn.Sequential(linear1, batchnorm1, act1, linear2)
 
@@ -42,10 +42,10 @@ class ModuleFactory(object):
 
         elif linear_or_conv2d == 'conv2d':
 
-            conv1, conv1_size = self.get_module('conv2d', training, device, input_size, *kwargs)
+            conv1, conv1_size = self.get_module('conv2d', training, device, input_size, **kwargs)
             batchnorm1 = nn.BatchNorm2d(conv1_size[1])
-            act1, act1_size = self.get_module('activation', training, device, conv1_size, *kwargs)
-            conv2, conv2_size = self.get_module('conv2d', training, device, act1_size, *kwargs)
+            act1, act1_size = self.get_module('activation', training, device, conv1_size, **kwargs)
+            conv2, conv2_size = self.get_module('conv2d', training, device, act1_size, **kwargs)
 
             network = nn.Sequential(conv1, batchnorm1, act1, conv2)
 
