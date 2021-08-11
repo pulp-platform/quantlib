@@ -37,13 +37,13 @@ def compare_tensors(t1: torch.Tensor,
     return are_equivalent
 
 
-def numerical_equivalence(x_gen_cpu: TensorGenerator,
-                          module_cpu: nn.Module,
+def numerical_equivalence(x_gen_cpu:    TensorGenerator,
+                          module_cpu:   nn.Module,
                           grad_gen_cpu: TensorGenerator,
-                          x_gen_gpu: TensorGenerator,
-                          module_gpu: nn.Module,
+                          x_gen_gpu:    TensorGenerator,
+                          module_gpu:   nn.Module,
                           grad_gen_gpu: TensorGenerator,
-                          tolerance: float = 1e-8) -> bool:
+                          tolerance:    float = 1e-8) -> bool:
     """Compute whether the CPU and GPU versions of ANA modules are equivalent."""
 
     assert type(module_cpu) == type(module_gpu)

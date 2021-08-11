@@ -68,6 +68,7 @@ class ANAModule(nn.Module):
 
         # quantum
         eps = torch.Tensor([quantizer_spec['eps']])
+        assert eps > 0.0
         anamod.register_parameter('eps', nn.Parameter(eps, requires_grad=False))
 
     @staticmethod
