@@ -6,7 +6,7 @@
 
 
 template <typename scalar_t>
-__global__ void forward_cuda_kernel_expectation(
+__global__ void forward_expectation_cuda_kernel(
     scalar_t * const __restrict__ x_out,
     scalar_t * const __restrict__ pmf,
     const int64_t len_x,
@@ -37,7 +37,7 @@ __global__ void forward_cuda_kernel_expectation(
 
 
 template <typename scalar_t>
-__global__ void forward_cuda_kernel_mode(
+__global__ void forward_mode_cuda_kernel(
     scalar_t * const __restrict__ x_out,
     scalar_t * const __restrict__ pmf,
     const int64_t len_x,
@@ -74,7 +74,7 @@ __global__ void forward_cuda_kernel_mode(
 
 
 template <typename scalar_t>
-__global__ void forward_cuda_kernel_random(
+__global__ void forward_random_cuda_kernel(
     scalar_t * const __restrict__ x_out,
     scalar_t * const __restrict__ us,     // samples from the uniform over [0, 1)
     scalar_t * const __restrict__ pmf,

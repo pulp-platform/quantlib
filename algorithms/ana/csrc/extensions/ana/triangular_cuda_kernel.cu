@@ -40,7 +40,7 @@
 // definitions of CUDA kernels (executed on: GPU)
 
 template <typename scalar_t>
-__global__ void triangular_forward_cuda_kernel(
+__global__ void triangular_forward_pmf_cuda_kernel(
     scalar_t * const __restrict__ x_out,
     const scalar_t * __restrict__ x_in,
     const int64_t len_x,
@@ -177,9 +177,9 @@ torch::Tensor triangular_forward_cuda_dispatch(
     // compute PMF over bins (i.e., the quantization levels)
     AT_DISPATCH_FLOATING_TYPES(
         x_in.type(),
-        "uniform_forward_cuda_kernel_pmf",
+        "triangular_forward_pmf_cuda_kernel",
         ([&] {
-            uniform_forward_cuda_kernel_pmf<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+            triangular_forward_pmf_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                 pmf.data_ptr<scalar_t>(),
                 x_in.data_ptr<scalar_t>(),
                 x_in.numel(),
@@ -197,9 +197,9 @@ torch::Tensor triangular_forward_cuda_dispatch(
         case 0:  // expectation
             AT_DISPATCH_FLOATING_TYPES(
                 x_in.type(),
-                "uniform_forward_cuda_kernel_expectation",
+                "triangular_forward_expectation_cuda_kernel",
                 ([&] {
-                    forward_cuda_kernel_expectation<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                    forward_expectation_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                         x_out.data_ptr<scalar_t>(),
                         pmf.data_ptr<scalar_t>(),
                         x_in.numel(),
@@ -213,9 +213,9 @@ torch::Tensor triangular_forward_cuda_dispatch(
         case 1:  // argmax sampling (i.e., mode)
             AT_DISPATCH_FLOATING_TYPES(
                 x_in.type(),
-                "uniform_forward_cuda_kernel_mode",
+                "triangular_forward_mode_cuda_kernel",
                 ([&] {
-                    forward_cuda_kernel_mode<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                    forward_mode_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                         x_out.data_ptr<scalar_t>(),
                         pmf.data_ptr<scalar_t>(),
                         x_in.numel(),
@@ -230,9 +230,9 @@ torch::Tensor triangular_forward_cuda_dispatch(
             auto us = torch::rand_like(x_in);
             AT_DISPATCH_FLOATING_TYPES(
                 x_in.type(),
-                "uniform_forward_cuda_kernel_random",
+                "triangular_forward_random_cuda_kernel",
                 ([&] {
-                    forward_cuda_kernel_random<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                    forward_random_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                         x_out.data_ptr<scalar_t>(),
                         us.data_ptr<scalar_t>(),
                         pmf.data_ptr<scalar_t>(),
@@ -264,7 +264,7 @@ torch::Tensor triangular_backward_cuda_dispatch(
 
     AT_DISPATCH_FLOATING_TYPES(
         x_in.type(),
-        "triangular_backward_cuda",
+        "triangular_backward_cuda_kernel",
         ([&] {
             triangular_backward_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                 grad_out.data_ptr<scalar_t>(),

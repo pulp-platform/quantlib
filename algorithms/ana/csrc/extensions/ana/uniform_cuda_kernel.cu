@@ -41,7 +41,7 @@
 
 
 template <typename scalar_t>
-__global__ void uniform_forward_cuda_kernel_pmf(
+__global__ void uniform_forward_pmf_cuda_kernel(
     scalar_t * const __restrict__ pmf,
     scalar_t * const __restrict__ x_in,
     const int64_t len_x,
@@ -175,9 +175,9 @@ torch::Tensor uniform_forward_cuda_dispatch(
     // compute PMF over bins (i.e., the quantization levels)
     AT_DISPATCH_FLOATING_TYPES(
         x_in.type(),
-        "uniform_forward_cuda_kernel_pmf",
+        "uniform_forward_pmf_cuda_kernel",
         ([&] {
-            uniform_forward_cuda_kernel_pmf<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+            uniform_forward_pmf_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                 pmf.data_ptr<scalar_t>(),
                 x_in.data_ptr<scalar_t>(),
                 x_in.numel(),
@@ -195,9 +195,9 @@ torch::Tensor uniform_forward_cuda_dispatch(
         case 0:  // expectation
             AT_DISPATCH_FLOATING_TYPES(
                 x_in.type(),
-                "uniform_forward_cuda_kernel_expectation",
+                "uniform_forward_expectation_cuda_kernel",
                 ([&] {
-                    forward_cuda_kernel_expectation<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                    forward_expectation_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                         x_out.data_ptr<scalar_t>(),
                         pmf.data_ptr<scalar_t>(),
                         x_in.numel(),
@@ -211,9 +211,9 @@ torch::Tensor uniform_forward_cuda_dispatch(
         case 1:  // argmax sampling (i.e., mode)
             AT_DISPATCH_FLOATING_TYPES(
                 x_in.type(),
-                "uniform_forward_cuda_kernel_mode",
+                "uniform_forward_mode_cuda_kernel",
                 ([&] {
-                    forward_cuda_kernel_mode<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                    forward_mode_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                         x_out.data_ptr<scalar_t>(),
                         pmf.data_ptr<scalar_t>(),
                         x_in.numel(),
@@ -228,9 +228,9 @@ torch::Tensor uniform_forward_cuda_dispatch(
             auto us = torch::rand_like(x_in);
             AT_DISPATCH_FLOATING_TYPES(
                 x_in.type(),
-                "uniform_forward_cuda_kernel_random",
+                "uniform_forward_random_cuda_kernel",
                 ([&] {
-                    forward_cuda_kernel_random<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                    forward_random_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                         x_out.data_ptr<scalar_t>(),
                         us.data_ptr<scalar_t>(),
                         pmf.data_ptr<scalar_t>(),
@@ -263,7 +263,7 @@ torch::Tensor uniform_backward_cuda_dispatch(
     // see PyTorch's ATen ("A TENsor") library; the full path from PyTorch GitHub repo's main is `aten/src/ATen/Dispatch.h`
     AT_DISPATCH_FLOATING_TYPES(
         x_in.type(),
-        "uniform_backward_cuda",
+        "uniform_backward_cuda_kernel",
         ([&] {
             uniform_backward_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
                 grad_out.data_ptr<scalar_t>(),
