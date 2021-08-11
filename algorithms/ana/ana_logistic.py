@@ -43,6 +43,7 @@ def forward(x_in, q, t, mi, sigma, strategy, training):
             cdf = cdf.to(device=x_in.device)
     else:
         cdf = (shifted_x_minus_t >= 0.0).float()
+        cdf = cdf.to(dtype=x_in.dtype)
 
     # compute probability mass function over bins
     cdf = torch.vstack([torch.ones_like(cdf[0])[None, :], cdf, torch.zeros_like(cdf[-1][None, :])])
@@ -67,18 +68,18 @@ def backward(grad_in, x_in, q, t, mi, sigma):
 
     # shift points with respect to the distribution's mean
     t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]  # dimensions with size 1 enable broadcasting
-    x_minus_t = x_in - mi - t.reshape(t_shape)
+    shifted_x_minus_t = x_in - mi - t.reshape(t_shape)
 
     # compute probability density function
     if sigma != 0.0:
         if is_cuda:
-            x_minus_t = x_minus_t.cpu()
+            shifted_x_minus_t = shifted_x_minus_t.cpu()
             sigma    = sigma.cpu()
-        pdf = torch.from_numpy(logistic.pdf(x_minus_t.numpy(), 0.0, sigma.numpy())).to(dtype=grad_in.dtype)
+        pdf = torch.from_numpy(logistic.pdf(shifted_x_minus_t.numpy(), 0.0, sigma.numpy())).to(dtype=grad_in.dtype)
         if is_cuda:
             pdf = pdf.to(device=grad_in.device)
     else:
-        pdf = torch.zeros_like(x_minus_t)
+        pdf = torch.zeros_like(shifted_x_minus_t)
 
     # compute gradient
     d = q[1:] - q[:-1]

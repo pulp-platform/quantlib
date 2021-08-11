@@ -120,14 +120,14 @@ __global__ void uniform_backward_cuda_kernel(
         for (int it = 0; it < len_t; ++it)
         {
             // input position relative to the threshold
-            scalar_t x_minus_t = x_in[ix] - t[it] - *mi;
+            scalar_t shifted_x_minus_t = x_in[ix] - t[it] - *mi;
 
             // the derivative of the expected (i.e., regularised) step function is the PDF of the uniform distribution
             scalar_t pdf;
             if (*sigma != 0.0f)
             {
                 scalar_t sigma_inv = 1.0f / (*sigma);
-                scalar_t local_derivative = (scalar_t) (ABS(x_minus_t) <= (*sigma));
+                scalar_t local_derivative = (scalar_t) (ABS(shifted_x_minus_t) <= (*sigma));
                 pdf = 0.5f * sigma_inv * local_derivative;
             }
             else

@@ -76,8 +76,8 @@ __global__ void triangular_forward_pmf_cuda_kernel(
                 if (*training && (*sigma != 0.0f))
                 {
                     scalar_t sigma_inv = 1.0 / (*sigma);
-                    scalar_t x_minus_t_over_s = pmf[row_offset + it] * sigma_inv;
-                    scalar_t cdf = ((ABS(x_minus_t_over_s) < 1.0f) ? (x_minus_t_over_s * (2 - ABS(x_minus_t_over_s))) : SIGN(x_minus_t_over_s));
+                    scalar_t shifted_x_minus_t_over_s = pmf[row_offset + it] * sigma_inv;
+                    scalar_t cdf = ((ABS(shifted_x_minus_t_over_s) < 1.0f) ? (shifted_x_minus_t_over_s * (2 - ABS(shifted_x_minus_t_over_s))) : SIGN(shifted_x_minus_t_over_s));
                     pmf[row_offset + it] = (cdf + 1.0f) / 2;
                 }
                 else
@@ -117,20 +117,20 @@ __global__ void triangular_backward_cuda_kernel(
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
     if (ix < len_x)
     {
-        float sum = 0.0f;
+        scalar_t sum = 0.0f;
 
         for (int it = 0; it < len_t; ++it)
         {
             // input position relative to the threshold
-            float x_minus_t  = x_in[ix] - t[it] - *mi;
+            scalar_t shifted_x_minus_t  = x_in[ix] - t[it] - *mi;
 
             // the derivative of the expected (i.e., regularised) step function is the PDF of the triangular distribution
-            float pdf;
+            scalar_t pdf;
             if (*sigma != 0.0f)
             {
-                float sigma_inv = 1.0f / (*sigma);
-                float abs_x_minus_t_over_s = ABS(x_minus_t * sigma_inv);
-                pdf = ((abs_x_minus_t_over_s > 1.0f) ? 0.0f : (1.0f - abs_x_minus_t_over_s) * sigma_inv);
+                scalar_t sigma_inv = 1.0f / (*sigma);
+                scalar_t abs_shifted_x_minus_t_over_s = ABS(shifted_x_minus_t * sigma_inv);
+                pdf = ((abs_shifted_x_minus_t_over_s > 1.0f) ? 0.0f : (1.0f - abs_shifted_x_minus_t_over_s) * sigma_inv);
             }
             else
             {
@@ -138,7 +138,7 @@ __global__ void triangular_backward_cuda_kernel(
             }
 
             // dilate and accumulate expected derivative
-            float dq = q[it + 1] - q[it];
+            scalar_t dq = q[it + 1] - q[it];
             sum += dq * pdf;
         }
 
