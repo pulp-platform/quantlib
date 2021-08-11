@@ -1,13 +1,18 @@
 from .create_modules        import create_quantizer_spec, ANAModuleFactory
 from .create_test_units     import FunctionalEquivalenceUnitGenerator
-from .create_tensors        import BatchSize, InputSize
-from .create_test_units     import TestModule
-from .functional_unit_tests import numerical_equivalence, visual_equivalence
+# >>> from .create_tensors        import BatchSize, InputSize
+# >>> from .create_test_units     import TestModule
+# >>> from .functional_unit_tests import numerical_equivalence, visual_equivalence
 
 
-qs = create_quantizer_spec(2, True, True, 1.0)  # the quantizer is the only hyper-parameter that is fixed in the beginning
-amf = ANAModuleFactory(qs)
-feug = FunctionalEquivalenceUnitGenerator(amf)
+def get_ana_feug() -> FunctionalEquivalenceUnitGenerator:
+    """Create a generator of functional equivalence test units for ternary ANA
+    modules.
+    """
+    qs       = create_quantizer_spec(2, True, True, 1.0)  # the quantizer is the only hyper-parameter that is fixed in the beginning
+    amf      = ANAModuleFactory(qs)
+    ana_feug = FunctionalEquivalenceUnitGenerator(amf)
+    return ana_feug
 
 # 3 batch sizes (BatchSize): SINGLE, SMALL, LARGE
 # 3 input sizes (InputSize): SMALL, NORMAL, LARGE
@@ -18,8 +23,9 @@ feug = FunctionalEquivalenceUnitGenerator(amf)
 # 2 forward computation strategies (int): 0 (expecation), 1 (mode)
 # -------------------------------------------------------------------------------
 # 4 * 2 * 3 * 3 * 4 = 288 tests
-(x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONLINEAR, 'uniform', -0.5, 1.0, 0)
-numerical_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)
+# -------------------------------------------------------------------------------
+# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONLINEAR, 'uniform', -0.5, 1.0, 0)
+# >>> numerical_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)
 
 # 3 batch sizes (BatchSize): SINGLE, SMALL, LARGE
 # 3 input sizes (InputSize): SMALL, NORMAL, LARGE
@@ -30,8 +36,9 @@ numerical_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu
 # 3 forward computation strategies (int): 0 (expecation), 1 (mode), 2 (random)
 # ----------------------------------------------------------------------------
 # 4 * 3 * 3 * 3 * 2 = 216 tests
-(x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONCONV2D, 'uniform', -0.5, 1.0, 2)
-visual_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)
+# ----------------------------------------------------------------------------
+# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONCONV2D, 'uniform', -0.5, 1.0, 2)
+# >>> visual_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)
 
 # 3 batch sizes (BatchSize): SINGLE, SMALL, LARGE
 # 3 input sizes (InputSize): SMALL, NORMAL, LARGE
@@ -42,5 +49,6 @@ visual_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, g
 # 3 forward computation strategies (int): 0 (expecation), 1 (mode), 2 (random)
 # ----------------------------------------------------------------------------
 # 4 * 3 * 3 * 3 * 2 = 216 tests
-(x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.CONV2D, 'uniform', -0.5, 1.0, 2)
-visual_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)
+# ----------------------------------------------------------------------------
+# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.CONV2D, 'uniform', -0.5, 1.0, 2)
+# >>> visual_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)

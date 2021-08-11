@@ -18,7 +18,7 @@ class ModuleFactory(object):
                    training: bool,
                    device: torch.device,
                    input_size: Union[Tuple[int, int], Tuple[int, int, int, int]],
-                   *kwargs) -> [nn.Module, Union[Tuple[int, int], Tuple[int, int, int, int]]]:
+                   **kwargs) -> [nn.Module, Union[Tuple[int, int], Tuple[int, int, int, int]]]:
 
         raise NotImplementedError
 
