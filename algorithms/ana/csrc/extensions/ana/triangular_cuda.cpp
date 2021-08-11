@@ -31,8 +31,9 @@ torch::Tensor triangular_forward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mi,
+    torch::Tensor sigma,
+    torch::Tensor strategy,
     torch::Tensor training
 );
 
@@ -41,8 +42,8 @@ torch::Tensor triangular_backward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mi,
+    torch::Tensor sigma
 );
 
 
@@ -59,19 +60,21 @@ torch::Tensor triangular_forward_cuda(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mi,
+    torch::Tensor sigma,
+    torch::Tensor strategy,
     torch::Tensor training
 )
 {
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(fmu);
-    CHECK_INPUT(fsigma);
+    CHECK_INPUT(mi);
+    CHECK_INPUT(sigma);
+    CHECK_INPUT(strategy);
     CHECK_INPUT(training);
 
-    return triangular_forward_cuda_dispatch(x_in, q, t, fmu, fsigma, training);
+    return triangular_forward_cuda_dispatch(x_in, q, t, mi, sigma, strategy, training);
 }
 
 
@@ -80,18 +83,18 @@ torch::Tensor triangular_backward_cuda(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mi,
+    torch::Tensor sigma
 )
 {
     CHECK_INPUT(grad_in);
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(bmu);
-    CHECK_INPUT(bsigma);
+    CHECK_INPUT(mi);
+    CHECK_INPUT(sigma);
 
-    return triangular_backward_cuda_dispatch(grad_in, x_in, q, t, bmu, bsigma);
+    return triangular_backward_cuda_dispatch(grad_in, x_in, q, t, mi, sigma);
 }
 
 

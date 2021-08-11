@@ -31,7 +31,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor mu,
+    torch::Tensor mi,
     torch::Tensor sigma,
     torch::Tensor strategy,
     torch::Tensor training
@@ -42,7 +42,7 @@ torch::Tensor uniform_backward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor mu,
+    torch::Tensor mi,
     torch::Tensor sigma
 );
 
@@ -60,7 +60,7 @@ torch::Tensor uniform_forward_cuda(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor mu,
+    torch::Tensor mi,
     torch::Tensor sigma,
     torch::Tensor strategy,
     torch::Tensor training
@@ -69,12 +69,12 @@ torch::Tensor uniform_forward_cuda(
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(mu);
+    CHECK_INPUT(mi);
     CHECK_INPUT(sigma);
     CHECK_INPUT(strategy);
     CHECK_INPUT(training);
 
-    return uniform_forward_cuda_dispatch(x_in, q, t, mu, sigma, strategy, training);
+    return uniform_forward_cuda_dispatch(x_in, q, t, mi, sigma, strategy, training);
 }
 
 
@@ -83,7 +83,7 @@ torch::Tensor uniform_backward_cuda(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor mu,
+    torch::Tensor mi,
     torch::Tensor sigma
 )
 {
@@ -91,10 +91,10 @@ torch::Tensor uniform_backward_cuda(
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(mu);
+    CHECK_INPUT(mi);
     CHECK_INPUT(sigma);
 
-    return uniform_backward_cuda_dispatch(grad_in, x_in, q, t, mu, sigma);
+    return uniform_backward_cuda_dispatch(grad_in, x_in, q, t, mi, sigma);
 }
 
 

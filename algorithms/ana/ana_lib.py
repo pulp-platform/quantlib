@@ -82,22 +82,22 @@ class ANATriangular(torch.autograd.Function):
     on the jumps positions.
     """
     @staticmethod
-    def forward(ctx, x_in, q, t, fmu, fsigma, bmu, bsigma, training):
-        ctx.save_for_backward(x_in, q, t, bmu, bsigma)
+    def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
+        ctx.save_for_backward(x_in, q, t, mi, sigma)
         if use_ana_cuda_kernels and x_in.is_cuda:
-            x_out = ana_triangular_cuda.forward(x_in, q, t, fmu, fsigma, torch.Tensor([training]).to(fsigma))
+            x_out = ana_triangular_cuda.forward(x_in, q, t, mi, sigma, strategy, torch.Tensor([training]).to(sigma))
         else:
-            x_out = ana_triangular.forward(x_in, q, t, fmu, fsigma, training)
+            x_out = ana_triangular.forward(x_in, q, t, mi, sigma, strategy, training)
         return x_out
 
     @staticmethod
     def backward(ctx, grad_in):
-        x_in, q, t, bmu, bsigma = ctx.saved_tensors
+        x_in, q, t, mi, sigma = ctx.saved_tensors
         if use_ana_cuda_kernels and grad_in.is_cuda:
-            grad_out = ana_triangular_cuda.backward(grad_in, x_in, q, t, bmu, bsigma)
+            grad_out = ana_triangular_cuda.backward(grad_in, x_in, q, t, mi, sigma)
         else:
-            grad_out = ana_triangular.backward(grad_in, x_in, q, t, bmu, bsigma)
-        return grad_out, None, None, None, None, None, None, None
+            grad_out = ana_triangular.backward(grad_in, x_in, q, t, mi, sigma)
+        return grad_out, None, None, None, None, None, None
 
 
 # normal noise

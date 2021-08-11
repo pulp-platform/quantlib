@@ -21,42 +21,51 @@
 
 import torch
 
+from .ana_forward import forward_expectation, forward_mode, forward_random
 
-def forward(x_in, q, t, fmu, fsigma, training):
+
+def forward(x_in, q, t, mi, sigma, strategy, training):
 
     t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
-    x_minus_t = x_in - t.reshape(t_shape) - fmu
+    shifted_x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if training and fsigma != 0.:
-        x_minus_t_over_s = torch.abs(x_minus_t / fsigma)
-        cdf_temp = (torch.sign(x_minus_t) * x_minus_t_over_s * (2 - x_minus_t_over_s) + 1) / 2
-        cond = (x_minus_t_over_s <= 1.)
-        cdf = torch.zeros_like(x_minus_t)
-        cdf[cond] = cdf_temp[cond]
-        cdf[~cond] = (x_minus_t >= 0.).float()[~cond]
+    if training and sigma != 0.:
+        shifted_x_minus_t_over_s = torch.abs(shifted_x_minus_t / sigma)
+        cdf_temp = (torch.sign(shifted_x_minus_t) * shifted_x_minus_t_over_s * (2 - shifted_x_minus_t_over_s) + 1) / 2
+        cdf = torch.where(shifted_x_minus_t_over_s <= 1., cdf_temp, (shifted_x_minus_t >= 0.).float())
     else:
-        cdf = (x_minus_t >= 0.).float()
+        cdf = (shifted_x_minus_t >= 0.).float()
 
-    d = q[1:] - q[:-1]
-    x_out = q[0] + torch.sum(d.reshape(t_shape) * cdf, 0)
+    # compute probability mass function over bins
+    cdf = torch.vstack([torch.ones_like(cdf[0])[None, :], cdf, torch.zeros_like(cdf[-1][None, :])])
+    pmf = cdf[:-1] - cdf[1:]
+
+    # compute output
+    if strategy == 0:  # expectation
+        x_out = forward_expectation(pmf, q)
+    elif strategy == 1:  # argmax sampling (i.e., mode)
+        x_out = forward_mode(pmf, q)
+    elif strategy == 2:  # random sampling
+        x_out = forward_random(pmf, q)
+    else:
+        raise ValueError  # undefined strategy
 
     return x_out
 
 
-def backward(grad_in, x_in, q, t, bmu, bsigma):
+def backward(grad_in, x_in, q, t, mi, sigma):
 
     t_shape = [t.numel()] + [1 for _ in range(x_in.dim())]
-    x_minus_t = x_in - t.reshape(t_shape) - bmu
+    shifted_x_minus_t = x_in - mi - t.reshape(t_shape)
 
-    if bsigma != 0.:
-        x_minus_t_over_s = torch.abs(x_minus_t / bsigma)
-        pdf = torch.max(torch.Tensor([0.0]).to(device=grad_in.device), 1.0 - x_minus_t_over_s) / bsigma
+    if sigma != 0.:
+        shifted_x_minus_t_over_s = torch.abs(shifted_x_minus_t / sigma)
+        pdf = torch.max(torch.Tensor([0.0]).to(device=grad_in.device), 1.0 - shifted_x_minus_t_over_s) / sigma
     else:
-        pdf = torch.zeros_like(x_minus_t)
+        pdf = torch.zeros_like(shifted_x_minus_t)
 
     d = q[1:] - q[:-1]
     local_jacobian = torch.sum(d.reshape(t_shape) * pdf, 0)
     grad_out = grad_in * local_jacobian
 
     return grad_out
-

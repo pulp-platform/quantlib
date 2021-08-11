@@ -27,11 +27,14 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include "forward.h"
+
 
 #define THREADS_PER_BLOCK 1024
 
 #define SIGN(x) ((x < 0.0f) ? -1.0f : 1.0f)
 #define ABS(x) ((x < 0.0f) ? -x : x)
+#define PLUS_1(x) (x + 1)
 
 
 // definitions of CUDA kernels (executed on: GPU)
@@ -44,41 +47,53 @@ __global__ void triangular_forward_cuda_kernel(
     const scalar_t * __restrict__ q,
     const scalar_t * __restrict__ t,
     const int64_t len_t,
-    const scalar_t * __restrict__ fmu,
-    const scalar_t * __restrict__ fsigma,
+    const scalar_t * __restrict__ mi,
+    const scalar_t * __restrict__ sigma,
     const scalar_t * __restrict__ training
 )
 {
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
+
     if (ix < len_x)
     {
-        float sum = q[0];
+        // pre-compute row offset from the beginning of the `pmf` array
+        int row_offset = ix * PLUS_1(len_t);
 
-        for (int it = 0; it < len_t; ++it)
+        // compute shifted thresholds
+        for (int it = 0; it < PLUS_1(len_t); ++it)
         {
-            // input position relative to the threshold
-            float x_minus_t = x_in[ix] - t[it] - *fmu;
+            pmf[row_offset + it + 1] = x_in[ix] - *mi - t[it];
+        }
 
-            // expected value of the Heaviside function is the CDF of the triangular distribution
-            float cdf;
-            if (*training && (*fsigma != 0.0f))
+        // compute CDF
+        for (int it = 0; it < PLUS_1(len_t); ++it)
+        {
+            if (it == 0)
             {
-                float sigma_inv = 1.0f / (*fsigma);
-                float x_minus_t_over_s = x_minus_t * sigma_inv;
-                cdf = ((ABS(x_minus_t_over_s) > 1.0f) ? SIGN(x_minus_t_over_s) : (x_minus_t_over_s * (2 - ABS(x_minus_t_over_s))));
-                cdf = (cdf + 1.0f) / 2;
+                pmf[row_offset + it] = 1.0f;
             }
             else
             {
-                cdf = (float) (x_minus_t >= 0.0f); // use the Heaviside which maps zero to one
+                if (*training && (*sigma != 0.0f))
+                {
+                    scalar_t sigma_inv = 1.0 / (*sigma);
+                    scalar_t x_minus_t_over_s = pmf[row_offset + it] * sigma_inv;
+                    scalar_t cdf = ((ABS(x_minus_t_over_s) > 1.0f) ? SIGN(x_minus_t_over_s) : (x_minus_t_over_s * (2 - ABS(x_minus_t_over_s))));
+                    pmf[row_offset + it] = (cdf + 1.0f) / 2;
+                }
+                else
+                {
+                    pmf[row_offset + it] = (scalar_t) (pmf[row_offset + it] >= 0.0f);
+                }
             }
-
-            // dilate and accumulate expected step value
-            float dq = q[it + 1] - q[it];
-            sum += dq * cdf;
         }
 
-        x_out[ix] = sum;
+        // compute the probability mass in each bin
+        for (int iq = 0; iq < PLUS_1(len_t) - 1; ++iq)
+        {
+            pmf[row_offset + iq] = pmf[row_offset + iq] - pmf[row_offset + iq + 1];
+        }
+        // the last bin (with index `row_offset + len_t`) would have mass `pmf[row_offset + len_t] - 0.0f`, so it's not necessary to compute it!
     }
     else  // I am out of bounds!
     {
@@ -96,8 +111,8 @@ __global__ void triangular_backward_cuda_kernel(
     const scalar_t * __restrict__ q,
     const scalar_t * __restrict__ t,
     const int64_t len_t,
-    const scalar_t * __restrict__ bmu,
-    const scalar_t * __restrict__ bsigma
+    const scalar_t * __restrict__ mi,
+    const scalar_t * __restrict__ sigma
 )
 {
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
@@ -108,13 +123,13 @@ __global__ void triangular_backward_cuda_kernel(
         for (int it = 0; it < len_t; ++it)
         {
             // input position relative to the threshold
-            float x_minus_t  = x_in[ix] - t[it] - *bmu;
+            float x_minus_t  = x_in[ix] - t[it] - *mi;
 
             // the derivative of the expected (i.e., regularised) step function is the PDF of the triangular distribution
             float pdf;
-            if (*bsigma != 0.0f)
+            if (*sigma != 0.0f)
             {
-                float sigma_inv = 1.0f / (*bsigma);
+                float sigma_inv = 1.0f / (*sigma);
                 float abs_x_minus_t_over_s = ABS(x_minus_t * sigma_inv);
                 pdf = ((abs_x_minus_t_over_s > 1.0f) ? 0.0f : (1.0f - abs_x_minus_t_over_s) * sigma_inv);
             }
@@ -148,31 +163,88 @@ torch::Tensor triangular_forward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mi,
+    torch::Tensor sigma,
+    torch::Tensor strategy,
     torch::Tensor training
 )
 {
     auto x_out = torch::zeros_like(x_in);
+    auto pmf = torch::zeros({x_in.numel(), PLUS_1(t.numel())}, torch::TensorOptions().dtype(x_in.dtype()).device(x_in.device()));
+
     const dim3 blocks((x_in.numel() + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
+    // compute PMF over bins (i.e., the quantization levels)
     AT_DISPATCH_FLOATING_TYPES(
         x_in.type(),
-        "triangular_forward_cuda",
+        "uniform_forward_cuda_kernel_pmf",
         ([&] {
-            triangular_forward_cuda_kernel<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
-                x_out.data_ptr<scalar_t>(),
+            uniform_forward_cuda_kernel_pmf<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                pmf.data_ptr<scalar_t>(),
                 x_in.data_ptr<scalar_t>(),
                 x_in.numel(),
-                q.data_ptr<scalar_t>(),
                 t.data_ptr<scalar_t>(),
                 t.numel(),
-                fmu.data_ptr<scalar_t>(),
-                fsigma.data_ptr<scalar_t>(),
+                mi.data_ptr<scalar_t>(),
+                sigma.data_ptr<scalar_t>(),
                 training.data_ptr<scalar_t>()
             );
         })
     );
+
+    switch(strategy.item<int32_t>())  // how to read tensor's content using the C++ API: https://stackoverflow.com/a/54208912
+    {
+        case 0:  // expectation
+            AT_DISPATCH_FLOATING_TYPES(
+                x_in.type(),
+                "uniform_forward_cuda_kernel_expectation",
+                ([&] {
+                    forward_cuda_kernel_expectation<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                        x_out.data_ptr<scalar_t>(),
+                        pmf.data_ptr<scalar_t>(),
+                        x_in.numel(),
+                        q.data_ptr<scalar_t>(),
+                        t.numel()
+                    );
+                })
+            );
+            break;
+
+        case 1:  // argmax sampling (i.e., mode)
+            AT_DISPATCH_FLOATING_TYPES(
+                x_in.type(),
+                "uniform_forward_cuda_kernel_mode",
+                ([&] {
+                    forward_cuda_kernel_mode<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                        x_out.data_ptr<scalar_t>(),
+                        pmf.data_ptr<scalar_t>(),
+                        x_in.numel(),
+                        q.data_ptr<scalar_t>(),
+                        t.numel()
+                    );
+                })
+            );
+            break;
+
+        case 2:  // random sampling
+            auto us = torch::rand_like(x_in);
+            AT_DISPATCH_FLOATING_TYPES(
+                x_in.type(),
+                "uniform_forward_cuda_kernel_random",
+                ([&] {
+                    forward_cuda_kernel_random<scalar_t><<<blocks, THREADS_PER_BLOCK>>>(
+                        x_out.data_ptr<scalar_t>(),
+                        us.data_ptr<scalar_t>(),
+                        pmf.data_ptr<scalar_t>(),
+                        x_in.numel(),
+                        q.data_ptr<scalar_t>(),
+                        t.numel()
+                    );
+                })
+            );
+            break;
+
+    }
 
     return x_out;
 }
@@ -183,8 +255,8 @@ torch::Tensor triangular_backward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mi,
+    torch::Tensor sigma
 )
 {
     auto grad_out = torch::zeros_like(x_in);
@@ -202,8 +274,8 @@ torch::Tensor triangular_backward_cuda_dispatch(
                 q.data_ptr<scalar_t>(),
                 t.data_ptr<scalar_t>(),
                 t.numel(),
-                bmu.data_ptr<scalar_t>(),
-                bsigma.data_ptr<scalar_t>()
+                mi.data_ptr<scalar_t>(),
+                sigma.data_ptr<scalar_t>()
             );
         })
     );

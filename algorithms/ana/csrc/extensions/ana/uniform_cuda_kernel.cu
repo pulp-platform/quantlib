@@ -47,7 +47,7 @@ __global__ void uniform_forward_cuda_kernel_pmf(
     const int64_t len_x,
     const scalar_t * __restrict__ t,      // thresholds
     const int64_t len_t,
-    const scalar_t * __restrict__ mu,     // mean
+    const scalar_t * __restrict__ mi,     // mean
     const scalar_t * __restrict__ sigma,  // standard deviation
     const scalar_t * __restrict__ training
 )
@@ -62,7 +62,7 @@ __global__ void uniform_forward_cuda_kernel_pmf(
         // compute shifted thresholds
         for (int it = 0; it < PLUS_1(len_t); ++it)
         {
-            pmf[row_offset + it + 1] = x_in[ix] - *mu - t[it];
+            pmf[row_offset + it + 1] = x_in[ix] - *mi - t[it];
         }
 
         // compute CDF
@@ -109,7 +109,7 @@ __global__ void uniform_backward_cuda_kernel(
     const scalar_t * __restrict__ q,
     const scalar_t * __restrict__ t,
     const int64_t len_t,
-    const scalar_t * __restrict__ mu,
+    const scalar_t * __restrict__ mi,
     const scalar_t * __restrict__ sigma
 )
 {
@@ -121,7 +121,7 @@ __global__ void uniform_backward_cuda_kernel(
         for (int it = 0; it < len_t; ++it)
         {
             // input position relative to the threshold
-            scalar_t x_minus_t = x_in[ix] - t[it] - *mu;
+            scalar_t x_minus_t = x_in[ix] - t[it] - *mi;
 
             // the derivative of the expected (i.e., regularised) step function is the PDF of the uniform distribution
             scalar_t pdf;
@@ -161,7 +161,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor mu,
+    torch::Tensor mi,
     torch::Tensor sigma,
     torch::Tensor strategy,
     torch::Tensor training
@@ -183,7 +183,7 @@ torch::Tensor uniform_forward_cuda_dispatch(
                 x_in.numel(),
                 t.data_ptr<scalar_t>(),
                 t.numel(),
-                mu.data_ptr<scalar_t>(),
+                mi.data_ptr<scalar_t>(),
                 sigma.data_ptr<scalar_t>(),
                 training.data_ptr<scalar_t>()
             );
@@ -253,7 +253,7 @@ torch::Tensor uniform_backward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor mu,
+    torch::Tensor mi,
     torch::Tensor sigma
 )
 {
@@ -273,7 +273,7 @@ torch::Tensor uniform_backward_cuda_dispatch(
                 q.data_ptr<scalar_t>(),
                 t.data_ptr<scalar_t>(),
                 t.numel(),
-                mu.data_ptr<scalar_t>(),
+                mi.data_ptr<scalar_t>(),
                 sigma.data_ptr<scalar_t>()
             );
         })
