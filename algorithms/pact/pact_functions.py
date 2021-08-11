@@ -71,7 +71,7 @@ class PACTQuantFunc(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input, eps, clip_lo, clip_hi, floor=True, clip_gradient=True):
+    def forward(ctx, input, eps, clip_lo, clip_hi, floor=True, clip_gradient=True, noisy=False):
         where_input_nonclipped = (input >= clip_lo) * (input < clip_hi)
         where_input_lo = (input < clip_lo)
         where_input_hi = (input >= clip_hi)
@@ -82,6 +82,10 @@ class PACTQuantFunc(torch.autograd.Function):
         # to ensure hardware compatibility, it is the downstream user's
         # responsibility to ensure that clip_lo/clip_hi are multiples of eps!
         input_unrounded_int = (input.clamp(clip_lo, clip_hi + 1e-7) - clip_lo)/ eps
+        if noisy:
+            noise = torch.rand(input_unrounded_int.size(), device=input_unrounded_int.device) - 0.5
+            input_unrounded_int += noise
+
         # for weights, we want to use rounding - for activations, we will round
         # in hardware so represent this here too
         input_rounded_int = input_unrounded_int.floor() if floor else input_unrounded_int.round()
@@ -108,12 +112,12 @@ class PACTQuantFunc(torch.autograd.Function):
         # if input was clipped. the gradient propagation is thus identical for
         # lower and upper bounds!
         grad_lower  = torch.where(where_input_lo, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
-        return grad_input, None, grad_lower, grad_upper, None, None
+        return grad_input, None, grad_lower, grad_upper, None, None, None
 
 
 # a wrapper for PACTQuantFunc to allow kwargs
-def PACTQuantize(x, eps, clip_lo, clip_hi, floor=True, clip_gradient=True):
-    return PACTQuantFunc.apply(x, eps, clip_lo, clip_hi, floor, clip_gradient)
+def PACTQuantize(x, eps, clip_lo, clip_hi, floor=True, clip_gradient=True, noisy=False):
+    return PACTQuantFunc.apply(x, eps, clip_lo, clip_hi, floor, clip_gradient, noisy)
 
 
 class AlmostSymmQuantFunc(torch.autograd.Function):

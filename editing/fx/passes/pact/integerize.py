@@ -140,13 +140,17 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
     gamma_h *= eps_in
     gamma_h /= eps_out
     beta_h /= eps_out
+    if act.rounding:
+        beta_h += 0.5
+
     gamma_h *= D
     beta_h *= D
     gamma_h = torch.round(gamma_h)
     beta_h = torch.round(beta_h)
+
     if bn and gamma_h.numel() > 1:
         if isinstance(bn, nn.BatchNorm1d):
-            # BN1D can take two shape formats:
+            # BN1D can take two input tensor formats:
             # 1. [N_B, N_C, L], e.g. if it comes after a Conv1d layer
             # 2. [N_B, L], e.g. if it comes after a linear layer
             # depending on how it is used in the network we are processing, the
@@ -185,12 +189,14 @@ class IntegerizeBNActPass(SequentialPass):
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, gm : fx.GraphModule, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
+        #IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
+        # ShapePropPass will contaminate the batchnorm parameters!
         passes.append(ShapePropPass(shape_in))
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))

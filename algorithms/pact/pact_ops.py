@@ -65,7 +65,9 @@ class PACTUnsignedAct(nn.Module):
             learn_clip=True,
             act_kind='relu',
             leaky=0.1,
-            nb_std=3
+            nb_std=3,
+            noisy=False,
+            rounding=False
     ):
 
         r"""Constructor.
@@ -100,6 +102,8 @@ class PACTUnsignedAct(nn.Module):
         self.init_clip = init_clip
         self.nb_std = nb_std
         self.leaky = leaky
+        self.register_buffer('noisy', torch.tensor(noisy))
+        self.rounding = rounding
         # this is switched on/off by the PACTActController
         self.register_buffer('started', torch.tensor(False))
 
@@ -154,7 +158,7 @@ class PACTUnsignedAct(nn.Module):
         else:
             eps = self.get_eps()
             # TODO why clip_hi+eps???
-            return PACTQuantize(x, eps, self.clip_lo, self.clip_hi, floor=True, clip_gradient=self.clip_gradient) # clip_gradient=True keeps NEMO compatibility
+            return PACTQuantize(x, eps, self.clip_lo, self.clip_hi, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy) # clip_gradient=True keeps NEMO compatibility
 
 
 class PACTAsymmetricAct(nn.Module):
@@ -180,7 +184,9 @@ class PACTAsymmetricAct(nn.Module):
             act_kind='relu',
             leaky=0.1,
             symm=False,
-            nb_std=3
+            nb_std=3,
+            noisy=False,
+            rounding=False
     ):
 
         r"""Constructor.
@@ -213,6 +219,8 @@ class PACTAsymmetricAct(nn.Module):
         self.init_clip = init_clip
         self.nb_std = nb_std
         self.symm = symm
+        self.register_buffer('noisy', torch.tensor(noisy))
+        self.rounding = rounding
         # this is switched on/off by the PACTActController
         self.register_buffer('started', torch.tensor(False))
 
@@ -268,7 +276,7 @@ class PACTAsymmetricAct(nn.Module):
             else:
                 clip_upper = self.clip_hi
             #TODO: why was this clip_hi+eps??
-            return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=True, clip_gradient=self.clip_gradient)
+            return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
 
 class PACTIntegerConcat(torch.nn.Module):
 
@@ -336,15 +344,17 @@ class PACTIntegerAdd(torch.nn.Module):
             act_kind='relu',
             symm=False,
             leaky=0,
-            nb_std=3
+            nb_std=3,
+            noisy=False,
+            rounding=False
     ):
 
         super().__init__()
         self.acts = torch.nn.ModuleList([])
         for i in range(num_args):
-            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std))
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding))
 
-        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std)
+        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding)
         self.act_out.register_buffer("eps_in", torch.Tensor())
 
         self.clip_lo = self.acts[0].clip_lo

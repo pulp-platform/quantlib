@@ -131,15 +131,13 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
     add_node_specs = [('call_function', (torch.add, operator.add)),
                       ('call_method', ('add',))]
 
-    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3.):
-        self.n_levels = n_levels
-        self.init_clip = init_clip
-        self.nb_std = nb_std
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
         super(AddTreeReplacementPass, self).__init__(node_specs=self.add_node_specs, replacement_fn=self.add_replacement_fn, name="ADDITION")
 
 
     def add_replacement_fn(self, tree):
-        return PACTIntegerAdd(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, learn_clip=False, symm=True)
+        return PACTIntegerAdd(num_args=len(tree.args), act_kind='identity', **self.kwargs)
 
 
 class ConcatTreeReplacementPass(SequentialPass):
@@ -174,14 +172,10 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
                       nn.Conv3d,
                       nn.Linear)
 
-    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3., learn_clip : bool = False, act_kind : str = 'identity', signed : bool = True):
+    def __init__(self, signed : bool = True, **kwargs):
         name = "PACT_LINEAR_ACTIVATIONS"
-        self.n_levels = n_levels
-        self.init_clip = init_clip
-        self.nb_std = nb_std
         self.signed = signed
-        self.learn_clip = learn_clip
-        self.act_kind = act_kind
+        self.kwargs = kwargs
         super(InsertActivationsBetweenLinearsPass, self).__init__(modules_before=self.before_modules,
                                                                   modules_after=self.after_modules,
                                                                   make_module_fn=self.inserted_module,
@@ -190,23 +184,14 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
 
     def inserted_module(self, *args, **kwargs):
         if self.signed:
-            return PACTAsymmetricAct(n_levels=self.n_levels,
-                                     init_clip=self.init_clip,
-                                     learn_clip=self.learn_clip,
-                                     act_kind=self.act_kind,
-                                     symm=True,
-                                     nb_std=self.nb_std)
+            return PACTAsymmetricAct(**self.kwargs)
         else:
-            return PACTUnsignedAct(self,
-                                   n_levels=self.n_levels,
-                                   init_clip=self.init_clip,
-                                   learn_clip=self.learn_clip,
-                                   act_kind=self.act_kind,
-                                   nb_std=self.nb_std)
+            module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
+            return PACTUnsignedAct(**module_kwargs)
 
 class CanonicalizePACTNetPass(SequentialPass):
-    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3.):
+    def __init__(self, **kwargs):
         passes = []
-        passes.append(AddTreeReplacementPass(n_levels=n_levels, init_clip=init_clip, nb_std=nb_std))
-        passes.append(InsertActivationsBetweenLinearsPass(n_levels=n_levels, init_clip=init_clip, nb_std=nb_std))
+        passes.append(AddTreeReplacementPass(**kwargs))
+        passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **kwargs))
         super(CanonicalizePACTNetPass, self).__init__(*passes, name_prefix='_CANONICALIZE_PACT_NET_PASS')
