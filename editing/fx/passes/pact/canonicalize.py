@@ -193,5 +193,6 @@ class CanonicalizePACTNetPass(SequentialPass):
     def __init__(self, **kwargs):
         passes = []
         passes.append(AddTreeReplacementPass(**kwargs))
-        passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **kwargs))
+        actpass_kwargs = {k:v for k,v in kwargs.items() if k != 'force_out_eps'}
+        passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
         super(CanonicalizePACTNetPass, self).__init__(*passes, name_prefix='_CANONICALIZE_PACT_NET_PASS')

@@ -146,27 +146,38 @@ class ReplaceMatchWithModulePass(FxPass):
         matched_nodes = get_ordered_active_nodes(self.match)
         first_matched_node = matched_nodes[0]
         out_node = matched_nodes[-1]
-        # we use the first matched node as the hierarchy level to insert the
-        # new submodule. if the first matched node is not a module, try to use
-        # the insert_target field
-        target_list = []
-        if self.insert_target is None and first_matched_node.op == 'call_module':
-            first_pattern_node_target = get_qualified_prefix(first_matched_node.target)
-            if len(first_pattern_node_target):
-                target_list.append(get_qualified_prefix(first_matched_node.target))
-        elif self.insert_target is not None:
-            target_list.append(self.insert_target)
+        if self.module is not None:
+            # we use the first matched node as the hierarchy level to insert the
+            # new submodule. if the first matched node is not a module, try to use
+            # the insert_target field
+            target_list = []
+            if self.insert_target is None and first_matched_node.op == 'call_module':
+                first_pattern_node_target = get_qualified_prefix(first_matched_node.target)
+                if len(first_pattern_node_target):
+                    target_list.append(get_qualified_prefix(first_matched_node.target))
+            elif self.insert_target is not None:
+                target_list.append(self.insert_target)
 
-        target_list.append(f"_QL_REPLACED_{self.name.upper()}")
-        target = '.'.join(target_list)
-        #add the submodule
-        gm.add_submodule(target, self.module)
+            target_list.append(f"_QL_REPLACED_{self.name.upper()}")
+            target = '.'.join(target_list)
+            #add the submodule
+            gm.add_submodule(target, self.module)
 
-        with gm.graph.inserting_after(first_matched_node.all_input_nodes[0]):
-            new_node = gm.graph.call_module(target, args=first_matched_node.args, kwargs=first_matched_node.kwargs)
+            with gm.graph.inserting_after(first_matched_node.all_input_nodes[0]):
+                new_node = gm.graph.call_module(target, args=first_matched_node.args, kwargs=first_matched_node.kwargs)
 
-        #replace all uses of the output node with the new module's output
+
+        else:
+            # if module is none, simply remove the matched nodes and stitch the
+            # graph together
+            assert len(first_matched_node.all_input_nodes) == 1, f"To remove a match, the first node must take only one input - node '{first_matched_node}' takes {len(first_matched_node.all_input_nodes)} inputs..."
+            new_node = first_matched_node.all_input_nodes[0]
+            #import IPython; IPython.embed()
+
+        #replace all uses of the output node with the new module's output or
+        #the input to the match
         out_node.replace_all_uses_with(new_node)
+
 
         for n in reversed(matched_nodes):
             gm.graph.erase_node(n)

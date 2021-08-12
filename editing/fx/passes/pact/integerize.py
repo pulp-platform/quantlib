@@ -23,7 +23,8 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizeBNActPass',
            'IntegerizePACTNetPass',
            'PACTTracer',
-           'PACT_symbolic_trace']
+           'PACT_symbolic_trace',
+           'RequantShift']
 
 class RequantShift(nn.Module):
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
@@ -35,17 +36,18 @@ class RequantShift(nn.Module):
         self.n_levels_out = n_levels
 
     def forward(self, x):
-        x *= self.mul
-        x += self.add
+        x = x * self.mul
+        x = x + self.add
         x = (x/self.div).floor()
         if not self.signed:
-            return torch.clip(x, 0., float(self.n_levels_out-1))
+            x = torch.clip(x, 0., float(self.n_levels_out-1))
         else:
             c = np.floor(self.n_levels_out/2+0.001)
             if self.n_levels_out % 2:
-                return torch.clip(x, -c, c)
+                x = torch.clip(x, -c, c)
             else:
-                return torch.clip(x, -c, c-1)
+                x = torch.clip(x, -c, c-1)
+        return x
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -132,8 +134,10 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
     signed_act = isinstance(act, PACTAsymmetricAct)
     eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze()
     eps_out = act_node.meta['quant'].eps_out.cpu().clone().detach().squeeze()
-#    if eps_out.shape == torch.Size([1]):
-        #eps_out = eps_out[0]
+
+    # if the requant node would perform an identity operation, don't insert it.
+    if eps_in.numel() == eps_out.numel() == 1 and eps_in == eps_out and bn is None:
+        return None
 
     gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
     beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
