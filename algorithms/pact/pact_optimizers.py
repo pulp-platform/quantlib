@@ -24,7 +24,7 @@ from torch.optim import SGD, Adam, Adagrad
 
 import inspect
 
-from . import pact_ops
+from .pact_ops import *
 from quantlib.editing.lightweight.rules.filters import TypeFilter, VariadicOrFilter
 from quantlib.editing.lightweight.graph import LightweightGraph
 
@@ -36,7 +36,11 @@ __all__ = [
 ]
 
 
-_PACT_CLASSES = [cl[1] for cl in inspect.getmembers(pact_ops, inspect.isclass) if issubclass(cl[1], nn.Module)]
+_PACT_CLASSES = [PACTUnsignedAct,
+                 PACTAsymmetricAct,
+                 PACTConv1d,
+                 PACTConv2d,
+                 PACTLinear]
 
 
 class PACTOptimizerFactory(object):  # https://stackoverflow.com/questions/21060073/dynamic-inheritance-in-python
@@ -60,7 +64,7 @@ class PACTOptimizerFactory(object):  # https://stackoverflow.com/questions/21060
 
                     net_nodes   = LightweightGraph.build_nodes_list(net)
                     pact_filter = VariadicOrFilter(*[TypeFilter(t) for t in _PACT_CLASSES])
-                    learnable_clipping_params = [b for n in pact_filter(net_nodes) for b in n.module.clipping_params.values() if b.requires_grad]
+                    learnable_clipping_params = [b for n in pact_filter(net_nodes) for k, b in n.module.clipping_params.items() if b.requires_grad and k != 'log_t']
 
                     # initialize the base class with configured weight decay for the
                     # clipping parameters and any other supplied parameters

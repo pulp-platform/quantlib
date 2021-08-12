@@ -25,7 +25,7 @@
 import torch
 from torch import nn
 
-from .pact_functions import PACTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
+from .pact_functions import PACTQuantize, TQTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
 from .util import assert_param_valid, almost_symm_quant
 import math
 import copy
@@ -139,7 +139,10 @@ class PACTUnsignedAct(nn.Module):
             leaky=0.1,
             nb_std=3,
             noisy=False,
-            rounding=False
+            rounding=False,
+            tqt=False,
+            tqt_beta=0.9,
+            tqt_clip_grad=True
     ):
 
         r"""Constructor.
@@ -165,10 +168,23 @@ class PACTUnsignedAct(nn.Module):
         init_clip = init_clip.lower()
         assert_param_valid(self, act_kind, 'act_kind', ['relu', 'relu6', 'leaky_relu'])
         assert_param_valid(self, init_clip, 'init_clip',  ['max', 'std', 'const'])
+
+        self.tqt = tqt
         self.n_levels = n_levels
-        self.clip_hi = torch.nn.Parameter(torch.Tensor((1.,)), requires_grad=learn_clip)
+        self.clip_hi = torch.nn.Parameter(torch.Tensor((1.,)), requires_grad=learn_clip and not tqt)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'high':self.clip_hi}
+        #if we do TQT, log_t is learned
+        if tqt:
+            assert (not noisy and learn_clip and rounding), f"PACTUnsignedAct: TQT quantization requires noisy=False, rounding=True, learn_clip=True - you provided noisy={noisy}, rounding={rounding}, learn_clip={learn_clip}"
+            #TODO restore this
+            self.register_parameter("log_t", nn.Parameter(torch.tensor((0.,)), requires_grad=True))
+
+            self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
+            self.register_buffer("tqt_running_beta", torch.tensor(1.))
+            self.register_buffer("tqt_running_grad_var", torch.tensor((0.)))
+            self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
+            self.clipping_params["log_t"] = self.log_t
         self.learn_clip = learn_clip
         self.act_kind = act_kind
         self.init_clip = init_clip
@@ -229,8 +245,12 @@ class PACTUnsignedAct(nn.Module):
         # in normal mode, PACTUnsignedAct uses the PACTQuantFunc
         else:
             eps = self.get_eps()
-            # TODO why clip_hi+eps???
-            return PACTQuantize(x, eps, self.clip_lo, self.clip_hi, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy) # clip_gradient=True keeps NEMO compatibility
+            if self.tqt:
+                #Make sure that the activation is correctly registered with a
+                #controller which assigns clip_hi = 2**log_t!
+                return TQTQuantize(x, eps, self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
+            else:
+                return PACTQuantize(x, eps, self.clip_lo, self.clip_hi, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy) # clip_gradient=True keeps NEMO compatibility
 
 
 class PACTAsymmetricAct(nn.Module):
@@ -258,7 +278,10 @@ class PACTAsymmetricAct(nn.Module):
             symm=False,
             nb_std=3,
             noisy=False,
-            rounding=False
+            rounding=False,
+            tqt=False,
+            tqt_beta=0.9,
+            tqt_clip_grad=True
     ):
 
         r"""Constructor.
@@ -280,9 +303,11 @@ class PACTAsymmetricAct(nn.Module):
         assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu'])
         assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
 
+
+        self.tqt = tqt
         self.n_levels = n_levels
-        self.clip_lo = torch.nn.Parameter(torch.Tensor((-1.,)), requires_grad=learn_clip)
-        self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=learn_clip and (not symm))
+        self.clip_lo = torch.nn.Parameter(torch.Tensor((-1.,)), requires_grad=learn_clip and not tqt)
+        self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=learn_clip and not symm)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
         self.learn_clip = learn_clip
@@ -293,6 +318,17 @@ class PACTAsymmetricAct(nn.Module):
         self.symm = symm
         self.register_buffer('noisy', torch.tensor(noisy))
         self.rounding = rounding
+
+        if tqt:
+            assert (not noisy and learn_clip and rounding and symm), f"PACTAsymmetricAct: TQT quantization requires noisy=False, rounding=True, learn_clip=True - you provided noisy={noisy}, rounding={rounding}, learn_clip={learn_clip}, symm={symm}"
+            self.register_parameter("log_t", nn.Parameter(torch.tensor((0.)), requires_grad=True))
+            self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
+            self.register_buffer("tqt_running_beta", torch.tensor(1.))
+            self.register_buffer("tqt_running_grad_var", torch.tensor((0.)))
+            self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
+            self.clipping_params["log_t"] = self.log_t
+        self.tqt = tqt
+
         # this is switched on/off by the PACTActController
         self.register_buffer('started', torch.tensor(False))
 
@@ -343,12 +379,16 @@ class PACTAsymmetricAct(nn.Module):
         # in normal mode, PACTUnsignedAct uses
         else:
             eps = self.get_eps()
-            if self.learn_clip and self.symm:
-                    clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+            if self.tqt:
+                #Make sure that the activation is correctly registered with a
+                #controller which assigns clip_hi = 2**log_t!
+                return TQTQuantize(x, eps, self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
             else:
-                clip_upper = self.clip_hi
-            #TODO: why was this clip_hi+eps??
-            return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
+                if self.learn_clip and self.symm:
+                    clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+                else:
+                    clip_upper = self.clip_hi
+                return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
 
 class PACTIntegerConcat(torch.nn.Module):
 
@@ -428,7 +468,8 @@ class PACTIntegerAdd(torch.nn.Module):
             leaky=0,
             nb_std=3,
             noisy=False,
-            rounding=False
+            rounding=False,
+            force_out_eps=False
     ):
 
         super().__init__()
@@ -441,47 +482,54 @@ class PACTIntegerAdd(torch.nn.Module):
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
         self.n_levels = self.acts[0].n_levels
+        self.force_out_eps = force_out_eps
 
     def reassign_epsilons(self):
-        max_clip = -math.inf
-        min_clip = math.inf
+        if not self.force_out_eps:
+            max_clip = -math.inf
+            min_clip = math.inf
 
-        for i in self.acts:
-            if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
-                max_clip = i.clip_hi.data
-                min_clip = i.clip_lo.data
-                diff = max_clip - min_clip
+            for i in self.acts:
+                if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
+                    max_clip = i.clip_hi.data
+                    min_clip = i.clip_lo.data
+                    diff = max_clip - min_clip
 
-        # SCHEREMO: This is the part that I might have to think about a bit more...
-        for i in self.acts:
-            # Closer to unsigned than to signed -- Is this reasonable?
-            #if abs(i.clip_lo) < abs(i.clip_hi)/2:
-            # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
-            if abs(i.clip_lo) < 5*i.get_eps():
-                i.symm = False
-                i.clip_hi.data.copy_(torch.Tensor((max_clip - min_clip,)))
-                i.clip_lo.data.copy_(torch.Tensor((0.,)))
-            # Closer to signed than unsigned
-            else:
-                i.symm = True
-                if (abs(min_clip) > max_clip):
-                    # Almost symmetrically quantized:
-                    lower_bound, upper_bound  = almost_symm_quant(abs(min_clip), i.n_levels)
+            # SCHEREMO: This is the part that I might have to think about a bit more...
+            for i in self.acts:
+                # Closer to unsigned than to signed -- Is this reasonable?
+                #if abs(i.clip_lo) < abs(i.clip_hi)/2:
+                # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
+                if abs(i.clip_lo) < 5*i.get_eps():
+                    i.symm = False
+                    i.clip_hi.data.copy_(torch.Tensor((max_clip - min_clip,)))
+                    i.clip_lo.data.copy_(torch.Tensor((0.,)))
+                    # Closer to signed than unsigned
                 else:
-                    # Unsigned quantization
-                    lower_bound, upper_bound  = almost_symm_quant(max_clip/2, i.n_levels)
-                i.clip_lo.data.copy_(lower_bound)
-                i.clip_hi.data.copy_(upper_bound)
+                    i.symm = True
+                    if (abs(min_clip) > max_clip):
+                        # Almost symmetrically quantized:
+                        lower_bound, upper_bound  = almost_symm_quant(abs(min_clip), i.n_levels)
+                    else:
+                        # Unsigned quantization
+                        lower_bound, upper_bound  = almost_symm_quant(max_clip/2, i.n_levels)
+                    i.clip_lo.data.copy_(lower_bound)
+                    i.clip_hi.data.copy_(upper_bound)
+        else:
+            clip_hi = self.act_out.clip_hi.data.detach().clone()
+            clip_lo = self.act_out.clip_lo.data.detach().clone()
+            for i in self.acts:
+                i.clip_hi.data.copy_(clip_hi)
+                i.clip_lo.data.copy_(clip_lo)
+
+
+
 
 
     def forward(self, *x: torch.Tensor):
-#         total = 0
-#         for idx, i in enumerate(x):
-#             total += self.acts[idx](i)
-#         return self.act_out(total)
         total = self.acts[0](x[0])
         for idx, i in enumerate(x[1:]):
-            total = total + self.acts[idx](i)
+            total = total + self.acts[idx+1](i)
         return total
 
 
@@ -519,6 +567,9 @@ class PACTConv2d(nn.Conv2d):
             learn_clip = False,
             symm_wts = True,
             nb_std = 3,
+            tqt = False,
+            tqt_beta = 0.9,
+            tqt_clip_grad = True,
             **kwargs
     ):
         """
@@ -541,6 +592,8 @@ class PACTConv2d(nn.Conv2d):
         init_clip = init_clip.lower()
         assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
         assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
+        if init_clip == 'const':
+            assert not symm_wts, "PACTConv2d: argument combination init_clip='const' and symm_wts=True not supported!"
 
         super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.n_levels = n_levels
@@ -565,6 +618,16 @@ class PACTConv2d(nn.Conv2d):
         self.clip_hi = nn.Parameter(clip_hi, requires_grad=(learn_clip and not symm_wts))
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
+
+        if tqt:
+            assert (learn_clip and symm_wts), f"PACTConv2d: TQT quantization requires learn_clip=True and symm_wts=True, you provided learn_clip={learn_clip}, symm_wts={symm_wts}"
+            self.register_parameter("log_t", nn.Parameter(torch.zeros_like(self.clip_lo.data), requires_grad=True))
+            self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
+            self.register_buffer("tqt_running_beta", torch.tensor(1.))
+            self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
+            self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
+            self.clipping_params["log_t"] = self.log_t
+        self.tqt = tqt
 
         # this member indicates that the module's clipping bounds should not be
         # touched. it is set by the controller
@@ -597,17 +660,19 @@ class PACTConv2d(nn.Conv2d):
 
     @property
     def weight_q(self):
-        if self.learn_clip and self.symm_wts:
-            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-        else:
-            clip_upper = self.clip_hi
+        if not self.tqt:
+            if self.learn_clip and self.symm_wts:
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+            else:
+                clip_upper = self.clip_hi
 
-        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+        else:
+            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
 
     @property
     def weight_int(self):
         return (self.weight_q / self.get_eps_w()).detach().clone().round()
-
 
     def forward(self, x):
         if self.started:
@@ -697,6 +762,16 @@ class PACTConv1d(nn.Conv1d):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
+        if tqt:
+            assert (learn_clip and symm_wts), f"PACTConv2d: TQT quantization requires learn_clip=True and symm_wts=True, you provided learn_clip={learn_clip}, symm_wts={symm_wts}"
+            self.register_parameter("log_t", nn.Parameter(torch.zeros_like(self.clip_lo.data), requires_grad=True))
+            self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
+            self.register_buffer("tqt_running_beta", torch.tensor(1.))
+            self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
+            self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
+            self.clipping_params["log_t"] = self.log_t
+        self.tqt = tqt
+
         # this member indicates that the module's clipping bounds should not be
         # touched. it is set by the controller
         self.register_buffer('frozen', torch.tensor(False))
@@ -728,12 +803,15 @@ class PACTConv1d(nn.Conv1d):
 
     @property
     def weight_q(self):
-        if self.learn_clip and self.symm_wts:
-            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-        else:
-            clip_upper = self.clip_hi
+        if not self.tqt:
+            if self.learn_clip and self.symm_wts:
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+            else:
+                clip_upper = self.clip_hi
 
-        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+        else:
+            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
 
     @property
     def weight_int(self):
@@ -783,6 +861,9 @@ class PACTLinear(nn.Linear):
                  learn_clip : bool = False,
                  symm_wts : bool = True,
                  nb_std : int = 3,
+                 tqt = False,
+                 tqt_beta = 0.9,
+                 tqt_clip_grad = True,
                  **kwargs):
         """
         :param in_features:   see nn.Linear
@@ -820,13 +901,21 @@ class PACTLinear(nn.Linear):
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
 
+        if tqt:
+            assert (learn_clip and symm_wts), f"PACTConv2d: TQT quantization requires learn_clip=True and symm_wts=True, you provided learn_clip={learn_clip}, symm_wts={symm_wts}"
+            self.register_parameter("log_t", nn.Parameter(torch.zeros_like(self.clip_lo.data), requires_grad=True))
+            self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
+            self.register_buffer("tqt_running_beta", torch.tensor(1.))
+            self.register_buffer("tqt_running_grad_var",torch.zeros_like(self.clip_lo.data))
+            self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
+            self.clipping_params["log_t"] = self.log_t
+        self.tqt = tqt
+
         # this member indicates that the module's clipping bounds should not be
         # touched. it is set by the controller
         self.register_buffer('frozen', torch.tensor(False))
-
         self.register_buffer('clip_gradient', torch.tensor(True))
 
-        self.register_buffer('clip_gradient', torch.tensor(True))
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -862,12 +951,15 @@ class PACTLinear(nn.Linear):
 
     @property
     def weight_q(self):
-        if self.learn_clip and self.symm_wts:
-            clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-        else:
-            clip_upper = self.clip_hi
+        if not self.tqt:
+            if self.learn_clip and self.symm_wts:
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+            else:
+                clip_upper = self.clip_hi
 
-        return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+        else:
+            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
 
     @property
     def weight_int(self):
