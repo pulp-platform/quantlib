@@ -18,11 +18,6 @@ class InputSize(IntEnum):
     LARGE  = 2
 
 
-class LinearOrConv(IntEnum):
-    LINEAR = 0
-    CONV   = 1
-
-
 class LinearSize(IntEnum):
     SMALL  = 2 ** 6
     NORMAL = 2 ** 9
@@ -55,7 +50,7 @@ class TensorGenerator(object):
 
     def __init__(self,
                  device: torch.device,
-                 kind: Kind,
+                 kind:   Kind,
                  range_: Union[Range, None] = None):
 
         self._device = device
@@ -92,11 +87,11 @@ class TensorGenerator(object):
 class LinearTensorGenerator(TensorGenerator):
 
     def __init__(self,
-                 device: torch.device,
+                 device:     torch.device,
                  batch_size: int,
                  n_channels: int,
-                 kind: Kind,
-                 range_: Union[Range, None] = None):
+                 kind:       Kind,
+                 range_:     Union[Range, None] = None):
 
         super(LinearTensorGenerator, self).__init__(device, kind, range_)
         self._batch_size = batch_size
@@ -110,12 +105,12 @@ class LinearTensorGenerator(TensorGenerator):
 class Conv2dTensorGenerator(TensorGenerator):
 
     def __init__(self,
-                 device: torch.device,
-                 batch_size: int,
-                 n_channels: int,
-                 spatial_size: int,
-                 kind: Kind,
-                 range_: Union[Range, None] = None):  # I assume squared images
+                 device:       torch.device,
+                 batch_size:   int,
+                 n_channels:   int,
+                 spatial_size: int,  # I assume squared images, so one integer is sufficient
+                 kind:         Kind,
+                 range_:       Union[Range, None] = None):
 
         super(Conv2dTensorGenerator, self).__init__(device, kind, range_)
 

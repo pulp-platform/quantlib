@@ -15,8 +15,8 @@ class ModuleFactory(object):
 
     def get_module(self,
                    class_name: str,
-                   training: bool,
-                   device: torch.device,
+                   training:   bool,
+                   device:     torch.device,
                    input_size: Union[Tuple[int, int], Tuple[int, int, int, int]],
                    **kwargs) -> [nn.Module, Union[Tuple[int, int], Tuple[int, int, int, int]]]:
 
@@ -24,16 +24,16 @@ class ModuleFactory(object):
 
     def get_network(self,
                     linear_or_conv2d: str,
-                    training: bool,
-                    device: torch.device,
-                    input_size: Union[Tuple[int, int], Tuple[int, int, int, int]],
+                    training:         bool,
+                    device:           torch.device,
+                    input_size:       Union[Tuple[int, int], Tuple[int, int, int, int]],
                     **kwargs) -> Tuple[nn.Module, Union[Tuple[int, int], Tuple[int, int, int, int]]]:
 
         if linear_or_conv2d == 'linear':
 
             linear1, linear1_size = self.get_module('linear', training, device, input_size, **kwargs)
-            batchnorm1 = nn.BatchNorm1d(linear1_size[-1])
-            act1, act1_size = self.get_module('activation', training, device, linear1_size, **kwargs)
+            batchnorm1            = nn.BatchNorm1d(linear1_size[-1])
+            act1, act1_size       = self.get_module('activation', training, device, linear1_size, **kwargs)
             linear2, linear2_size = self.get_module('linear', training, device, act1_size, **kwargs)
 
             network = nn.Sequential(linear1, batchnorm1, act1, linear2)
@@ -43,8 +43,8 @@ class ModuleFactory(object):
         elif linear_or_conv2d == 'conv2d':
 
             conv1, conv1_size = self.get_module('conv2d', training, device, input_size, **kwargs)
-            batchnorm1 = nn.BatchNorm2d(conv1_size[1])
-            act1, act1_size = self.get_module('activation', training, device, conv1_size, **kwargs)
+            batchnorm1        = nn.BatchNorm2d(conv1_size[1])
+            act1, act1_size   = self.get_module('activation', training, device, conv1_size, **kwargs)
             conv2, conv2_size = self.get_module('conv2d', training, device, act1_size, **kwargs)
 
             network = nn.Sequential(conv1, batchnorm1, act1, conv2)
@@ -70,8 +70,8 @@ class FloatingPointModuleFactory(ModuleFactory):
 
     def get_module(self,
                    class_name: str,
-                   training: bool,
-                   device: torch.device,
+                   training:   bool,
+                   device:     torch.device,
                    input_size: Tuple,
                    **kwargs) -> Tuple[nn.Module, Tuple]:
 
@@ -151,7 +151,7 @@ class ANAModuleFactory(ModuleFactory):
                    noise_type: Union[str, None]   = None,
                    mi:         Union[float, None] = None,
                    sigma:      Union[float, None] = None,
-                   strategy:   Union[int, None]   = None) -> [nn.Module, Union[Tuple[int, int], Tuple[int, int, int, int]]]:
+                   strategy:   Union[str, None]   = None) -> [nn.Module, Union[Tuple[int, int], Tuple[int, int, int, int]]]:
 
         # build module object
         if class_name == 'activation':
@@ -200,10 +200,10 @@ class ANAModuleFactory(ModuleFactory):
         return module, output_size
 
 
-def create_quantizer_spec(nbits: int,
-                          signed: bool,
+def create_quantizer_spec(nbits:    int,
+                          signed:   bool,
                           balanced: bool,
-                          eps: float):
+                          eps:      float):
 
     quantizer_spec = {
         'nbits':    nbits,

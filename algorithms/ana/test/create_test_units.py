@@ -6,7 +6,7 @@ from .create_tensors import BatchSize, InputSize, LinearSize, Conv2dChannels, Co
 from .create_tensors import LinearTensorGenerator, Conv2dTensorGenerator
 from .create_modules import ANAModuleFactory
 
-from typing import Tuple, Dict
+from typing import Tuple
 
 from .create_tensors import TensorGenerator
 from .create_modules import ModuleFactory
@@ -32,13 +32,13 @@ class FunctionalEquivalenceUnitGenerator(object):
         self._factory = factory
 
     def get_test_unit(self,
-                      batch_size: BatchSize,
-                      input_size: InputSize,
+                      batch_size:  BatchSize,
+                      input_size:  InputSize,
                       test_module: TestModule,
-                      noise_type: str,
-                      mi: float,
-                      sigma: float,
-                      strategy: int) -> Tuple[Tuple[TensorGenerator, nn.Module, TensorGenerator], Tuple[TensorGenerator, nn.Module, TensorGenerator]]:
+                      noise_type:  str,
+                      mi:          float,
+                      sigma:       float,
+                      strategy:    str) -> Tuple[Tuple[TensorGenerator, nn.Module, TensorGenerator], Tuple[TensorGenerator, nn.Module, TensorGenerator]]:
 
         # create input generators
         batch_size = batch_size.value
@@ -93,14 +93,14 @@ class ProfilingUnitGenerator(object):
 
     def __init__(self,
                  factory: ModuleFactory,
-                 device: torch.device):
+                 device:  torch.device):
 
         self._factory = factory
         self._device  = device
 
     def get_test_unit(self,
-                      batch_size: BatchSize,
-                      input_size: InputSize,
+                      batch_size:  BatchSize,
+                      input_size:  InputSize,
                       test_module: TestModule,
                       **kwargs) -> Tuple[TensorGenerator, nn.Module, TensorGenerator]:
 

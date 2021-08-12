@@ -7,10 +7,10 @@ import torch.nn as nn
 from .create_tensors import TensorGenerator
 
 
-def profile(x_gen: TensorGenerator,
-            module: nn.Module,
+def profile(x_gen:    TensorGenerator,
+            module:   nn.Module,
             grad_gen: TensorGenerator,
-            T: int = 1000) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+            T:        int = 1000) -> Tuple[Tuple[float, float], Tuple[float, float]]:
     """Profile the time performance of a PyTorch module.
 
     Given a PyTorch module, execute its forward and backward passes as many
@@ -25,17 +25,15 @@ def profile(x_gen: TensorGenerator,
 
         x = next(x_gen)
         x.requires_grad = True
-
-        sf = time.time()
-        y = module(x)
-        ef = time.time()
+        sf  = time.time()
+        y   = module(x)
+        ef  = time.time()
         dtf = ef - sf
 
         yg = next(grad_gen)
-
-        sb = time.time()
+        sb  = time.time()
         y.backward(yg)
-        eb = time.time()
+        eb  = time.time()
         dtb = eb - sb
 
         measurements_forward.append(dtf)

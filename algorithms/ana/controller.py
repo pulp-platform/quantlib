@@ -1,5 +1,5 @@
 # 
-# ana_controller.py
+# controller.py
 # 
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
@@ -24,7 +24,7 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 
-from .ana_ops import ANAModule
+from .ops import ANAModule
 from ..controller import Controller
 
 import typing
@@ -32,13 +32,20 @@ from typing import Union, List
 
 
 def lws(t: int, tstart: int, tend: int, alpha: int) -> float:
-    """Limited-window scheduling function."""
+    """Limited-window scheduling function.
+
+    This function returns 1.0 for `t <= tstart`, 0.0 for `tend <= t`, and
+    `\lambda^{\alpha}` for `tstart < t < tend`, where `\lambda =
+    \frac{tend - t}{tend - tstart}`.
+    """
 
     # assert 0 <= tstart < tend
     # assert 0 <= alpha
 
-    t = min(max(t, tstart), tend)
-    return (float(tend - t) / float(tend - tstart)) ** alpha
+    t          = min(max(t, tstart), tend)
+    multiplier = (float(tend - t) / float(tend - tstart)) ** alpha
+
+    return multiplier
 
 
 def uws(t: int, tstart: int, eps: float, alpha: int) -> float:
@@ -61,7 +68,7 @@ _AC_MAPPER = {'lws': lws, 'uws': uws}
 class ANATimer(object):
 
     def __init__(self,
-                 mi_spec: dict,
+                 mi_spec:    dict,
                  sigma_spec: dict):
 
         self._mi = None
@@ -133,7 +140,7 @@ class ANAController(Controller):
     standard deviation of the distribution).
     """
 
-    def __init__(self, module: torch.nn.Module, ctrl_spec: List) -> None:
+    def __init__(self, module: torch.nn.Module, ctrl_spec: List):
 
         self._global_step   = -1
         self._timer2modules = []
@@ -158,8 +165,8 @@ class ANAController(Controller):
 
         # build timers and link them to the specified ANA modules
         for timer_spec in ctrl_spec:
-            timer        = ANATimer(timer_spec['mi'], timer_spec['sigma'])
-            modules      = list(map(lambda n: self._n2m[n], set(timer_spec['modules'])))
+            timer   = ANATimer(timer_spec['mi'], timer_spec['sigma'])
+            modules = list(map(lambda n: self._n2m[n], set(timer_spec['modules'])))
             self._timer2modules.append(Timer2Modules(timer=timer, modules=modules))
 
     @staticmethod

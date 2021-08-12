@@ -1,5 +1,5 @@
 # 
-# ana_ops.py
+# ops.py
 # 
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
@@ -19,14 +19,16 @@
 # limitations under the License.
 # 
 
+from enum import Enum, IntEnum
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.utils import _single, _pair, _triple
-
 import math
 
-from . import ana_lib
+from . import lib
+
+from typing import Dict
 
 
 __all__ = [
@@ -38,15 +40,28 @@ __all__ = [
 ]
 
 
+class NoiseType(Enum):
+    UNIFORM    = lib.ANAUniform
+    TRIANGULAR = lib.ANATriangular
+    NORMAL     = lib.ANANormal
+    LOGISTIC   = lib.ANALogistic
+
+
+class ForwardComputationStrategy(IntEnum):
+    EXPECTATION = 0
+    MODE        = 1
+    RANDOM      = 2
+
+
 class ANAModule(nn.Module):
 
-    def __init__(self, quantizer_spec, noise_type, strategy):
+    def __init__(self, quantizer_spec: Dict, noise_type: str, strategy: str):
         super(ANAModule, self).__init__()
         ANAModule.setup_quantizer(self, quantizer_spec)
-        ANAModule.setup_noise(self, noise_type, strategy)
+        ANAModule.setup_noise(self, NoiseType[noise_type.upper()].value, ForwardComputationStrategy[strategy.upper()].value)
 
     @staticmethod
-    def setup_quantizer(anamod, quantizer_spec):
+    def setup_quantizer(anamod: nn.Module, quantizer_spec: Dict) -> None:
         """The quantizer is a stair function specified by:
         * number of bits;
         * unsigned vs. signed integer representation;
@@ -72,10 +87,10 @@ class ANAModule(nn.Module):
         anamod.register_parameter('eps', nn.Parameter(eps, requires_grad=False))
 
     @staticmethod
-    def setup_noise(anamod, noise_type, strategy):
+    def setup_noise(anamod: nn.Module, noise_class, strategy: int):
 
         # noise type
-        anamod.ana_op = getattr(ana_lib, 'ANA' + noise_type.capitalize()).apply
+        anamod.ana_op = noise_class().apply
 
         # initialise noise hyper-parameters
         anamod.register_parameter('mi',    nn.Parameter(torch.zeros(1), requires_grad=False))
@@ -90,10 +105,10 @@ class ANAModule(nn.Module):
 
 class ANAActivation(ANAModule):
     """Quantize scores."""
-    def __init__(self, quantizer_spec, noise_type, strategy):
+    def __init__(self, quantizer_spec: Dict, noise_type: str, strategy: str):
         super(ANAActivation, self).__init__(quantizer_spec, noise_type, strategy)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         x = x / self.eps
 
@@ -109,8 +124,10 @@ class ANAActivation(ANAModule):
 
 class ANALinear(ANAModule):
     """Affine transform with quantized parameters."""
-    def __init__(self, quantizer_spec, noise_type, strategy,
-                 in_features, out_features, bias=True):
+    def __init__(self,
+                 quantizer_spec: Dict, noise_type: str, strategy: str,
+                 in_features: int, out_features: int,
+                 bias: bool = False):
 
         # set quantizer + ANA properties
         super(ANALinear, self).__init__(quantizer_spec, noise_type, strategy)
@@ -127,27 +144,27 @@ class ANALinear(ANAModule):
         self._is_initialised = False
         self.reset_parameters()
 
-    def reset_parameters(self, mi: float = 0.0):
+    def reset_parameters(self) -> None:
 
         stdv = 1. / math.sqrt(self.weight.size(1))
 
         # init weights near thresholds
         self.weight.data.random_(to=len(self.thresholds.data))
-        self.weight.data = self.thresholds[self.weight.data.to(torch.long)] + mi
+        self.weight.data = self.thresholds[self.weight.data.to(torch.long)]
         self.weight.data = torch.add(self.weight.data, torch.zeros_like(self.weight.data).uniform_(-stdv, stdv))
 
         # init biases
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
 
-    def set_noise(self, mi, sigma):
+    def set_noise(self, mi: float, sigma: float) -> None:
         super().set_noise(mi, sigma)
-        if not self._is_initialised:
-            self.reset_parameters(mi)
+        if not self._is_initialised:  # at the first setup, adjust the initial distribution of the weights
+            self.weight.data += mi
             self._is_initialised = True
 
     @property
-    def weight_maybe_quant(self):
+    def weight_maybe_quant(self) -> torch.Tensor:
         weight = self.weight / self.eps
         weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
@@ -155,14 +172,17 @@ class ANALinear(ANAModule):
                              self.strategy, self.training)
         return weight
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.linear(input, self.weight_maybe_quant * self.eps, self.bias)
 
 
 class _ANAConvNd(ANAModule):
     """Cross-correlation transform with quantized parameters."""
-    def __init__(self, quantizer_spec, noise_type, strategy,
-                 in_channels, out_channels, kernel_size, stride, padding, dilation, transposed, output_padding, groups, bias):
+    def __init__(self,
+                 quantizer_spec: Dict, noise_type: str, strategy: str,
+                 in_channels: int, out_channels: int,
+                 kernel_size: int, stride: int, padding: int, dilation: int, transposed: bool, output_padding, groups: int,
+                 bias: bool):
 
         # set quantizer + ANA properties
         super(_ANAConvNd, self).__init__(quantizer_spec, noise_type, strategy)
@@ -195,7 +215,7 @@ class _ANAConvNd(ANAModule):
         self._is_initialised = False
         self.reset_parameters()
 
-    def reset_parameters(self, mi: float = 0.0):
+    def reset_parameters(self) -> None:
 
         n = self.in_channels
         for k in self.kernel_size:
@@ -204,21 +224,21 @@ class _ANAConvNd(ANAModule):
 
         # init weights near thresholds
         self.weight.data.random_(to=len(self.thresholds.data))
-        self.weight.data = self.thresholds[self.weight.data.to(torch.long)] + mi
+        self.weight.data = self.thresholds[self.weight.data.to(torch.long)]
         self.weight.data = torch.add(self.weight.data, torch.zeros_like(self.weight.data).uniform_(-stdv, stdv))
 
         # init biases
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
 
-    def set_noise(self, mi, sigma):
+    def set_noise(self, mi: float, sigma: float) -> None:
         super().set_noise(mi, sigma)
         if not self._is_initialised:
-            self.reset_parameters(mi)
+            self.weight.data += mi
             self._is_initialised = True
 
     @property
-    def weight_maybe_quant(self):
+    def weight_maybe_quant(self) -> torch.Tensor:
         weight = self.weight / self.eps
         weight = self.ana_op(weight,
                              self.quant_levels, self.thresholds,
@@ -228,8 +248,11 @@ class _ANAConvNd(ANAModule):
 
 
 class ANAConv1d(_ANAConvNd):
-    def __init__(self, quantizer_spec, noise_type, strategy,
-                 in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    def __init__(self,
+                 quantizer_spec: Dict, noise_type: str, strategy: str,
+                 in_channels: int, out_channels: int,
+                 kernel_size: int, stride: int = 1, padding: int = 0, dilation: int = 1, groups: int = 1,
+                 bias: bool = False):
 
         kernel_size = _single(kernel_size)
         stride      = _single(stride)
@@ -241,13 +264,16 @@ class ANAConv1d(_ANAConvNd):
             in_channels, out_channels, kernel_size, stride, padding, dilation, False, _single(0), groups, bias
         )
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.conv1d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
 class ANAConv2d(_ANAConvNd):
-    def __init__(self, quantizer_spec, noise_type, strategy,
-                 in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    def __init__(self,
+                 quantizer_spec: Dict, noise_type: str, strategy: str,
+                 in_channels: int, out_channels: int,
+                 kernel_size: int, stride: int = 1, padding: int = 0, dilation: int = 1, groups: int = 1,
+                 bias: bool = True):
 
         kernel_size = _pair(kernel_size)
         stride      = _pair(stride)
@@ -259,13 +285,16 @@ class ANAConv2d(_ANAConvNd):
             in_channels, out_channels, kernel_size, stride, padding, dilation, False, _pair(0), groups, bias
         )
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.conv2d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
 class ANAConv3d(_ANAConvNd):
-    def __init__(self, quantizer_spec, noise_type, strategy,
-                 in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    def __init__(self,
+                 quantizer_spec: Dict, noise_type: str, strategy: str,
+                 in_channels: int, out_channels: int,
+                 kernel_size: int, stride: int = 1, padding: int = 0, dilation: int = 1, groups: int = 1,
+                 bias: bool = True):
 
         kernel_size = _triple(kernel_size)
         stride      = _triple(stride)
@@ -277,5 +306,5 @@ class ANAConv3d(_ANAConvNd):
             in_channels, out_channels, kernel_size, stride, padding, dilation, False, _triple(0), groups, bias
         )
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.conv3d(input, self.weight_maybe_quant * self.eps, self.bias, self.stride, self.padding, self.dilation, self.groups)

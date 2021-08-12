@@ -8,8 +8,8 @@ import torch.nn as nn
 from .create_tensors import TensorGenerator
 
 
-def compare_tensors(t1: torch.Tensor,
-                    t2: torch.Tensor,
+def compare_tensors(t1:        torch.Tensor,
+                    t2:        torch.Tensor,
                     tolerance: float) -> bool:
     """Determine whether two tensors are equivalent.
 
@@ -62,32 +62,32 @@ def numerical_equivalence(x_gen_cpu:    TensorGenerator,
         module_gpu.weight.data = module_cpu.weight.data.to(module_gpu.weight.data)
 
     # process CPU arrays
-    x_cpu = next(x_gen_cpu)
+    x_cpu  = next(x_gen_cpu)
     x_cpu.requires_grad = True
-    y_cpu = module_cpu(x_cpu)
+    y_cpu  = module_cpu(x_cpu)
     yg_cpu = next(grad_gen_cpu)
     y_cpu.backward(yg_cpu)
 
     # process GPU arrays
-    x_gpu = next(x_gen_gpu)
+    x_gpu  = next(x_gen_gpu)
     x_gpu.requires_grad = True
-    y_gpu = module_gpu(x_gpu)
+    y_gpu  = module_gpu(x_gpu)
     yg_gpu = next(grad_gen_gpu)
     y_gpu.backward(yg_gpu)
 
     # compare arrays
     # input-related
-    dx  = compare_tensors(x_cpu, x_gpu.cpu(), 0.0)  # should be deterministic
-    dxg = compare_tensors(x_cpu.grad, x_gpu.grad.cpu(), tolerance)
+    dx     = compare_tensors(x_cpu, x_gpu.cpu(), 0.0)  # should be deterministic
+    dxg    = compare_tensors(x_cpu.grad, x_gpu.grad.cpu(), tolerance)
     x_test = dx and dxg
     # output-related
-    dy  = compare_tensors(y_cpu, y_gpu.cpu(), tolerance)
-    dyg = compare_tensors(yg_cpu, yg_gpu.cpu(), tolerance)  # should be deterministic
+    dy     = compare_tensors(y_cpu, y_gpu.cpu(), tolerance)
+    dyg    = compare_tensors(yg_cpu, yg_gpu.cpu(), tolerance)  # should be deterministic
     y_test = dy and dyg
     # parameter-related
     if has_weight:
-        dw  = compare_tensors(module_cpu.weight_maybe_quant, module_gpu.weight_maybe_quant.cpu(), tolerance)
-        dwg = compare_tensors(module_cpu.weight.grad, module_gpu.weight.grad.cpu(), tolerance)
+        dw     = compare_tensors(module_cpu.weight_maybe_quant, module_gpu.weight_maybe_quant.cpu(), tolerance)
+        dwg    = compare_tensors(module_cpu.weight.grad, module_gpu.weight.grad.cpu(), tolerance)
         w_test = dw and dwg
     else:
         w_test = True  # no test to make, so this should not result in failure
@@ -95,8 +95,8 @@ def numerical_equivalence(x_gen_cpu:    TensorGenerator,
     return x_test and y_test and w_test
 
 
-def scatterplot2d(x: torch.Tensor,
-                  y: torch.Tensor,
+def scatterplot2d(x:   torch.Tensor,
+                  y:   torch.Tensor,
                   eps: torch.Tensor) -> None:
     """Show a sample of a (deterministic) function.
 
@@ -114,10 +114,10 @@ def scatterplot2d(x: torch.Tensor,
     plt.ylim(y.min() - eps / 2, y.max() + eps / 2)
 
 
-def distribution2d(x_all: torch.Tensor,
-                   y_all: torch.Tensor,
+def distribution2d(x_all:        torch.Tensor,
+                   y_all:        torch.Tensor,
                    quant_levels: torch.Tensor,
-                   eps: torch.Tensor) -> None:
+                   eps:          torch.Tensor) -> None:
     """Show the joint distribution of two variables `x` and `y` as a heatmap.
 
     When the relationship between two sets `X` and `Y` is non-deterministic
@@ -145,7 +145,7 @@ def distribution2d(x_all: torch.Tensor,
                extent=[y_edges[0], y_edges[-1], x_edges[0], x_edges[-1]])
 
 
-def distribution1d(t: torch.Tensor):
+def distribution1d(t: torch.Tensor) -> None:
     """Show the one-dimensional distribution of an array's components.
 
     When the objects stored in the components of an array are numbers, it is
@@ -160,13 +160,13 @@ def distribution1d(t: torch.Tensor):
     plt.hist(edges[:-1], edges, weights=counts)
 
 
-def visual_equivalence(x_gen_cpu: TensorGenerator,
-                       module_cpu: nn.Module,
+def visual_equivalence(x_gen_cpu:    TensorGenerator,
+                       module_cpu:   nn.Module,
                        grad_gen_cpu: TensorGenerator,
-                       x_gen_gpu: TensorGenerator,
-                       module_gpu: nn.Module,
+                       x_gen_gpu:    TensorGenerator,
+                       module_gpu:   nn.Module,
                        grad_gen_gpu: TensorGenerator,
-                       N: int = 1000) -> None:
+                       N:            int = 1000) -> None:
     """Provide information that humans can use to decide whether the CPU and
     GPU implementations are equivalent.
     """

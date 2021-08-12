@@ -20,11 +20,11 @@ def get_ana_feug() -> FunctionalEquivalenceUnitGenerator:
 # 4 noise types (str): 'uniform', 'triangular', 'normal', 'logistic'
 # arbitrary mi (float)
 # arbitraty sigma (float)
-# 2 forward computation strategies (int): 0 (expecation), 1 (mode)
+# 2 forward computation strategies (str): 'expectation', 'mode'
 # -------------------------------------------------------------------------------
-# 4 * 2 * 3 * 3 * 4 = 288 tests
+# 3 * 3 * 4 * 4 * 2 = 288 tests
 # -------------------------------------------------------------------------------
-# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONLINEAR, 'uniform', -0.5, 1.0, 0)
+# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONLINEAR, 'uniform', -0.5, 1.0, 'expectation')
 # >>> numerical_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)
 
 # 3 batch sizes (BatchSize): SINGLE, SMALL, LARGE
@@ -33,11 +33,11 @@ def get_ana_feug() -> FunctionalEquivalenceUnitGenerator:
 # 4 noise types (str): 'uniform', 'triangular', 'normal', 'logistic'
 # arbitrary mi (float)
 # arbitraty sigma (float)
-# 3 forward computation strategies (int): 0 (expecation), 1 (mode), 2 (random)
+# 1 forward computation strategy (str): 'random'
 # ----------------------------------------------------------------------------
-# 4 * 3 * 3 * 3 * 2 = 216 tests
+# 3 * 3 * 2 * 4 * 1 = 72 tests
 # ----------------------------------------------------------------------------
-# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONCONV2D, 'uniform', -0.5, 1.0, 2)
+# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.ACTIVATIONCONV2D, 'uniform', -0.5, 1.0, 'random')
 # >>> visual_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)
 
 # 3 batch sizes (BatchSize): SINGLE, SMALL, LARGE
@@ -46,9 +46,9 @@ def get_ana_feug() -> FunctionalEquivalenceUnitGenerator:
 # 4 noise types (str): 'uniform', 'triangular', 'normal', 'logistic'
 # arbitrary mi (float)
 # arbitraty sigma (float)
-# 3 forward computation strategies (int): 0 (expecation), 1 (mode), 2 (random)
+# 3 forward computation strategies (str): 'expectation', 'mode', 'random'
 # ----------------------------------------------------------------------------
-# 4 * 3 * 3 * 3 * 2 = 216 tests
+# 3 * 3 * 2 * 4 * 3 = 216 tests
 # ----------------------------------------------------------------------------
-# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.CONV2D, 'uniform', -0.5, 1.0, 2)
+# >>> (x_gen_cpu, module_cpu, grad_gen_cpu), (x_gen_gpu, module_gpu, grad_gen_gpu) = feug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.CONV2D, 'uniform', -0.5, 1.0, 'mode')
 # >>> visual_equivalence(x_gen_cpu, module_cpu, grad_gen_cpu, x_gen_gpu, module_gpu, grad_gen_gpu)

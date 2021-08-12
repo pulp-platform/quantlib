@@ -39,9 +39,9 @@ def get_ana_pug(device: torch.device) -> ProfilingUnitGenerator:
 # 4 noise types (str): 'uniform', 'triangular', 'normal', 'logistic'
 # arbitrary mi (float)
 # arbitrary sigma (float)
-# 3 forward computation strategies (int): 0 (expectation), 1 (mode), 2 (random)
+# 3 forward computation strategies (str): 'expectation', 'mode', 'random'
 # -----------------------------------------------------------------------------
-# 2 * 4 * 3 * ( 3 * 3 * 4 + 2 * 3 * 2 ) = 1152 tests
+# 2 * ( 3 * 3 * 4 + 2 * 3 * 2 ) * 4 * 3 = 1152 tests
 # -----------------------------------------------------------------------------
-# >>> ax_gen, amodule, agrad_gen = apug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.LINEARNETWORK, noise_type='uniform', mi=-0.5, sigma=1.0, strategy=0)
-# >>> profile(ax_gen amodule, agrad_gen
+# >>> ax_gen, amodule, agrad_gen = apug.get_test_unit(BatchSize.SMALL, InputSize.NORMAL, TestModule.LINEARNETWORK, noise_type='uniform', mi=-0.5, sigma=1.0, strategy='random')
+# >>> profile(ax_gen amodule, agrad_gen)

@@ -19,6 +19,5 @@
 # limitations under the License.
 # 
 
-from .ana_ops import *
-from .ana_controller import ANAController
-
+from .ops import *
+from .controller import ANAController
