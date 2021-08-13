@@ -20,6 +20,7 @@
 # 
 
 from functools import partial
+from typing import NamedTuple
 from collections import OrderedDict
 import torch
 import torch.nn as nn
@@ -27,12 +28,11 @@ import torch.nn as nn
 from .ops import ANAModule
 from ..controller import Controller
 
-import typing
 from typing import Union, List
 
 
-def lws(t: int, tstart: int, tend: int, alpha: int) -> float:
-    """Limited-window scheduling function.
+def bws(t: int, tstart: int, tend: int, alpha: int) -> float:
+    """Bounded-window scheduling function.
 
     This function returns 1.0 for `t <= tstart`, 0.0 for `tend <= t`, and
     `\lambda^{\alpha}` for `tstart < t < tend`, where `\lambda =
@@ -49,7 +49,7 @@ def lws(t: int, tstart: int, tend: int, alpha: int) -> float:
 
 
 def uws(t: int, tstart: int, eps: float, alpha: int) -> float:
-    """Unlimited-window scheduling function."""
+    """Unbounded-window scheduling function."""
 
     # assert 0 <= tstart
     # assert 0.0 <= eps
@@ -62,7 +62,7 @@ def uws(t: int, tstart: int, eps: float, alpha: int) -> float:
     return multiplier
 
 
-_AC_MAPPER = {'lws': lws, 'uws': uws}
+_AC_MAPPER = {'bws': bws, 'uws': uws}
 
 
 class ANATimer(object):
@@ -73,12 +73,12 @@ class ANATimer(object):
 
         self._mi = None
         assert ANATimer.check_spec(mi_spec, is_sigma=False)
-        self._mi_base = mi_spec['base']
+        self._mi_beta = mi_spec['beta']
         self._mi_fun  = partial(_AC_MAPPER[mi_spec['fun']], **mi_spec['kwargs'])
 
         self._sigma = None
         assert ANATimer.check_spec(sigma_spec, is_sigma=True)
-        self._sigma_base = sigma_spec['base']
+        self._sigma_beta = sigma_spec['beta']
         self._sigma_fun  = partial(_AC_MAPPER[sigma_spec['fun']], **sigma_spec['kwargs'])
 
     @property
@@ -92,13 +92,13 @@ class ANATimer(object):
     @staticmethod
     def check_spec(spec: dict, is_sigma: bool) -> bool:
 
-        check_base = isinstance(spec['base'], float) and (True if not is_sigma else (0.0 <= spec['base']))
+        check_beta = isinstance(spec['beta'], float) and (True if not is_sigma else (0.0 <= spec['beta']))
         spec_type  = spec['fun']
         check_fun  = spec_type in set(_AC_MAPPER.keys())
 
-        if check_base and check_fun:
+        if check_beta and check_fun:
             spec_kwargs = spec['kwargs']
-            if spec_type == 'lws':
+            if spec_type == 'bws':
                 check_tstart = isinstance(spec_kwargs['tstart'], int) and (0 <= spec_kwargs['tstart'])
                 check_tend   = isinstance(spec_kwargs['tend'], int)   and (spec_kwargs['tstart'] < spec_kwargs['tend'])
                 check_alpha  = isinstance(spec_kwargs['alpha'], int)  and (0 <= spec_kwargs['alpha'])
@@ -116,11 +116,12 @@ class ANATimer(object):
         return is_correct
 
     def step(self, t: int) -> None:
-        self._mi    = self._mi_base    * self._mi_fun(t)
-        self._sigma = self._sigma_base * self._sigma_fun(t)
+        self._mi    = self._mi_beta    * self._mi_fun(t)
+        self._sigma = self._sigma_beta * self._sigma_fun(t)
 
 
-Timer2Modules = typing.NamedTuple('Timer2Modules', [('timer', ANATimer), ('modules', List[torch.nn.Module])])
+Timer2Modules = NamedTuple('Timer2Modules', [('timer',   ANATimer),
+                                             ('modules', List[torch.nn.Module])])
 
 
 class ANAController(Controller):
