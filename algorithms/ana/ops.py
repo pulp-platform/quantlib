@@ -58,7 +58,7 @@ class ANAModule(nn.Module):
     def __init__(self, quantizer_spec: Dict, noise_type: str, strategy: str):
         super(ANAModule, self).__init__()
         ANAModule.setup_quantizer(self, quantizer_spec)
-        ANAModule.setup_noise(self, NoiseType[noise_type.upper()].value, ForwardComputationStrategy[strategy.upper()].value)
+        ANAModule.setup_noise(self, NoiseType[noise_type.upper()].value, ForwardComputationStrategy[strategy.upper()].value)  # https://docs.python.org/3/library/enum.html#programmatic-access-to-enumeration-members-and-their-attributes
 
     @staticmethod
     def setup_quantizer(anamod: nn.Module, quantizer_spec: Dict) -> None:
