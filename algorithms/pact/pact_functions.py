@@ -223,6 +223,7 @@ class TQTQuantFunc(torch.autograd.Function):
         .. math::
             \varepsilon = (-\alpha+\beta) / (2^Q - 1)
 
+
         In backward propagation, using the Straight-Through Estimator, the gradient of the function is defined as
 
         .. math::
@@ -295,7 +296,7 @@ class TQTQuantFunc(torch.autograd.Function):
         grad_logt *= ln2
         # normalize and bias-correct (see appendix B in paper) the gradient
         grad_var = beta * running_grad_var + (1-beta) * grad_logt**2
-        running_grad_var.copy_(grad_var)
+        running_grad_var.copy_(grad_var.reshape(running_grad_var.shape))
         running_beta.mul_(beta)
         grad_var /= (1 - running_beta)
         grad_logt /= (torch.sqrt(grad_var) + 1e-5)
