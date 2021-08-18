@@ -24,6 +24,7 @@ from typing import NamedTuple
 from collections import OrderedDict
 import torch
 import torch.nn as nn
+import copy
 
 from .ops import ANAModule
 from ..controller import Controller
@@ -151,6 +152,7 @@ class ANAController(Controller):
         if isinstance(module, nn.DataParallel):
             # the network is wrapped inside an nn.DataParallel module:
             # this requires to resolve an additional naming layer
+            ctrl_spec = copy.deepcopy(ctrl_spec)  # TODO: find a better workaround to avoid overwriting the original controller specifications
             for timer_spec in ctrl_spec:
                 timer_spec['modules'] = ['.'.join(['module', m]) for m in timer_spec['modules']]
 

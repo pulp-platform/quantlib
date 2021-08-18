@@ -24,6 +24,9 @@ import torch
 from .ana_forward import forward_expectation, forward_mode, forward_random
 
 
+# Wikipedia: https://en.wikipedia.org/wiki/Triangular_distribution
+
+
 def forward(x_in, q, t, mi, sigma, strategy, training):
 
     # shift points with respect to the distribution's mean
