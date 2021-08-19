@@ -30,41 +30,46 @@ from .filters import Filter
 
 def replace_relu_anaact(module:         nn.Module,
                         quantizer_spec: dict,
-                        noise_type:     str):
+                        noise_type:     str,
+                        strategy:       str):
 
     assert isinstance(module, nn.ReLU)
-    return qa.ana.ANAActivation(quantizer_spec=quantizer_spec, noise_type=noise_type)
+    return qa.ana.ANAActivation(quantizer_spec=quantizer_spec, noise_type=noise_type, strategy=strategy)
 
 
 def replace_linear_analinear(module:         nn.Module,
                              quantizer_spec: dict,
-                             noise_type:     str) -> nn.Module:
+                             noise_type:     str,
+                             strategy:       str) -> nn.Module:
 
     assert isinstance(module, nn.Linear)
 
-    return qa.ana.ANALinear(in_features=module.in_features,
+    return qa.ana.ANALinear(quantizer_spec=quantizer_spec,
+                            noise_type=noise_type,
+                            strategy=strategy,
+                            in_features=module.in_features,
                             out_features=module.out_features,
-                            bias=True if module.bias is not None else False,
-                            quantizer_spec=quantizer_spec,
-                            noise_type=noise_type)
+                            bias=True if module.bias is not None else False)
 
 
 def replace_conv2d_anaconv2d(module:         nn.Module,
                              quantizer_spec: dict,
-                             noise_type:     str) -> nn.Module:
+                             noise_type:     str,
+                             strategy:       str) -> nn.Module:
 
     assert isinstance(module, nn.Conv2d)
 
-    return qa.ana.ANAConv2d(in_channels=module.in_channels,
+    return qa.ana.ANAConv2d(quantizer_spec=quantizer_spec,
+                            noise_type=noise_type,
+                            strategy=strategy,
+                            in_channels=module.in_channels,
                             out_channels=module.out_channels,
                             kernel_size=module.kernel_size,
                             stride=module.stride,
                             padding=module.padding,
                             dilation=module.dilation,
                             groups=module.groups,
-                            bias=module.bias,
-                            quantizer_spec=quantizer_spec,
-                            noise_type=noise_type)
+                            bias=module.bias)
 
 
 class ReplaceReLUANAActivationRule(LightweightRule):
@@ -72,9 +77,10 @@ class ReplaceReLUANAActivationRule(LightweightRule):
     def __init__(self,
                  filter_:        Filter,
                  quantizer_spec: dict,
-                 noise_type:     str):
+                 noise_type:     str,
+                 strategy:       str):
 
-        replacement_fun = partial(replace_relu_anaact, quantizer_spec=quantizer_spec, noise_type=noise_type)
+        replacement_fun = partial(replace_relu_anaact, quantizer_spec=quantizer_spec, noise_type=noise_type, strategy=strategy)
         super(ReplaceReLUANAActivationRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
 
 
@@ -83,9 +89,10 @@ class ReplaceLinearANALinearRule(LightweightRule):
     def __init__(self,
                  filter_:        Filter,
                  quantizer_spec: dict,
-                 noise_type:     str):
+                 noise_type:     str,
+                 strategy:       str):
 
-        replacement_fun = partial(replace_linear_analinear, quantizer_spec=quantizer_spec, noise_type=noise_type)
+        replacement_fun = partial(replace_linear_analinear, quantizer_spec=quantizer_spec, noise_type=noise_type, strategy=strategy)
         super(ReplaceLinearANALinearRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
 
 
@@ -94,8 +101,9 @@ class ReplaceConv2dANAConv2dRule(LightweightRule):
     def __init__(self,
                  filter_:        Filter,
                  quantizer_spec: dict,
-                 noise_type:     str):
+                 noise_type:     str,
+                 strategy:       str):
 
-        replacement_fun = partial(replace_conv2d_anaconv2d, quantizer_spec=quantizer_spec, noise_type=noise_type)
+        replacement_fun = partial(replace_conv2d_anaconv2d, quantizer_spec=quantizer_spec, noise_type=noise_type, strategy=strategy)
         super(ReplaceConv2dANAConv2dRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
 
