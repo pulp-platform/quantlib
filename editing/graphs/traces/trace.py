@@ -28,10 +28,8 @@ import os
 from quantlib.editing.graphs import graphs
 from quantlib.editing.graphs import utils
 
-
 __TRACES_LIBRARY__ = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.libtraces')
 # __TRACES_LIBRARY__ = os.path.join(os.path.expanduser('~'), 'Desktop', 'QuantLab', 'quantlib', 'editing', 'graphs', 'traces', '.libtraces')
-
 
 def trace_module(library, algorithm, mod, dummy_input):
 
@@ -51,7 +49,7 @@ def trace_module(library, algorithm, mod, dummy_input):
     if not os.path.isdir(trace_dir):
         os.makedirs(trace_dir, exist_ok=True)
     nx.write_gpickle(G, os.path.join(trace_dir, 'networkx'))
-    utils.draw_graph(G, trace_dir, 'graphviz')
+    #utils.draw_graph(G, trace_dir, 'graphviz')
 
 
 ####################################

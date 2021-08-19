@@ -26,7 +26,6 @@ import networkx as nx
 from .trace import __TRACES_LIBRARY__
 from .. import graphs
 
-
 def load_traces_library(modules=None):
 
     mod_2_trace_dir = {}

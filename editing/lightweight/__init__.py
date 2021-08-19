@@ -21,5 +21,6 @@
 
 from .graph  import LightweightGraph
 from .editor import LightweightEditor
+from .node   import LightweightNode
 from .       import rules
 
