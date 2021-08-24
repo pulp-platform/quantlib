@@ -655,7 +655,7 @@ class PACTConv2d(nn.Conv2d):
 
     def extra_repr(self):
         r = super(PACTConv2d, self).extra_repr()
-        r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
+        r += f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
 
     @property
@@ -715,6 +715,9 @@ class PACTConv1d(nn.Conv1d):
             learn_clip = False,
             symm_wts = True,
             nb_std = 3,
+            tqt = False,
+            tqt_beta = 0.9,
+            tqt_clip_grad = True,
             **kwargs
     ):
         """
@@ -827,7 +830,7 @@ class PACTConv1d(nn.Conv1d):
 
     def extra_repr(self):
         r = super(PACTConv1d, self).extra_repr()
-        r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
+        r +=  f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
 
     @classmethod
