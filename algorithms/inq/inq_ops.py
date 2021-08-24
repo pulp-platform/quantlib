@@ -123,20 +123,20 @@ class INQNodeController:
 
     @property
     def weight(self):
-        return self.module.__getattr__(self.p_name)
+        return getattr(self.module, self.p_name)
     
     @property
     def weight_frozen(self):
-        return self.module.__getattr__(self.p_name_frozen)
+        return getattr(self.module, self.p_name_frozen)
     
     def get_weight_params(self, module):
-        weight = module.__getattr__(self.p_name)
-        weight_frozen = module.__getattr__(self.p_name_frozen)
+        weight = getattr(module, self.p_name)
+        weight_frozen = getattr(module, self.p_name_frozen)
         return weight, weight_frozen
 
     @property
     def s_param(self):
-        return self.module.__getattr__(self.p_name_s)
+        return getattr(self.module, self.p_name_s)
     
     @property
     def s(self):
@@ -241,7 +241,7 @@ class INQNodeController:
             n_weights = self.weight_frozen.numel()
             old_count = n_weights - torch.isnan(self.weight_frozen.data).sum(dtype=torch.long).item()
             new_count = int(self.fraction * n_weights)
-            # find indexes of weights to quantize
+            #w find indexes of weights to quantize
             if self.quant_strategy == "magnitude":
                 idx_full_prec = torch.nonzero(torch.isnan(self.weight_frozen.flatten()))
                 if idx_full_prec.numel() > 0:
