@@ -34,6 +34,7 @@ __all__ = [
     'INQController',
     'INQLinear',
     'INQConv1d',
+    'INQCausalConv1d',
     'INQConv2d',
 ]
 
