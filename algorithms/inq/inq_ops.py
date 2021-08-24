@@ -80,10 +80,10 @@ class INQController(Controller):
     #     if self.rescale_weights:
     #         for m in self.modules:
     #             m.weight_inq_ctrl.rescale_weights()
-    
+
     @staticmethod
     def get_inq_modules(nodes_set):
-        return [n[1] for n in nodes_set if (isinstance(n[1], INQLinear) or isinstance(n[1], INQConv1d) or isinstance(n[1], INQConv2d))]
+        return [n.module for n in nodes_set if isinstance(n.module, (INQLinear, INQConv1d, INQConv2d))]
 
 
 class INQNodeController:
