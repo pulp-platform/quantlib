@@ -23,7 +23,8 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizeBNActPass',
            'IntegerizePACTNetPass',
            'PACTTracer',
-           'PACT_symbolic_trace']
+           'PACT_symbolic_trace',
+           'RequantShift']
 
 class RequantShift(nn.Module):
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
@@ -35,17 +36,18 @@ class RequantShift(nn.Module):
         self.n_levels_out = n_levels
 
     def forward(self, x):
-        x *= self.mul
-        x += self.add
+        x = x * self.mul
+        x = x + self.add
         x = (x/self.div).floor()
         if not self.signed:
-            return torch.clip(x, 0., float(self.n_levels_out-1))
+            x = torch.clip(x, 0., float(self.n_levels_out-1))
         else:
             c = np.floor(self.n_levels_out/2+0.001)
             if self.n_levels_out % 2:
-                return torch.clip(x, -c, c)
+                x = torch.clip(x, -c, c)
             else:
-                return torch.clip(x, -c, c-1)
+                x = torch.clip(x, -c, c-1)
+        return x
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -55,11 +57,6 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     assert conv.bias is None, "integerize_pact_conv_fun: Conv layer has bias"
 
     conv_type = nn.Conv2d if isinstance(conv, PACTConv2d) else nn.Conv1d
-    # note the new node's intended integer precision in the precision dict
-    #if prec_dict is not None:
-        #nbits = int(np.log2(conv.n_levels) + 0.2)
-        #prec_dict[name] = nbits
-
     new_conv = conv_type(in_channels=conv.in_channels,
                          out_channels=conv.out_channels,
                          kernel_size=conv.kernel_size,
@@ -71,14 +68,20 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          padding_mode=conv.padding_mode)
     new_conv.weight.data.copy_(conv.weight_int)
 
+    # annotate the new conv with the number of levels
+    new_conv.n_levels = conv.n_levels
+
     return new_conv
 
 
-class IntegerizePACTConvPass(ReplaceSequentialPatternPass):
+class IntegerizePACTConvPass(Sequentialpass):
     def __init__(self):
-        pattern = nn.Sequential(PACTConv2d(1,1,1))
-        name = "_INTEGERIZE_PACT_CONV_PASS"
-        super(IntegerizePACTConvPass, self).__init__(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name)
+        passes = []
+        for i, c in enumerate(PACTConv1d, PACTConv2d):
+            pattern = nn.Sequential(c(1,1,1))
+            name = f"_INTEGERIZE_PACT_CONV{i}D_PASS"
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name))
+        super(IntegerizePACTConvPass, self).__init__(*passes, name_prefix='_INTEGERIZE_PACT_CONVS_PASS')
 
 def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -99,6 +102,8 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     new_lin.weight.data.copy_(lin.weight_int.round())
     if lin.bias is not None:
         new_lin.bias.data.copy_(lin.get_bias_int(eps_in).round())
+
+    new_lin.n_levels = lin.n_levels
 
     return new_lin
 
@@ -132,21 +137,27 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
     signed_act = isinstance(act, PACTAsymmetricAct)
     eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze()
     eps_out = act_node.meta['quant'].eps_out.cpu().clone().detach().squeeze()
-#    if eps_out.shape == torch.Size([1]):
-        #eps_out = eps_out[0]
+
+    # if the requant node would perform an identity operation, don't insert it.
+    if eps_in.numel() == eps_out.numel() == 1 and eps_in == eps_out and bn is None:
+        return None
 
     gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
     beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
     gamma_h *= eps_in
     gamma_h /= eps_out
     beta_h /= eps_out
+    if act.rounding:
+        beta_h += 0.5
+
     gamma_h *= D
     beta_h *= D
     gamma_h = torch.round(gamma_h)
     beta_h = torch.round(beta_h)
+
     if bn and gamma_h.numel() > 1:
         if isinstance(bn, nn.BatchNorm1d):
-            # BN1D can take two shape formats:
+            # BN1D can take two input tensor formats:
             # 1. [N_B, N_C, L], e.g. if it comes after a Conv1d layer
             # 2. [N_B, L], e.g. if it comes after a linear layer
             # depending on how it is used in the network we are processing, the
@@ -185,12 +196,14 @@ class IntegerizeBNActPass(SequentialPass):
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, gm : fx.GraphModule, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
+        #IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
+        # ShapePropPass will contaminate the batchnorm parameters!
         passes.append(ShapePropPass(shape_in))
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))

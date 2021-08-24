@@ -215,7 +215,13 @@ class ShapePropPass(FxPass):
         self.dtype_in = dtype_in
 
     def run_pass(self, gm : fx.GraphModule):
+        training = gm.training
+        gm.eval()
         sp = ShapeProp(gm)
         inp = [torch.rand(s, dtype=self.dtype_in) for s in self.shapes_in]
         sp.run(*inp)
+        if training:
+            # you really shouldn't be passing over GraphModules in non-eval
+            # state, but you do you!
+            gm.train()
         return gm
