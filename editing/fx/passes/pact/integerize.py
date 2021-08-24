@@ -74,7 +74,7 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     return new_conv
 
 
-class IntegerizePACTConvPass(Sequentialpass):
+class IntegerizePACTConvPass(SequentialPass):
     def __init__(self):
         passes = []
         for i, c in enumerate((PACTConv1d, PACTConv2d)):
