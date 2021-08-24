@@ -79,7 +79,7 @@ class IntegerizePACTConvPass(Sequentialpass):
         passes = []
         for i, c in enumerate(PACTConv1d, PACTConv2d):
             pattern = nn.Sequential(c(1,1,1))
-            name = f"_INTEGERIZE_PACT_CONV{i}D_PASS"
+            name = f"_INTEGERIZE_PACT_CONV{i+1}D_PASS"
             passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name))
         super(IntegerizePACTConvPass, self).__init__(*passes, name_prefix='_INTEGERIZE_PACT_CONVS_PASS')
 
