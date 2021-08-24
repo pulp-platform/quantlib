@@ -77,7 +77,7 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
 class IntegerizePACTConvPass(Sequentialpass):
     def __init__(self):
         passes = []
-        for i, c in enumerate(PACTConv1d, PACTConv2d):
+        for i, c in enumerate((PACTConv1d, PACTConv2d)):
             pattern = nn.Sequential(c(1,1,1))
             name = f"_INTEGERIZE_PACT_CONV{i}D_PASS"
             passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name))

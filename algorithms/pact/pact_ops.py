@@ -185,6 +185,9 @@ class PACTUnsignedAct(nn.Module):
             self.register_buffer("tqt_running_grad_var", torch.tensor((0.)))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.learn_clip = learn_clip
         self.act_kind = act_kind
         self.init_clip = init_clip
@@ -327,6 +330,9 @@ class PACTAsymmetricAct(nn.Module):
             self.register_buffer("tqt_running_grad_var", torch.tensor((0.)))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.tqt = tqt
 
         # this is switched on/off by the PACTActController
@@ -627,6 +633,9 @@ class PACTConv2d(nn.Conv2d):
             self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.tqt = tqt
 
         # this member indicates that the module's clipping bounds should not be
@@ -773,6 +782,9 @@ class PACTConv1d(nn.Conv1d):
             self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.tqt = tqt
 
         # this member indicates that the module's clipping bounds should not be
