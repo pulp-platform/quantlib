@@ -81,6 +81,9 @@ class INQController(Controller):
     #         for m in self.modules:
     #             m.weight_inq_ctrl.rescale_weights()
 
+    def step_pre_validation_epoch(self, *args, **kwargs):
+        pass
+
     @staticmethod
     def get_inq_modules(nodes_set):
         return [n.module for n in nodes_set if isinstance(n.module, (INQLinear, INQConv1d, INQConv2d))]

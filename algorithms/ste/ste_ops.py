@@ -56,6 +56,9 @@ class STEController(Controller):
     def get_ste_modules(nodes_set):
         return [n.module for n in nodes_set if isinstance(n.module, STEActivation)]
 
+    def step_pre_validation_epoch(self, *args, **kwargs):
+        pass
+
 
 class STEActivation(torch.nn.Module):
     """Quantizes activations according to the straight-through estiamtor (STE).
