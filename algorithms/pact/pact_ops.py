@@ -494,33 +494,32 @@ class PACTIntegerAdd(torch.nn.Module):
         if not self.force_out_eps:
             max_clip = -math.inf
             min_clip = math.inf
-
+            eps = math.inf
+            
             for i in self.acts:
                 if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
+                    print(diff)
+                    eps = diff/(self.n_levels-1)
 
             # SCHEREMO: This is the part that I might have to think about a bit more...
             for i in self.acts:
                 # Closer to unsigned than to signed -- Is this reasonable?
                 #if abs(i.clip_lo) < abs(i.clip_hi)/2:
                 # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
-                if abs(i.clip_lo) < 5*i.get_eps():
+                if abs(i.clip_lo) < i.get_eps():
                     i.symm = False
-                    i.clip_hi.data.copy_(torch.Tensor((max_clip - min_clip,)))
+                    i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
                     i.clip_lo.data.copy_(torch.Tensor((0.,)))
                     # Closer to signed than unsigned
                 else:
                     i.symm = True
-                    if (abs(min_clip) > max_clip):
-                        # Almost symmetrically quantized:
-                        lower_bound, upper_bound  = almost_symm_quant(abs(min_clip), i.n_levels)
-                    else:
-                        # Unsigned quantization
-                        lower_bound, upper_bound  = almost_symm_quant(max_clip/2, i.n_levels)
-                    i.clip_lo.data.copy_(lower_bound)
-                    i.clip_hi.data.copy_(upper_bound)
+                    i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
+                    i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
+#                     i.clip_lo.data.copy_(lower_bound)
+#                     i.clip_hi.data.copy_(upper_bound)
         else:
             clip_hi = self.act_out.clip_hi.data.detach().clone()
             clip_lo = self.act_out.clip_lo.data.detach().clone()
