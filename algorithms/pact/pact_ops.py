@@ -166,7 +166,7 @@ class PACTUnsignedAct(nn.Module):
         super(PACTUnsignedAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert_param_valid(self, act_kind, 'act_kind', ['relu', 'relu6', 'leaky_relu'])
+        assert_param_valid(self, act_kind, 'act_kind', ['relu', 'relu6', 'leaky_relu', 'htanh'])
         assert_param_valid(self, init_clip, 'init_clip',  ['max', 'std', 'const'])
 
         self.tqt = tqt
@@ -237,6 +237,8 @@ class PACTUnsignedAct(nn.Module):
                 x = torch.nn.functional.relu6(x)
             elif self.act_kind == 'leaky_relu':
                 x = torch.nn.functional.leaky_relu(x, self.leaky)
+            elif self.act_kind == 'htanh':
+                x = torch.nn.functional.hardtanh(x)
             with torch.no_grad():
                 cur_max = torch.max(x_stat)
                 cur_min = torch.min(x_stat)
@@ -303,7 +305,7 @@ class PACTAsymmetricAct(nn.Module):
         super(PACTAsymmetricAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu'])
+        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
         assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
 
 
@@ -382,6 +384,8 @@ class PACTAsymmetricAct(nn.Module):
                 return torch.nn.functional.relu6(x)
             elif self.act_kind == 'leaky_relu':
                 return torch.nn.functional.leaky_relu(x, self.leaky)
+            elif self.act_kind == 'htanh':
+                return torch.nn.functional.hardtanh(x)
         # in normal mode, PACTUnsignedAct uses
         else:
             eps = self.get_eps()
