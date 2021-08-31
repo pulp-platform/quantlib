@@ -34,6 +34,7 @@ __all__ = [
     'INQController',
     'INQLinear',
     'INQConv1d',
+    'INQCausalConv1d',
     'INQConv2d',
 ]
 
@@ -79,10 +80,13 @@ class INQController(Controller):
     #     if self.rescale_weights:
     #         for m in self.modules:
     #             m.weight_inq_ctrl.rescale_weights()
-    
+
+    def step_pre_validation_epoch(self, *args, **kwargs):
+        pass
+
     @staticmethod
     def get_inq_modules(nodes_set):
-        return [n[1] for n in nodes_set if (isinstance(n[1], INQLinear) or isinstance(n[1], INQConv1d) or isinstance(n[1], INQConv2d))]
+        return [n.module for n in nodes_set if isinstance(n.module, (INQLinear, INQConv1d, INQConv2d))]
 
 
 class INQNodeController:
@@ -122,20 +126,20 @@ class INQNodeController:
 
     @property
     def weight(self):
-        return self.module.__getattr__(self.p_name)
+        return getattr(self.module, self.p_name)
     
     @property
     def weight_frozen(self):
-        return self.module.__getattr__(self.p_name_frozen)
+        return getattr(self.module, self.p_name_frozen)
     
     def get_weight_params(self, module):
-        weight = module.__getattr__(self.p_name)
-        weight_frozen = module.__getattr__(self.p_name_frozen)
+        weight = getattr(module, self.p_name)
+        weight_frozen = getattr(module, self.p_name_frozen)
         return weight, weight_frozen
 
     @property
     def s_param(self):
-        return self.module.__getattr__(self.p_name_s)
+        return getattr(self.module, self.p_name_s)
     
     @property
     def s(self):
@@ -240,7 +244,7 @@ class INQNodeController:
             n_weights = self.weight_frozen.numel()
             old_count = n_weights - torch.isnan(self.weight_frozen.data).sum(dtype=torch.long).item()
             new_count = int(self.fraction * n_weights)
-            # find indexes of weights to quantize
+            #w find indexes of weights to quantize
             if self.quant_strategy == "magnitude":
                 idx_full_prec = torch.nonzero(torch.isnan(self.weight_frozen.flatten()))
                 if idx_full_prec.numel() > 0:
@@ -328,16 +332,52 @@ class INQConv1d(nn.Conv1d):
         return nn.functional.conv1d(input, weight_assembled, self.bias, self.stride,
                                     self.padding, self.dilation, self.groups)
         
-    
+
+class INQCausalConv1d(INQConv1d):
+    def __init__(self, in_channels, out_channels, kernel_size,
+                 stride=1, dilation=1, groups=1,
+                 bias=True, padding_mode='zeros',
+                 num_levels=3, quant_init_method=None, quant_strategy="magnitude"):
+        if isinstance(kernel_size, tuple):
+            assert len(kernel_size) == 1, "Invalid Kernel Size in INQCausalConv1d: {}".format(kernel_size)
+            k = kernel_size[0]
+        else:
+            k = kernel_size
+        if isinstance(dilation, tuple):
+            assert len(dilation) == 1, "Invalid Dilation in INQCausalConv1d: {}".format(dilation)
+            dil = dilation[0]
+        else:
+            dil = dilation
+
+        self.__padding = (k-1) * dil
+        super(INQCausalConv1d, self).__init__(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=0,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+            padding_mode=padding_mode,
+            num_levels=num_levels,
+            quant_init_method=quant_init_method,
+            quant_strategy=quant_strategy)
+
+    def forward(self, input):
+        pad_mode = 'constant' if self.padding_mode == 'zeros' else self.padding_mode
+        x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode)
+        result = super(INQCausalConv1d, self).forward(x)
+        return result
+
 class INQConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, 
                  stride=1, padding=0, dilation=1, groups=1, 
-                 bias=True, #padding_mode='zeros', 
-                 num_levels=3, quant_init_method=None, quant_strategy="magnitude"):
-        
+                 bias=True, padding_mode="zeros", num_levels=3, quant_init_method=None,
+                 quant_strategy="magnitude"):
         super(INQConv2d, self).__init__(in_channels, out_channels, kernel_size,
                  stride, padding, dilation, groups, 
-                 bias)#, padding_mode) # removed padding_mode for backward comp. to 0.4.1
+                 bias, padding_mode)
         
         self.weight_inq_ctrl = INQNodeController(self, 'weight',
                                                  num_levels=num_levels,

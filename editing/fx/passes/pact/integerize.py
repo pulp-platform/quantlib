@@ -57,11 +57,6 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     assert conv.bias is None, "integerize_pact_conv_fun: Conv layer has bias"
 
     conv_type = nn.Conv2d if isinstance(conv, PACTConv2d) else nn.Conv1d
-    # note the new node's intended integer precision in the precision dict
-    #if prec_dict is not None:
-        #nbits = int(np.log2(conv.n_levels) + 0.2)
-        #prec_dict[name] = nbits
-
     new_conv = conv_type(in_channels=conv.in_channels,
                          out_channels=conv.out_channels,
                          kernel_size=conv.kernel_size,
@@ -73,14 +68,20 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          padding_mode=conv.padding_mode)
     new_conv.weight.data.copy_(conv.weight_int)
 
+    # annotate the new conv with the number of levels
+    new_conv.n_levels = conv.n_levels
+
     return new_conv
 
 
-class IntegerizePACTConvPass(ReplaceSequentialPatternPass):
+class IntegerizePACTConvPass(SequentialPass):
     def __init__(self):
-        pattern = nn.Sequential(PACTConv2d(1,1,1))
-        name = "_INTEGERIZE_PACT_CONV_PASS"
-        super(IntegerizePACTConvPass, self).__init__(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name)
+        passes = []
+        for i, c in enumerate((PACTConv1d, PACTConv2d)):
+            pattern = nn.Sequential(c(1,1,1))
+            name = f"_INTEGERIZE_PACT_CONV{i+1}D_PASS"
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name))
+        super(IntegerizePACTConvPass, self).__init__(*passes, name_prefix='_INTEGERIZE_PACT_CONVS_PASS')
 
 def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -101,6 +102,8 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     new_lin.weight.data.copy_(lin.weight_int.round())
     if lin.bias is not None:
         new_lin.bias.data.copy_(lin.get_bias_int(eps_in).round())
+
+    new_lin.n_levels = lin.n_levels
 
     return new_lin
 

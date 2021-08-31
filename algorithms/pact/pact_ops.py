@@ -166,7 +166,7 @@ class PACTUnsignedAct(nn.Module):
         super(PACTUnsignedAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert_param_valid(self, act_kind, 'act_kind', ['relu', 'relu6', 'leaky_relu'])
+        assert_param_valid(self, act_kind, 'act_kind', ['relu', 'relu6', 'leaky_relu', 'htanh'])
         assert_param_valid(self, init_clip, 'init_clip',  ['max', 'std', 'const'])
 
         self.tqt = tqt
@@ -185,6 +185,9 @@ class PACTUnsignedAct(nn.Module):
             self.register_buffer("tqt_running_grad_var", torch.tensor((0.)))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.learn_clip = learn_clip
         self.act_kind = act_kind
         self.init_clip = init_clip
@@ -234,6 +237,8 @@ class PACTUnsignedAct(nn.Module):
                 x = torch.nn.functional.relu6(x)
             elif self.act_kind == 'leaky_relu':
                 x = torch.nn.functional.leaky_relu(x, self.leaky)
+            elif self.act_kind == 'htanh':
+                x = torch.nn.functional.hardtanh(x)
             with torch.no_grad():
                 cur_max = torch.max(x_stat)
                 cur_min = torch.min(x_stat)
@@ -300,7 +305,7 @@ class PACTAsymmetricAct(nn.Module):
         super(PACTAsymmetricAct, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu'])
+        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
         assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
 
 
@@ -327,6 +332,9 @@ class PACTAsymmetricAct(nn.Module):
             self.register_buffer("tqt_running_grad_var", torch.tensor((0.)))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.tqt = tqt
 
         # this is switched on/off by the PACTActController
@@ -376,6 +384,8 @@ class PACTAsymmetricAct(nn.Module):
                 return torch.nn.functional.relu6(x)
             elif self.act_kind == 'leaky_relu':
                 return torch.nn.functional.leaky_relu(x, self.leaky)
+            elif self.act_kind == 'htanh':
+                return torch.nn.functional.hardtanh(x)
         # in normal mode, PACTUnsignedAct uses
         else:
             eps = self.get_eps()
@@ -488,33 +498,32 @@ class PACTIntegerAdd(torch.nn.Module):
         if not self.force_out_eps:
             max_clip = -math.inf
             min_clip = math.inf
+            eps = math.inf
 
             for i in self.acts:
                 if (i.clip_hi.data - i.clip_lo.data) > (max_clip - min_clip):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
+                    print(diff)
+                    eps = diff/(self.n_levels-1)
 
             # SCHEREMO: This is the part that I might have to think about a bit more...
             for i in self.acts:
                 # Closer to unsigned than to signed -- Is this reasonable?
                 #if abs(i.clip_lo) < abs(i.clip_hi)/2:
                 # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
-                if abs(i.clip_lo) < 5*i.get_eps():
+                if abs(i.clip_lo) < i.get_eps():
                     i.symm = False
-                    i.clip_hi.data.copy_(torch.Tensor((max_clip - min_clip,)))
+                    i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
                     i.clip_lo.data.copy_(torch.Tensor((0.,)))
                     # Closer to signed than unsigned
                 else:
                     i.symm = True
-                    if (abs(min_clip) > max_clip):
-                        # Almost symmetrically quantized:
-                        lower_bound, upper_bound  = almost_symm_quant(abs(min_clip), i.n_levels)
-                    else:
-                        # Unsigned quantization
-                        lower_bound, upper_bound  = almost_symm_quant(max_clip/2, i.n_levels)
-                    i.clip_lo.data.copy_(lower_bound)
-                    i.clip_hi.data.copy_(upper_bound)
+                    i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
+                    i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
+#                     i.clip_lo.data.copy_(lower_bound)
+#                     i.clip_hi.data.copy_(upper_bound)
         else:
             clip_hi = self.act_out.clip_hi.data.detach().clone()
             clip_lo = self.act_out.clip_lo.data.detach().clone()
@@ -627,6 +636,9 @@ class PACTConv2d(nn.Conv2d):
             self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.tqt = tqt
 
         # this member indicates that the module's clipping bounds should not be
@@ -655,7 +667,7 @@ class PACTConv2d(nn.Conv2d):
 
     def extra_repr(self):
         r = super(PACTConv2d, self).extra_repr()
-        r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
+        r += f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
 
     @property
@@ -715,6 +727,9 @@ class PACTConv1d(nn.Conv1d):
             learn_clip = False,
             symm_wts = True,
             nb_std = 3,
+            tqt = False,
+            tqt_beta = 0.9,
+            tqt_clip_grad = True,
             **kwargs
     ):
         """
@@ -770,6 +785,9 @@ class PACTConv1d(nn.Conv1d):
             self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
         self.tqt = tqt
 
         # this member indicates that the module's clipping bounds should not be
@@ -827,7 +845,7 @@ class PACTConv1d(nn.Conv1d):
 
     def extra_repr(self):
         r = super(PACTConv1d, self).extra_repr()
-        r += ", n_levels={n_levels}, quantize='{quantize}', init_clip='{init_clip}', learn_clip={learn_clip}, symm_wts={symm_wts}, nb_std={nb_std}".format(**self.__dict__)
+        r +=  f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
 
     @classmethod
