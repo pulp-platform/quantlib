@@ -54,7 +54,10 @@ class STEController(Controller):
 
     @staticmethod
     def get_ste_modules(nodes_set):
-        return [n[1] for n in nodes_set if isinstance(n[1], STEActivation)]
+        return [n.module for n in nodes_set if isinstance(n.module, STEActivation)]
+
+    def step_pre_validation_epoch(self, *args, **kwargs):
+        pass
 
 
 class STEActivation(torch.nn.Module):
