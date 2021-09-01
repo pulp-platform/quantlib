@@ -64,7 +64,7 @@ class NotFilter(Filter):
         self._filter = filter_
 
     def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
-        return list(set(nodes_list).difference(set(self._filter(nodes_list))))
+        return [n for n in nodes_list if n not in self._filter(nodes_list)]
 
     def __repr__(self):
         return "".join(["(-", repr(self._filter), ")"])
@@ -81,7 +81,7 @@ class OrFilter(Filter):
 
         filter_a_nodes = self._filter_a(nodes_list)
         filter_b_nodes = self._filter_b(nodes_list)
-        return list(set(filter_a_nodes + filter_b_nodes))  # remove duplicates
+        return filter_a_nodes + [n for n in filter_b_nodes if n not in filter_a_nodes]  # remove duplicates
 
     def __repr__(self):
         return "".join(["(", repr(self._filter_a), " | ", repr(self._filter_b), ")"])
@@ -115,9 +115,9 @@ class VariadicOrFilter(Filter):
     def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
         filtered_nodes = []
         for f in self._filters:
-            filtered_nodes += f(nodes_list)
-        filtered_nodes = set(filtered_nodes)  # remove duplicates
-        return list(filtered_nodes)
+            filtered_nodes += [n for n in f(nodes_list) if n not in filtered_nodes]
+
+        return filtered_nodes
 
     def __repr__(self):
         return "".join(["("] + [repr(f) + " | " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])
