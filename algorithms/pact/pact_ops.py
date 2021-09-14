@@ -505,7 +505,6 @@ class PACTIntegerAdd(torch.nn.Module):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
-                    print(diff)
                     eps = diff/(self.n_levels-1)
 
             # SCHEREMO: This is the part that I might have to think about a bit more...
