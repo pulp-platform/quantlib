@@ -539,7 +539,7 @@ class PACTIntegerAdd(torch.nn.Module):
         total = self.acts[0](x[0])
         for idx, i in enumerate(x[1:]):
             total = total + self.acts[idx+1](i)
-        return total
+        return self.act_out(total)
 
 
 class PACTIntegerMatmul(torch.nn.Module):
