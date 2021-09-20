@@ -37,7 +37,8 @@ def replace_pact_conv_linear(module : Union[nn.Conv1d, nn.Conv2d, nn.Linear],
     else:
         raise TypeError(f"Incompatible module of type {module.__class__.__name__} passed to replace_pact_conv_linear!")
 
-def replace_pact_unsigned_act(module : nn.Module,
+def replace_pact_act(module : nn.Module,
+                     signed : bool = False,
                      **kwargs):
     if 'act_kind' not in kwargs.keys():
         if isinstance(module, nn.ReLU6):
@@ -51,7 +52,11 @@ def replace_pact_unsigned_act(module : nn.Module,
 
         kwargs['act_kind'] = act_kind
 
-    return PACTUnsignedAct(**kwargs)
+    if signed:
+        return PACTAsymmetricAct(**kwargs)
+    else:
+        return PACTUnsignedAct(**kwargs)
+
 
 class ReplaceConvLinearPACTRule(LightweightRule):
     def __init__(self,
@@ -63,7 +68,9 @@ class ReplaceConvLinearPACTRule(LightweightRule):
 class ReplaceActPACTRule(LightweightRule):
     def __init__(self,
                  filter_: Filter,
+                 signed : bool = False,
                  **kwargs):
-        replacement_fun = partial(replace_pact_unsigned_act, **kwargs)
+        replacement_fun = partial(replace_pact_act, signed=signed, **kwargs)
         super(ReplaceActPACTRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
+
 

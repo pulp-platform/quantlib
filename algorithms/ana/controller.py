@@ -1,5 +1,5 @@
 # 
-# ana_controller.py
+# controller.py
 # 
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
@@ -20,29 +20,37 @@
 # 
 
 from functools import partial
+from typing import NamedTuple
 from collections import OrderedDict
 import torch
 import torch.nn as nn
+import copy
 
-from .ana_ops import ANAModule
+from .ops import ANAModule
 from ..controller import Controller
 
-import typing
 from typing import Union, List
 
 
-def lws(t: int, tstart: int, tend: int, alpha: int) -> float:
-    """Limited-window scheduling function."""
+def bws(t: int, tstart: int, tend: int, alpha: int) -> float:
+    """Bounded-window scheduling function.
+
+    This function returns 1.0 for `t <= tstart`, 0.0 for `tend <= t`, and
+    `\lambda^{\alpha}` for `tstart < t < tend`, where `\lambda =
+    \frac{tend - t}{tend - tstart}`.
+    """
 
     # assert 0 <= tstart < tend
     # assert 0 <= alpha
 
-    t = min(max(t, tstart), tend)
-    return (float(tend - t) / float(tend - tstart)) ** alpha
+    t          = min(max(t, tstart), tend)
+    multiplier = (float(tend - t) / float(tend - tstart)) ** alpha
+
+    return multiplier
 
 
 def uws(t: int, tstart: int, eps: float, alpha: int) -> float:
-    """Unlimited-window scheduling function."""
+    """Unbounded-window scheduling function."""
 
     # assert 0 <= tstart
     # assert 0.0 <= eps
@@ -55,59 +63,43 @@ def uws(t: int, tstart: int, eps: float, alpha: int) -> float:
     return multiplier
 
 
-_AC_MAPPER = {'lws': lws, 'uws': uws}
+_AC_MAPPER = {'bws': bws, 'uws': uws}
 
 
 class ANATimer(object):
 
-    def __init__(self, fmi_spec: dict, fsigma_spec: dict, bmi_spec: dict, bsigma_spec: dict):
+    def __init__(self,
+                 mi_spec:    dict,
+                 sigma_spec: dict):
 
-        self._fmi = None
-        assert ANATimer.check_spec(fmi_spec, is_sigma=False)
-        self._fmi_base = fmi_spec['base']
-        self._fmi_fun  = partial(_AC_MAPPER[fmi_spec['fun']], **fmi_spec['kwargs'])
+        self._mi = None
+        assert ANATimer.check_spec(mi_spec, is_sigma=False)
+        self._mi_beta = mi_spec['beta']
+        self._mi_fun  = partial(_AC_MAPPER[mi_spec['fun']], **mi_spec['kwargs'])
 
-        self._fsigma = None
-        assert ANATimer.check_spec(fsigma_spec, is_sigma=True)
-        self._fsigma_base = fsigma_spec['base']
-        self._fsigma_fun  = partial(_AC_MAPPER[fsigma_spec['fun']], **fsigma_spec['kwargs'])
-
-        self._bmi = None
-        assert ANATimer.check_spec(bmi_spec, is_sigma=False)
-        self._bmi_base = bmi_spec['base']
-        self._bmi_fun  = partial(_AC_MAPPER[bmi_spec['fun']], **bmi_spec['kwargs'])
-
-        self._bsigma = None
-        assert ANATimer.check_spec(bsigma_spec, is_sigma=True)
-        self._bsigma_base = bsigma_spec['base']
-        self._bsigma_fun  = partial(_AC_MAPPER[bsigma_spec['fun']], **bsigma_spec['kwargs'])
+        self._sigma = None
+        assert ANATimer.check_spec(sigma_spec, is_sigma=True)
+        self._sigma_beta = sigma_spec['beta']
+        self._sigma_fun  = partial(_AC_MAPPER[sigma_spec['fun']], **sigma_spec['kwargs'])
 
     @property
-    def fmi(self) -> Union[None, float]:
-        return self._fmi
+    def mi(self) -> Union[None, float]:
+        return self._mi
 
     @property
-    def fsigma(self) -> Union[None, float]:
-        return self._fsigma
-
-    @property
-    def bmi(self) -> Union[None, float]:
-        return self._bmi
-
-    @property
-    def bsigma(self) -> Union[None, float]:
-        return self._bsigma
+    def sigma(self) -> Union[None, float]:
+        return self._sigma
 
     @staticmethod
     def check_spec(spec: dict, is_sigma: bool) -> bool:
 
-        check_base = isinstance(spec['base'], float) and (True if not is_sigma else (0.0 <= spec['base']))
+        check_beta = isinstance(spec['beta'], float) and (True if not is_sigma else (0.0 <= spec['beta']))
         spec_type  = spec['fun']
         check_fun  = spec_type in set(_AC_MAPPER.keys())
 
-        if check_base and check_fun:
+        if check_beta and check_fun:
             spec_kwargs = spec['kwargs']
-            if spec_type == 'lws':
+            if spec_type == 'bws':
                 check_tstart = isinstance(spec_kwargs['tstart'], int) and (0 <= spec_kwargs['tstart'])
                 check_tend   = isinstance(spec_kwargs['tend'], int)   and (spec_kwargs['tstart'] < spec_kwargs['tend'])
                 check_alpha  = isinstance(spec_kwargs['alpha'], int)  and (0 <= spec_kwargs['alpha'])
@@ -125,15 +117,12 @@ class ANATimer(object):
         return is_correct
 
     def step(self, t: int) -> None:
-
-        self._fmi    = self._fmi_base    * self._fmi_fun(t)
-        self._fsigma = self._fsigma_base * self._fsigma_fun(t)
-
-        self._bmi    = self._bmi_base    * self._bmi_fun(t)
-        self._bsigma = self._bsigma_base * self._bsigma_fun(t)
+        self._mi    = self._mi_beta    * self._mi_fun(t)
+        self._sigma = self._sigma_beta * self._sigma_fun(t)
 
 
-Timer2Modules = typing.NamedTuple('Timer2Modules', [('timer', ANATimer), ('modules', List[torch.nn.Module])])
+Timer2Modules = NamedTuple('Timer2Modules', [('timer',   ANATimer),
+                                             ('modules', List[torch.nn.Module])])
 
 
 class ANAController(Controller):
@@ -150,29 +139,28 @@ class ANAController(Controller):
     For simplicity, ANA ``torch.nn.Module``s add the same noise to all the
     components of their input ``torch.Tensor``s. This reduces the number of
     hyper-parameters required by each ANA module to two (the mean and the
-    standard deviation of the distribution). However, the ANA algorithm can
-    be interpreted as a generalisation of the commonly used *straight-through
-    estimator* (STE) algorithm and of other algorithms if we allow it to use
-    different noise distributions during the forward and backward passes of
-    the training algorithm. Therefore, each ANA module is attached four
-    hyper-parameters: two for the forward pass, and two for the backward pass.
+    standard deviation of the distribution).
     """
 
-    def __init__(self, module: torch.nn.Module, ctrl_spec: List) -> None:
-
-        is_nndataparallel_module = isinstance(module, nn.DataParallel)
+    def __init__(self, module: torch.nn.Module, ctrl_spec: List):
 
         self._global_step   = -1
         self._timer2modules = []
 
         self._n2m = self.get_modules(module)
-        self._n2m = {('module.' if is_nndataparallel_module else '') + k: v for k, v in self._n2m.items()}
+
+        if isinstance(module, nn.DataParallel):
+            # the network is wrapped inside an nn.DataParallel module:
+            # this requires to resolve an additional naming layer
+            ctrl_spec = copy.deepcopy(ctrl_spec)  # TODO: find a better workaround to avoid overwriting the original controller specifications
+            for timer_spec in ctrl_spec:
+                timer_spec['modules'] = ['.'.join(['module', m]) for m in timer_spec['modules']]
 
         # verify that each ANA module is linked to exactly one timer (i.e., check that ANA targets form a partition of the collection of ANA modules)
         all_ana_module_names = set(self._n2m.keys())
         ana_timer_targets    = []
         for timer_spec in ctrl_spec:
-            ana_timer_target = set([('module.' if is_nndataparallel_module else '') + m for m in timer_spec['modules']])
+            ana_timer_target = set(timer_spec['modules'])
             assert ana_timer_target.issubset(all_ana_module_names)  # non-ANA module specified as ANA target
             ana_timer_targets.append(ana_timer_target)
         assert len(all_ana_module_names) == sum([len(ana_timer_target) for ana_timer_target in ana_timer_targets])
@@ -180,8 +168,8 @@ class ANAController(Controller):
 
         # build timers and link them to the specified ANA modules
         for timer_spec in ctrl_spec:
-            timer        = ANATimer(timer_spec['fnoise']['mi'], timer_spec['fnoise']['sigma'], timer_spec['bnoise']['mi'], timer_spec['bnoise']['sigma'])
-            modules      = list(map(lambda n: self._n2m[n], set([('module.' if is_nndataparallel_module else '') + m for m in timer_spec['modules']])))
+            timer   = ANATimer(timer_spec['mi'], timer_spec['sigma'])
+            modules = list(map(lambda n: self._n2m[n], set(timer_spec['modules'])))
             self._timer2modules.append(Timer2Modules(timer=timer, modules=modules))
 
     @staticmethod
@@ -210,20 +198,13 @@ class ANAController(Controller):
         for timer, modules in self._timer2modules:
 
             timer.step(self._global_step)
-
             for m in modules:
-                # update forward noise
-                m.set_fnoise(timer.fmi, timer.fsigma)
-                # update backward noise
-                m.set_bnoise(timer.bmi, timer.bsigma)
+                m.set_noise(timer.mi, timer.sigma)
 
-    def step_pre_validation(self, *args, **kwargs) -> None:
+    def step_pre_validation_epoch(self, *args, **kwargs) -> None:
 
         for timer, modules in self._timer2modules:
 
             for m in modules:
-                # remove forward noise
-                m.set_fnoise(0.0, 0.0)
-                # # remove backward noise
-                # m.set_bnoise(0.0, 0.0)
-
+                # remove noise
+                m.set_noise(0.0, 0.0)

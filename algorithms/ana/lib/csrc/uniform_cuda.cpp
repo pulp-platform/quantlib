@@ -1,5 +1,5 @@
 /*  
- *  triangular_cuda.cpp
+ *  uniform_cuda.cpp
  *  
  *  Author(s):
  *  Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
@@ -22,27 +22,28 @@
 #include <torch/extension.h>
 #include <vector>
 
-// #include <stdio.h>  // for debug
+// #include <stdio.h>  // for debugging
 
 
 // declarations of C++\CUDA interface (executed on: CPU)
 
-torch::Tensor triangular_forward_cuda_dispatch(
+torch::Tensor uniform_forward_cuda_dispatch(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mi,
+    torch::Tensor sigma,
+    torch::Tensor strategy,
     torch::Tensor training
 );
 
-torch::Tensor triangular_backward_cuda_dispatch(
+torch::Tensor uniform_backward_cuda_dispatch(
     torch::Tensor grad_in,
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mi,
+    torch::Tensor sigma
 );
 
 
@@ -55,43 +56,45 @@ torch::Tensor triangular_backward_cuda_dispatch(
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
-torch::Tensor triangular_forward_cuda(
+torch::Tensor uniform_forward_cuda(
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor fmu,
-    torch::Tensor fsigma,
+    torch::Tensor mi,
+    torch::Tensor sigma,
+    torch::Tensor strategy,
     torch::Tensor training
 )
 {
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(fmu);
-    CHECK_INPUT(fsigma);
+    CHECK_INPUT(mi);
+    CHECK_INPUT(sigma);
+    CHECK_INPUT(strategy);
     CHECK_INPUT(training);
 
-    return triangular_forward_cuda_dispatch(x_in, q, t, fmu, fsigma, training);
+    return uniform_forward_cuda_dispatch(x_in, q, t, mi, sigma, strategy, training);
 }
 
 
-torch::Tensor triangular_backward_cuda(
+torch::Tensor uniform_backward_cuda(
     torch::Tensor grad_in,
     torch::Tensor x_in,
     torch::Tensor q,
     torch::Tensor t,
-    torch::Tensor bmu,
-    torch::Tensor bsigma
+    torch::Tensor mi,
+    torch::Tensor sigma
 )
 {
     CHECK_INPUT(grad_in);
     CHECK_INPUT(x_in);
     CHECK_INPUT(q);
     CHECK_INPUT(t);
-    CHECK_INPUT(bmu);
-    CHECK_INPUT(bsigma);
+    CHECK_INPUT(mi);
+    CHECK_INPUT(sigma);
 
-    return triangular_backward_cuda_dispatch(grad_in, x_in, q, t, bmu, bsigma);
+    return uniform_backward_cuda_dispatch(grad_in, x_in, q, t, mi, sigma);
 }
 
 
@@ -99,7 +102,6 @@ torch::Tensor triangular_backward_cuda(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
-    m.def("forward", &triangular_forward_cuda, "ANA triangular noise forward (CUDA)");
-    m.def("backward", &triangular_backward_cuda, "ANA triangular noise backward (CUDA)");
+    m.def("forward", &uniform_forward_cuda, "ANA uniform noise forward (CUDA)");
+    m.def("backward", &uniform_backward_cuda, "ANA uniform noise backward (CUDA)");
 }
-
