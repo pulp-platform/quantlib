@@ -211,7 +211,7 @@ class PACTUnsignedAct(nn.Module):
         return (self.clip_hi/(self.n_levels-1)).detach().clone()
 
     def extra_repr(self):
-        r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, nb_std={nb_std}".format(**self.__dict__)
+        r = f"n_levels={self.n_levels}, init_clip='{self.init_clip}', learn_clip={self.learn_clip}, act_kind='{self.act_kind}', leaky={self.leaky}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
 
     def forward(self, x):
@@ -351,7 +351,7 @@ class PACTAsymmetricAct(nn.Module):
         return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
 
     def extra_repr(self):
-        r = "n_levels={n_levels}, init_clip='{init_clip}', learn_clip={learn_clip}, act_kind='{act_kind}', leaky={leaky}, symm={symm}, nb_std={nb_std}".format(**self.__dict__)
+        r = f"n_levels={self.n_levels}, init_clip='{self.init_clip}', learn_clip={self.learn_clip}, act_kind='{self.act_kind}', leaky={self.leaky}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
 
     def forward(self, x):
@@ -479,15 +479,18 @@ class PACTIntegerAdd(torch.nn.Module):
             nb_std=3,
             noisy=False,
             rounding=False,
+            tqt=False,
+            tqt_beta=0.9,
+            tqt_clip_grad=True,
             force_out_eps=False
     ):
 
         super().__init__()
         self.acts = torch.nn.ModuleList([])
         for i in range(num_args):
-            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding))
+            self.acts.append(PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding, tqt=tqt, tqt_beta=tqt_beta, tqt_clip_grad=tqt_clip_grad))
 
-        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding)
+        self.act_out = PACTAsymmetricAct(n_levels=n_levels, init_clip=init_clip, learn_clip=learn_clip, act_kind=act_kind, leaky=leaky, symm=symm, nb_std=nb_std, noisy=noisy, rounding=rounding, tqt=tqt, tqt_beta=tqt_beta, tqt_clip_grad=tqt_clip_grad)
 
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi

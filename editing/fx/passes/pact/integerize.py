@@ -202,8 +202,6 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
-        #IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
-        # ShapePropPass will contaminate the batchnorm parameters!
         passes.append(ShapePropPass(shape_in))
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
