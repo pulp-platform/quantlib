@@ -189,10 +189,10 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
             module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
             return PACTUnsignedAct(**module_kwargs)
 
-class CanonicalizePACTNetPass(SequentialPass):
+class HarmonizePACTNetPass(SequentialPass):
     def __init__(self, **kwargs):
         passes = []
         passes.append(AddTreeReplacementPass(**kwargs))
         actpass_kwargs = {k:v for k,v in kwargs.items() if k != 'force_out_eps'}
         passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
-        super(CanonicalizePACTNetPass, self).__init__(*passes, name_prefix='_CANONICALIZE_PACT_NET_PASS')
+        super(HarmonizePACTNetPass, self).__init__(*passes, name_prefix='_HARMONIZE_PACT_NET_PASS')
