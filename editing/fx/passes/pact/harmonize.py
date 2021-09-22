@@ -5,7 +5,9 @@ import torch
 from torch import nn, fx
 
 from quantlib.algorithms.pact.pact_ops import *
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass
+
+from .pact_util import PACT_symbolic_trace
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass
 
 class OpTree:
 
@@ -192,6 +194,7 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
 class HarmonizePACTNetPass(SequentialPass):
     def __init__(self, **kwargs):
         passes = []
+        passes.append(RetracePass(PACT_symbolic_trace))
         passes.append(AddTreeReplacementPass(**kwargs))
         actpass_kwargs = {k:v for k,v in kwargs.items() if k != 'force_out_eps'}
         passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
