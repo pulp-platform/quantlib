@@ -43,7 +43,61 @@ __all__ = [
     'PACTIntegerMatmul',
     'PACTIntegerSoftmax',
     'PACTIntegerLayerNorm',
+    'PACTIntegerGELU'
 ]
+
+class PACTIntegerGELU(torch.nn.Module):
+
+    def __init__(self, module, n_levels: int = 256):
+        super().__init__()
+
+        self.n_levels = n_levels
+        self.frozen = False
+        self.eps_in = 1.
+        self.eps_out = 1.
+        self.module = copy.deepcopy(module)
+
+        self.register_buffer('a', torch.Tensor((-0.288,)))
+        self.register_buffer('b', torch.Tensor((-1.769,)))
+        self.register_buffer('one', torch.Tensor((1.,)))
+        self.register_buffer('sqrttwo', torch.Tensor((4,)))
+
+        self.register_buffer('D', torch.Tensor((2**24,)))
+        self.register_buffer('totScaler', torch.Tensor((255.,)))
+        self.register_buffer('maxval', torch.Tensor((1.,)))
+        
+    def updateCoeffs(self, eps_in):
+
+        epsX = eps_in * (math.sqrt(2)/2)
+
+        r = 8
+        p = 0
+        
+        epsB = max(epsX, (2*1.769)/(2**r))
+        epsA = (0.288)/2**p
+        epsOne = epsB**2*epsA
+        epsOut = epsOne * eps_in
+        
+        self.eps_out = epsOut
+
+        self.a.data[0] = math.floor(-0.288/epsA)
+        self.b.data[0] = math.floor(-1.769/epsB)
+        self.one.data[0] = math.floor(1./(epsB**2*epsA))
+        self.sqrttwo.data[0] = math.floor(2.)
+
+        self.totScaler.data[0] = torch.floor((self.D * self.eps_out) / eps_in)
+        
+    def forward(self, x):
+        if self.frozen:
+            L = torch.sign(x) * (-(torch.clip(torch.abs(x)>>1, min=0, max=-self.b.data[0]) + self.b)**2 + self.one)
+            y = x*((self.one+L)>>1)
+
+            y = torch.floor((y * self.totScaler)/self.D)
+            y = torch.clip(y, min=-self.n_levels//2, max = self.n_levels//2-1)
+        else:
+            y = self.module(x)
+
+        return y
 
 class PACTIntegerLayerNorm(torch.nn.Module):
 
@@ -91,13 +145,14 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
     def updateCoeffs(self, eps):
 
-        eps2 = (1./(2**8))/(eps**2)
+        p = 0
+        eps2 = 0.3585 / 2**p
 
         self.coeffA.data[0] = math.floor(0.3585/eps2)
         self.coeffB.data[0] = math.floor(1.353/eps)
         self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
         self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
-
+        
     def forward(self, x):
 
         if self.frozen:
@@ -505,7 +560,7 @@ class PACTIntegerAdd(torch.nn.Module):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
-                    print(diff)
+                    #print(diff)
                     eps = diff/(self.n_levels-1)
 
             # SCHEREMO: This is the part that I might have to think about a bit more...
