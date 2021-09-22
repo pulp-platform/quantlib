@@ -22,11 +22,14 @@
 from typing import Union
 
 import torch
+from torch import nn
 import numpy as np
 
+from quantlib.editing.lightweight import LightweightGraph
+from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear
+from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat
 from .util import assert_param_valid, almost_symm_quant
 
 
@@ -231,6 +234,13 @@ class PACTActController(Controller):
             self.verbose = True
             self.log("Got a bad state_dict - ignoring!")
             self.verbose = vo
+
+    @staticmethod
+    def get_modules(net : nn.Module):
+        net_nodes = LightweightGraph.build_nodes_list(net)
+        filter_act = TypeFilter(PACTUnsignedAct) | TypeFilter(PACTAsymmetricAct)
+        return [n.module for n in filter_act(net_nodes)]
+
 
 
 class PACTLinearController(Controller):
@@ -438,6 +448,15 @@ class PACTLinearController(Controller):
             self.log("Got a bad state_dict - ignoring!")
             self.verbose = vo
 
+    @staticmethod
+    def get_modules(net : nn.Module):
+        filter_fc = TypeFilter(PACTLinear)
+        filter_conv1 = TypeFilter(PACTConv1d)
+        filter_conv2 = TypeFilter(PACTConv2d)
+        filter_lin = filter_fc | filter_conv1 | filter_conv2
+        net_nodes = LightweightGraph.build_nodes_list(net)
+        return [n.module for n in filter_lin(net_nodes)]
+
 
 class PACTIntegerModulesController(Controller):
     # a very simple controller which keeps the epsilons of PACTIntegerXXX nodes
@@ -462,3 +481,9 @@ class PACTIntegerModulesController(Controller):
     def step_pre_validation_epoch(self, *args, **kwargs):
         # we need to sync the epsilons also after the last batch of a training epoch
         self.step_pre_training_batch(self, *args, **kwargs)
+
+    @staticmethod
+    def get_modules(net : nn.Module):
+        net_nodes_intmodules_intact = LightweightGraph.build_nodes_list(net, leaf_types=(PACTIntegerAdd, PACTIntegerConcat))
+        filter_intmodules = TypeFilter(PACTIntegerAdd) | TypeFilter(PACTIntegerConcat)
+        return [n.module for n in filter_intmodules(net_nodes_intmodules_intact)]
