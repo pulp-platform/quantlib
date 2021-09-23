@@ -251,7 +251,7 @@ class TQTQuantFunc(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input, eps, log_t, clip_lo, clip_hi, beta, running_grad_var, running_beta, clip_grad_logt):
+    def forward(ctx, input, eps, log_t, clip_lo, clip_hi, beta, running_grad_var, running_beta, clip_grad_logt, rounding):
         where_input_nonclipped = (input >= clip_lo) * (input < clip_hi)
         where_input_lo = (input < clip_lo)
         where_input_hi = (input >= clip_hi)
@@ -265,7 +265,10 @@ class TQTQuantFunc(torch.autograd.Function):
 
         # for weights, we want to use rounding - for activations, we will round
         # in hardware so represent this here too
-        input_rounded_int = input_unrounded_int.round()
+        if rounding:
+            input_rounded_int = input_unrounded_int.round()
+        else:
+            input_rounded_int = input_unrounded_int.floor()
         input_quant = input_rounded_int * eps + clip_lo
         quant_error = input_quant - input
         ctx.save_for_backward(where_input_nonclipped, where_input_lo, where_input_hi, clip_lo, clip_hi, quant_error, beta, running_grad_var, running_beta, clip_grad_logt)
@@ -303,13 +306,11 @@ class TQTQuantFunc(torch.autograd.Function):
         if clip_grad_logt:
             grad_logt = torch.tanh(grad_logt)
 
-        return grad_input, None, grad_logt, None, None, None, None, None, None
+        return grad_input, None, grad_logt, None, None, None, None, None, None, None
 
 #wrapper to allow kwargs
-def TQTQuantize(input, eps, log_t, clip_lo, clip_hi, beta, running_grad_var, running_beta, clip_grad_logt):
-    return TQTQuantFunc.apply(input, eps, log_t, clip_lo, clip_hi, beta, running_grad_var, running_beta, clip_grad_logt)
-
-
+def TQTQuantize(input, eps, log_t, clip_lo, clip_hi, beta, running_grad_var, running_beta, clip_grad_logt, rounding=True):
+    return TQTQuantFunc.apply(input, eps, log_t, clip_lo, clip_hi, beta, running_grad_var, running_beta, clip_grad_logt, rounding)
 
 class AlmostSymmQuantFunc(torch.autograd.Function):
     r"""Helper functional which returns an upper clipping bound which is

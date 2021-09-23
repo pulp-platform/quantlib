@@ -139,7 +139,7 @@ class _PACTActivation(nn.Module):
         self.signed = signed
 
         if tqt:
-            assert (not noisy and learn_clip and rounding and symm), f"{self.__class__.__name__}: TQT quantization requires noisy=False, rounding=True, learn_clip=True - you provided noisy={noisy}, rounding={rounding}, learn_clip={learn_clip}, symm={symm}"
+            assert (not noisy and learn_clip and symm), f"{self.__class__.__name__}: TQT quantization requires noisy=False, learn_clip=True - you provided noisy={noisy}, learn_clip={learn_clip}, symm={symm}"
             self.register_parameter("log_t", nn.Parameter(torch.tensor((0.)), requires_grad=True))
             self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
             self.register_buffer("tqt_running_beta", torch.tensor(1.))
@@ -192,7 +192,7 @@ class _PACTActivation(nn.Module):
             if self.tqt:
                 #Make sure that the activation is correctly registered with a
                 #controller which assigns clip_hi = 2**log_t!
-                return TQTQuantize(x, eps, self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
+                return TQTQuantize(x, eps, self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, self.rounding)
             else:
                 if self.learn_clip and self.symm and self.signed:
                     clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
