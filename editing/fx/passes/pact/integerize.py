@@ -187,10 +187,10 @@ class IntegerizeBNActPass(SequentialPass):
         # replace all combinations of BN + PACT activation with RequantShift layers
         for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
             for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
-                pattern = nn.Sequential(bn_type(1), act_type())
+                pattern = nn.Sequential(bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
                 passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D))
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
-            pattern = nn.Sequential(act_type())
+            pattern = nn.Sequential(act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
             passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D))
 
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
