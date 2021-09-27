@@ -7,10 +7,17 @@ from quantlib.algorithms.pact import *
 
 #PACT operations which should not be traced through
 PACT_OPS = set([PACTUnsignedAct,
-            PACTAsymmetricAct,
-            PACTConv2d,
-            PACTConv1d,
-            PACTLinear])
+                PACTAsymmetricAct,
+                PACTConv2d,
+                PACTConv1d,
+                PACTLinear,
+                PACTSoftmax,
+                PACTGELU,
+                PACTLayerNorm,
+                PACTIntegerSoftmax,
+                PACTIntegerGELU,
+                PACTIntegerLayerNorm,
+])
 
 PACT_OPS_INT = set([PACTIntegerAdd,
                     PACTIntegerConcat,

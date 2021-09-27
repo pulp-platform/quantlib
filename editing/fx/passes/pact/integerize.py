@@ -22,9 +22,73 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizePACTLinearPass',
            'IntegerizeBNActPass',
            'IntegerizePACTNetPass',
+           'IntegerizeSoftmaxPass',
+           'IntegerizeGELUPass',
+           'IntegerizeLayerNormPass',
            'PACTTracer',
            'PACT_symbolic_trace',
            'RequantShift']
+
+def integerize_softmax_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    lin_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(lin_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTSoftmax), f"integerize_softmax_fun got bad match - expected PACTSoftmax, got {type(lin)}"
+
+    new_softmax = PACTIntegerSoftmax(n_levels=module.n_levels, eps_in=eps_in)
+
+    return new_softmax
+
+def integerize_gelu_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    lin_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(lin_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTGELU), f"integerize_gelu_fun got bad match - expected PACTGELU, got {type(lin)}"
+
+    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in)
+
+    return new_gelu
+
+def integerize_layernorm_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    lin_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(lin_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTLayerNorm), f"integerize_layernorm_fun got bad match - expected PACTLayerNorm, got {type(module)}"
+
+    new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)
+
+    return new_layernorm
+
+
+class IntegerizeLayerNormPass(SequentialPass):
+    def __init__(self, n_levels, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTLayerNorm(256))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_layernorm_fun, f'_INTEGER_LAYERNORM_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
+        
+class IntegerizeSoftmaxPass(SequentialPass):
+    def __init__(self, n_levels, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTSoftmax(256))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_softmax_fun, f'_INTEGER_SOFTMAX_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
+        
+class IntegerizeGELUPass(SequentialPass):
+    def __init__(self, n_levels, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTGELU(256))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_gelu_fun, f'_INTEGER_GELU_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
 class RequantShift(nn.Module):
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):

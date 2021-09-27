@@ -11,6 +11,7 @@ from quantlib.algorithms.pact.pact_ops import *
 
 from .pass_base import FxPass, ReplaceSequentialPatternPass
 from ..util import gm_modules, module_of_node
+import math
 
 __all__ = ['AnnotateEpsPass',
            'extract_eps']
@@ -24,6 +25,24 @@ def eps_conversion_pact_acts(m : torch.nn.Module, eps_in : torch.Tensor):
 def eps_conversion_invalid(m : torch.nn.Module, *eps_in : torch.Tensor, **kw_eps_in : torch.Tensor):
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
+def eps_conversion_pact_gelu(m : torch.nn.Module, eps_in : torch.Tensor):
+    return eps_in
+    #return torch.Tensor((m.maxval/(m.n_levels-1),))
+
+def eps_conversion_matmul(*eps_ins):
+    return eps_ins[0] * eps_ins[1]
+
+def eps_conversion_pact_softmax(m : torch.nn.Module, eps_in : torch.Tensor):
+    return torch.Tensor((1./(m.n_levels-1.),))
+    #return torch.Tensor((m.maxval/(m.n_levels-1),))
+
+def eps_conversion_pact_layernorm(m : torch.nn.Module, eps_in : torch.Tensor):
+    return torch.Tensor((max(m.maxval/(m.n_levels-1.), 1./(m.n_levels-1.)),))
+
+def eps_conversion_identity(*eps_ins):
+    return eps_ins[0]
+
+#return torch.Tensor((1./m.n_levels,))
 
 
 _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
@@ -35,7 +54,17 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     nn.Conv1d : eps_conversion_invalid,
                     nn.Conv2d : eps_conversion_invalid,
                     nn.Conv3d : eps_conversion_invalid,
-                    nn.Linear: eps_conversion_invalid}
+                    nn.Linear: eps_conversion_invalid,
+                    PACTIntegerGELU : eps_conversion_pact_gelu,
+                    PACTIntegerSoftmax : eps_conversion_pact_softmax,
+                    PACTGELU : eps_conversion_pact_gelu,
+                    PACTSoftmax : eps_conversion_pact_softmax,
+                    PACTIntegerLayerNorm : eps_conversion_pact_layernorm,
+                    PACTLayerNorm : eps_conversion_pact_layernorm,
+                    f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
+                    f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
+                    '_CALL_METHOD_view' : eps_conversion_identity,
+}
 
 # modules which "generate" an eps without needing an input eps
 _ORIGINAL_EPS_MODULES = (PACTUnsignedAct, PACTAsymmetricAct)
@@ -89,7 +118,10 @@ class AnnotateEpsPass(FxPass):
                 except KeyError:
                     print(f"key {k} not found in _EPS_CONVERSIONS!")
                     eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
-                    assert all(d < 1e-8 for d in eps_diffs)
+                    try:
+                        assert all(d < 1e-8 for d in eps_diffs)
+                    except:
+                        import IPython; IPython.embed()
                     print(f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
                     eps_out = all_eps[0]
 

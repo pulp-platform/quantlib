@@ -127,6 +127,18 @@ class OpTreeReplacementPass(FxPass):
         return gm
 
 
+class MatmulReplacementPass(OpTreeReplacementPass):
+    matmul_node_specs = [('call_function', (torch.bmm, torch.matmul)),
+                      ('call_method', ('matmul',))]
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        super().__init__(node_specs=self.matmul_node_specs, replacement_fn=self.matmul_replacement_fn, name="MATMUL")
+
+    def matmul_replacement_fn(self, tree):
+        return PACTIntegerMatmul(**self.kwargs)
+
+    
 class AddTreeReplacementPass(OpTreeReplacementPass):
     add_node_specs = [('call_function', (torch.add, operator.add)),
                       ('call_method', ('add',))]
@@ -170,7 +182,8 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
     after_modules = (nn.Conv1d,
                       nn.Conv2d,
                       nn.Conv3d,
-                      nn.Linear)
+                      nn.Linear,
+                     PACTIntegerMatmul)
 
     def __init__(self, signed : bool = True, **kwargs):
         name = "PACT_LINEAR_ACTIVATIONS"
@@ -196,3 +209,7 @@ class CanonicalizePACTNetPass(SequentialPass):
         actpass_kwargs = {k:v for k,v in kwargs.items() if k != 'force_out_eps'}
         passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
         super(CanonicalizePACTNetPass, self).__init__(*passes, name_prefix='_CANONICALIZE_PACT_NET_PASS')
+
+
+
+        
