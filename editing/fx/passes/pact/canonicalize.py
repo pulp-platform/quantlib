@@ -3,9 +3,14 @@ import operator
 
 import torch
 from torch import nn, fx
+from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass
+from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, ReplaceSequentialPatternPass
+from ...util import gm_modules
+
+from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
 class OpTree:
 
@@ -210,6 +215,47 @@ class CanonicalizePACTNetPass(SequentialPass):
         passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
         super(CanonicalizePACTNetPass, self).__init__(*passes, name_prefix='_CANONICALIZE_PACT_NET_PASS')
 
+def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    layernorm_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    layernorm = matched_modules[0]
+    assert isinstance(layernorm, PACTLayerNorm), f"layernorm_replacement_fun got bad match - expected LayerNorm, got {type(layernorm)}"
+    
+    weight = layernorm._parameters['weight'].detach().clone()
+    bias = layernorm._parameters['bias'].detach().clone()
+    try: 
+        shape = layernorm_node.meta['tensor_meta'].shape
+    except:
+        print("Could not access shape of layernorm layer - please run ShapePropPass before LayerNormDisassemblePass!")
+        exit()
+        
+    new_layernorm = torch.nn.LayerNorm(layernorm.normalized_shape, elementwise_affine=False)
+    new_layernorm.eval()
 
+    if len(shape) > 3:
+        batchnorm = torch.nn.BatchNorm2d(layernorm.normalized_shape[0])
+    else:
+        batchnorm = torch.nn.BatchNorm1d(layernorm.normalized_shape[0])
 
+    batchnorm._parameters['weight'].data = weight
+    batchnorm._parameters['bias'].data = bias
+    batchnorm.eval()
+
+    activation = PACTAsymmetricAct(n_levels=layernorm.n_levels, act_kind='identity', init_clip='max', learn_clip=False, leaky=0.0, symm=True)
+    activation.clip_hi.data.copy_(-layernorm.maxval)
+    activation.clip_lo.data.copy_(AlmostSymmQuantFunc.apply(-layernorm.maxval, layernorm.n_levels))
+    activation.eval()
+    
+    return torch.nn.Sequential(*[new_layernorm, batchnorm, activation])
+    
+        
+class LayerNormDisassemblePass(SequentialPass):
+    def __init__(self, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTLayerNorm(256))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
+        super().__init__(*passes, name_prefix='_LAYERNORM_DISASSEMBLE_PASS')
+        
         

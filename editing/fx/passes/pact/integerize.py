@@ -13,6 +13,7 @@ from quantlib.algorithms.pact.pact_ops import *
 from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
+from .canonicalize import LayerNormDisassemblePass
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
@@ -55,36 +56,38 @@ def integerize_gelu_fun(gm : fx.GraphModule, match : Match):
 
     return new_gelu
 
-def integerize_layernorm_fun(gm : fx.GraphModule, match : Match):
+def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    lin_node = matched_nodes[0]
+    layernorm_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     module = matched_modules[0]
-    eps_in = extract_eps(lin_node.meta['quant'].eps_in)
+    eps_in = extract_eps(layernorm_node.meta['quant'].eps_in)
     assert isinstance(module, PACTLayerNorm), f"integerize_layernorm_fun got bad match - expected PACTLayerNorm, got {type(module)}"
 
-    new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)
-
+    if affine: 
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, weight=module.weight, bias=module.bias)
+    else:
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)  
+    
     return new_layernorm
 
-
 class IntegerizeLayerNormPass(SequentialPass):
-    def __init__(self, n_levels, **kwargs):
+    def __init__(self, affine = True, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTLayerNorm(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_layernorm_fun, f'_INTEGER_LAYERNORM_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine), f'_INTEGER_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
         
 class IntegerizeSoftmaxPass(SequentialPass):
-    def __init__(self, n_levels, **kwargs):
+    def __init__(self, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTSoftmax(256))
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_softmax_fun, f'_INTEGER_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
         
 class IntegerizeGELUPass(SequentialPass):
-    def __init__(self, n_levels, **kwargs):
+    def __init__(self, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTGELU(256))
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_gelu_fun, f'_INTEGER_GELU_PASS'))
@@ -266,9 +269,11 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
-        #IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
+        # IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
         # ShapePropPass will contaminate the batchnorm parameters!
         passes.append(ShapePropPass(shape_in))
+        # make use of the annotated shapes to disassemble layernorms
+        # passes.append(LayerNormDisassemblePass())        
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
         # second step: annotate epsilons
@@ -277,7 +282,10 @@ class IntegerizePACTNetPass(SequentialPass):
         # functions (conv and FC)
         passes.append(IntegerizePACTConvPass())
         passes.append(IntegerizePACTLinearPass())
-        # now, PACT Activations (combined with BN layers) can be converted to
-        # RequantShift layers
+        passes.append(IntegerizeSoftmaxPass())
+        passes.append(IntegerizeLayerNormPass())
+        passes.append(IntegerizeGELUPass())
+#         # now, PACT Activations (combined with BN layers) can be converted to
+#         # RequantShift layers
         passes.append(IntegerizeBNActPass(D))
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")

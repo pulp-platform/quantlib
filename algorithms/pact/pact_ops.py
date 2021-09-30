@@ -72,10 +72,10 @@ class PACTIntegerSoftmax(torch.nn.Module):
         self.n_levels = n_levels
         self.eps_in = eps_in
 
-        self.register_buffer('coeffA', torch.Tensor((0.3585,)))
+        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
         self.register_buffer('coeffB', torch.Tensor((1.353,)))
         self.register_buffer('coeffC', torch.Tensor((0.344,)))
-        self.register_buffer('log2', torch.Tensor((4.,)))
+        self.register_buffer('log2', torch.Tensor((1.,)))
         self.register_buffer('maxval', torch.Tensor((4.,)))
 
         self.updateCoeffs(eps_in)
@@ -83,21 +83,27 @@ class PACTIntegerSoftmax(torch.nn.Module):
     def updateCoeffs(self, eps):
 
         p = 0
-        eps2 = 0.3585 / 2**p
+        eps2 = torch.Tensor((0.35815147 / 2**p,))
 
-        self.coeffA.data[0] = math.floor(0.3585/eps2)
-        self.coeffB.data[0] = math.floor(1.353/eps)
-        self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
-        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
+        self.coeffA.data[0] = torch.round(0.3585/eps2)
+        self.coeffB.data[0] = torch.round(1.353/eps)
+        self.coeffC.data[0] = torch.round(0.344/(eps**2))
+        
+        self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
         
     def forward(self, x):
 
+        #x = torch.max(x, -30 * self.log2)
+        
         xTilde = (x - torch.max(x))
         z = torch.floor(-xTilde / self.log2)
         p = xTilde + z * self.log2
+        
         y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
+        
         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-        out = torch.floor(y*(self.n_levels-1)/ysum)
+        out = torch.clip(torch.floor(y*(self.n_levels-1)/ysum), 0., self.n_levels-1)
+        
         return out
 
 class PACTGELU(torch.nn.Module):
@@ -106,11 +112,14 @@ class PACTGELU(torch.nn.Module):
         super().__init__()
 
         self.n_levels = n_levels
-                
+        self.register_buffer('maxval', torch.Tensor((0.,)))
+        
     def forward(self, x):
             
         L = torch.sign(x) * (-0.2888*(torch.clip(torch.abs(x/math.sqrt(2)), min=0, max=1.769) - 1.769)**2 + 1)
         y = x*((1+L)/2)
+
+        self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
 
         return y
 
@@ -140,19 +149,19 @@ class PACTIntegerGELU(torch.nn.Module):
         r = 8
         p = 1
         
-        epsB = max(epsX, (2*1.769)/(2**r))
-        epsA = (0.288)/2**p
+        epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
+        epsA = torch.Tensor(((0.288)/2**p,))
         epsOne = epsB**2*epsA
         epsOut = epsOne * eps_in
         
         self.eps_out = epsOut
 
-        self.a.data[0] = math.floor(-0.288/epsA)
-        self.b.data[0] = math.floor(-1.769/epsB)
-        self.one.data[0] = math.floor(1./(epsB**2*epsA))
-        self.sqrttwo.data[0] = math.floor(2.)
+        self.a.data[0] = torch.round(-0.288/epsA)
+        self.b.data[0] = torch.round(-1.769/epsB)
+        self.one.data[0] = torch.round(1./(epsB**2*epsA))
+        self.sqrttwo.data[0] = torch.round(torch.Tensor((2.,)))
 
-        self.totScaler.data[0] = torch.floor((self.D * self.eps_out) / eps_in)
+        self.totScaler.data[0] = torch.round((self.D * self.eps_out) / eps_in)
         
     def forward(self, x):
         L = torch.sign(x) * (-(torch.clip(torch.abs(x)>>1, min=0, max=-self.b.data[0]) + self.b)**2 + self.one)
@@ -165,26 +174,60 @@ class PACTIntegerGELU(torch.nn.Module):
 
 class PACTIntegerLayerNorm(torch.nn.Module):
 
-    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1.):
+    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,))):
         super().__init__()
 
         self.n_levels = n_levels
         
         self.register_buffer('eps', torch.Tensor((eps_in,)))
         self.register_buffer('D', torch.Tensor((2**16,)))
-        self.register_buffer('totScaler', torch.Tensor((torch.floor(self.D * n_levels/maxval),)))
+        
+        self.register_buffer('dummyOne', torch.Tensor((1.,)))
+        self.register_buffer('dummyZero', torch.Tensor((0.,)))
 
+        self.register_buffer('floor', torch.Tensor((False,)))
+        self.register_buffer('clip_gradient', torch.Tensor((True,)))
+        self.register_buffer('noisy', torch.Tensor((False,)))
+
+        if not torch.equal(weight, self.dummyOne) and not torch.equal(bias, self.dummyZero):
+            clip_lo = -max(torch.max(torch.abs(bias)), torch.max(torch.abs(weight)))
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+
+            #import IPython; IPython.embed()
+
+            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+
+            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ))
+            self.register_buffer('bias', torch.round(PACTQuantize(bias, eps_weights*(maxval/(n_levels//2-1)), clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / ((maxval/(n_levels//2-1))/ eps_weights)))
+
+            self.register_buffer('totScaler', torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)))
+
+        else:
+
+            self.register_buffer('weight', torch.Tensor((1.,)))
+            self.register_buffer('bias', torch.Tensor((0.,)))
+            self.register_buffer('totScaler', torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)))
+            
     def forward(self, x):
         nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
         denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+1))
-        y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
+
+        if not torch.equal(self.weight, self.dummyOne):
+            nom = nom * self.weight
+            
+        y = (torch.floor(torch.div(nom,denom)))
+        if not torch.equal(self.weight, self.dummyZero):
+            y = y + self.bias
+            
+        y = y * self.totScaler
+        y = torch.floor(y/self.D)        
         y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
 
         return y
     
 class PACTLayerNorm(torch.nn.Module):
 
-    def __init__(self, n_levels: int = 256):
+    def __init__(self, n_levels: int = 256, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,))):
         super().__init__()
 
         self.n_levels = n_levels
@@ -192,20 +235,34 @@ class PACTLayerNorm(torch.nn.Module):
         self.register_buffer('totScaler', torch.Tensor((255.,)))
         self.register_buffer('D', torch.Tensor((2**16,)))
         self.register_buffer('maxval', torch.Tensor((1.,)))
+        self.register_buffer('maxval_tot', torch.Tensor((1.,)))
 
+        self.register_buffer('dummyOne', torch.Tensor((1.,)))
+        self.register_buffer('dummyZero', torch.Tensor((0.,)))
+        
+        self.normalized_shape = normalized_shape
+
+        self.weight = nn.Parameter(weight)
+        self.bias = nn.Parameter(bias)
+            
     def forward(self, x):
 
         nom = x - torch.mean(x, -1, keepdim=True)
         denom = torch.sqrt(torch.mean(torch.pow(nom, 2), -1, keepdim=True)+1e-5)
         y = torch.div(nom,denom)
-
+        
         self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
         scaler = (self.n_levels)/self.maxval
         self.totScaler.data[0] = math.floor(self.D * scaler)
-
+        
+        if not torch.equal(self.weight, self.dummyOne):
+            y = y * self.weight
+        if not torch.equal(self.weight, self.dummyZero):
+            y = y + self.bias
+            
+        self.maxval_tot.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
+        
         return y
-
-
 
 class PACTUnsignedAct(nn.Module):
     r"""PACT (PArametrized Clipping acTivation) activation, considering unsigned outputs.

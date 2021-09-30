@@ -26,8 +26,10 @@ def eps_conversion_invalid(m : torch.nn.Module, *eps_in : torch.Tensor, **kw_eps
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
 def eps_conversion_pact_gelu(m : torch.nn.Module, eps_in : torch.Tensor):
-    return eps_in
-    #return torch.Tensor((m.maxval/(m.n_levels-1),))
+    print("GELU")
+    print(m.maxval)
+    print(m.n_levels)
+    return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
 
 def eps_conversion_matmul(*eps_ins):
     return eps_ins[0] * eps_ins[1]
@@ -37,7 +39,10 @@ def eps_conversion_pact_softmax(m : torch.nn.Module, eps_in : torch.Tensor):
     #return torch.Tensor((m.maxval/(m.n_levels-1),))
 
 def eps_conversion_pact_layernorm(m : torch.nn.Module, eps_in : torch.Tensor):
-    return torch.Tensor((max(m.maxval/(m.n_levels-1.), 1./(m.n_levels-1.)),))
+    print("LN")
+    print(m.maxval)
+    print(m.n_levels)
+    return torch.Tensor(max((m.maxval/(m.n_levels//2-1)), 0.),)
 
 def eps_conversion_identity(*eps_ins):
     return eps_ins[0]

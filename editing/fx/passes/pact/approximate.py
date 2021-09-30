@@ -57,9 +57,24 @@ class ApproximateGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(n_levels), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
+def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, n_levels):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    layernorm_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    layernorm = matched_modules[0]
+    assert isinstance(layernorm, nn.LayerNorm), f"layernorm_replacement_fun got bad match - expected LayerNorm, got {type(layernorm)}"
+    
+    weight = layernorm._parameters['weight'].clone() if layernorm._parameters['weight'] is not None  else torch.Tensor((1.,))
+    bias = layernorm._parameters['bias'].clone() if layernorm._parameters['bias'] is not None else torch.Tensor((0.,))
+    
+    new_layernorm = PACTLayerNorm(n_levels, layernorm.normalized_shape, weight, bias)
+
+    return new_layernorm
+    
 class CanonicalizeLayerNormPass(SequentialPass):
     def __init__(self, n_levels, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.LayerNorm(1))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTLayerNorm(n_levels), f'_CANONICALIZE_LAYERNORM_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(layernorm_replacement_fun, n_levels=n_levels), f'_CANONICALIZE_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_CANONICALIZE_LAYERNORM_PASS')
