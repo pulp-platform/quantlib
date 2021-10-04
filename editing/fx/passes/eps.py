@@ -29,7 +29,9 @@ def eps_conversion_pact_gelu(m : torch.nn.Module, eps_in : torch.Tensor):
     print("GELU")
     print(m.maxval)
     print(m.n_levels)
+    #return (1./(m.n_levels//2-1))
     return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
+    #return torch.Tensor(((m.n_levels//2-1)/m.maxval),)
 
 def eps_conversion_matmul(*eps_ins):
     return eps_ins[0] * eps_ins[1]

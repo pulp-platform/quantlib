@@ -196,6 +196,7 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             #import IPython; IPython.embed()
 
             eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+            self.eps_weights = eps_weights
 
             self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ))
             self.register_buffer('bias', torch.round(PACTQuantize(bias, eps_weights*(maxval/(n_levels//2-1)), clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / ((maxval/(n_levels//2-1))/ eps_weights)))
@@ -210,18 +211,24 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             
     def forward(self, x):
         nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
-        denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+1))
-
+        denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True)))+1)
+        
         if not torch.equal(self.weight, self.dummyOne):
             nom = nom * self.weight
             
-        y = (torch.floor(torch.div(nom,denom)))
-        if not torch.equal(self.weight, self.dummyZero):
+        if not torch.equal(self.bias, self.dummyZero):
+            y = (torch.floor(torch.div(nom,denom)))
             y = y + self.bias
+            y = y * self.totScaler
             
-        y = y * self.totScaler
+        else:
+            nom = nom * self.totScaler
+            y = (torch.floor(torch.div(nom,denom)))
+
         y = torch.floor(y/self.D)        
         y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
+
+        #import IPython; IPython.embed()
 
         return y
     
