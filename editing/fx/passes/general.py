@@ -89,7 +89,7 @@ class ModularizeActivationsPass(ModularizePass):
         return (module_class(*module_inst_args, **module_inst_kwargs), module_call_args, module_call_kwargs)
 
     def __init__(self):
-        super(ModularizeActivationsPass, self).__init__(op='call_function', target=tuple(k for k in act_function_to_module.keys()), name="MODULARIZE_ACTIVATIONS_PASS")
+        super(ModularizeActivationsPass, self).__init__(op='call_function', target=tuple(k for k in self.act_function_to_module.keys()), replacement_fn=self.act_node_to_module, name="MODULARIZE_ACTIVATIONS_PASS")
 
 class RetracePass(FxPass):
     def __init__(self, trace : callable):

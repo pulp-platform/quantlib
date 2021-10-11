@@ -35,13 +35,13 @@ from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
 
-from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
+from .. import FxPass, ReplaceSingleInputPatternPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
+from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace, PACT_symbolic_trace_inclusive
     
 class ApproximateSoftmaxPass(SequentialPass):
     def __init__(self, n_levels, **kwargs):
@@ -78,3 +78,63 @@ class CanonicalizeLayerNormPass(SequentialPass):
         pattern = nn.Sequential(nn.LayerNorm(1))
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(layernorm_replacement_fun, n_levels=n_levels), f'_CANONICALIZE_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_CANONICALIZE_LAYERNORM_PASS')
+
+
+def embedding_replacement_fun(gm : fx.GraphModule, match : Match, n_levels: int = 256):
+    modules = gm_modules(gm)
+    
+    def fetch_attr(target : str):
+        target_atoms = target.split('.')
+        attr_itr = gm
+        for i, atom in enumerate(target_atoms):
+            if not hasattr(attr_itr, atom):
+                raise RuntimeError(f"Node referenced nonexistant target {'.'.join(target_atoms[:i])}")
+            attr_itr = getattr(attr_itr, atom)
+        return attr_itr
+    
+    matched_embedding = [m for k,m in match.nodes_map.items() if k.op =='getattr' or k.op == 'get_attr']
+    bias = fetch_attr(matched_embedding[0].target)
+    
+    new_embedding = PACTEmbedding(n_levels, bias)
+
+    return new_embedding
+
+class ProtoPACTEmbedding(torch.nn.Module):
+
+    def __init__(self, weights : torch.Tensor = torch.Tensor((1.,))):
+        super().__init__()
+        self.weights = nn.Parameter(weights)
+        self.adder = PACTIntegerAdd(n_levels=256, num_args=2)
+        
+    def forward(self, x):
+        out = self.adder(x, self.weights)
+        return out
+        
+# This can be made much more general -- Current workaround
+class CanonicalizeEmbeddingsPass(SequentialPass):
+    def __init__(self, n_levels:int = 256, **kwargs):
+        passes = []
+        # Use IntegerEmbedding to get matches back since otherwise it doesn't get traced right
+        pattern = nn.Sequential(ProtoPACTEmbedding(torch.Tensor((1.,))))
+        passes.append(ReplaceSingleInputPatternPass(pattern, PACT_symbolic_trace_inclusive, partial(embedding_replacement_fun, n_levels=n_levels), f'_CANONICALIZE_EMBEDDING_PASS'))
+        super().__init__(*passes, name_prefix='_CANONICALIZE_EMBEDDING_PASS')
+
+
+def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    n_levels = modules[matched_nodes[0].target].adder.n_levels
+    bias = modules[matched_nodes[0].target]._parameters['weights']
+    
+    new_embedding = PACTIntegerEmbedding(n_levels, bias)
+
+    return new_embedding
+        
+# This can be made much more general -- Current workaround
+class IntegerizeEmbeddingsPass(SequentialPass):
+    def __init__(self, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTEmbedding(torch.Tensor((1.,))))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace_inclusive, partial(embedding_integerize_fun), f'_INTEGERIZE_EMBEDDINGS_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGERIZE_EMBEDDING_PASS')

@@ -26,6 +26,7 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizeSoftmaxPass',
            'IntegerizeGELUPass',
            'IntegerizeLayerNormPass',
+           'IntegerizeEmbeddingsPass',
            'PACTTracer',
            'PACT_symbolic_trace',
            'RequantShift']
@@ -262,6 +263,29 @@ class IntegerizeBNActPass(SequentialPass):
 
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
+def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    n_levels = modules[matched_nodes[0].target].adder.n_levels
+    eps_adder = modules[matched_nodes[0].target].adder.acts[0].get_eps()
+    bias = modules[matched_nodes[0].target]._parameters['weights']
+    maxval = modules[matched_nodes[0].target].maxval
+    eps_in = extract_eps(matched_nodes[0].meta['quant'].eps_in)
+    
+    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval)
+
+    return new_embedding
+        
+# This can be made much more general -- Current workaround
+class IntegerizeEmbeddingsPass(SequentialPass):
+    def __init__(self, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTEmbedding(torch.Tensor((1.,))))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(embedding_integerize_fun), f'_INTEGERIZE_EMBEDDINGS_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGERIZE_EMBEDDING_PASS')
+
+        
 class IntegerizePACTNetPass(SequentialPass):
     def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
         passes = []

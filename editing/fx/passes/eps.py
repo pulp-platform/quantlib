@@ -49,6 +49,9 @@ def eps_conversion_pact_layernorm(m : torch.nn.Module, eps_in : torch.Tensor):
 def eps_conversion_identity(*eps_ins):
     return eps_ins[0]
 
+def eps_conversion_embedding(m : torch.nn.Module, eps_in : torch.Tensor):
+    return m.adder.acts[0].get_eps()
+
 #return torch.Tensor((1./m.n_levels,))
 
 
@@ -62,6 +65,8 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     nn.Conv2d : eps_conversion_invalid,
                     nn.Conv3d : eps_conversion_invalid,
                     nn.Linear: eps_conversion_invalid,
+                    PACTEmbedding : eps_conversion_embedding,
+                    PACTIntegerEmbedding : eps_conversion_embedding,
                     PACTIntegerGELU : eps_conversion_pact_gelu,
                     PACTIntegerSoftmax : eps_conversion_pact_softmax,
                     PACTGELU : eps_conversion_pact_gelu,

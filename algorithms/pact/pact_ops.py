@@ -24,11 +24,35 @@
 
 import torch
 from torch import nn
+import numpy as np
 
 from .pact_functions import PACTQuantize, TQTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
 from .util import assert_param_valid, almost_symm_quant
 import math
 import copy
+
+class RequantShift(nn.Module):
+    def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
+        super(RequantShift, self).__init__()
+        self.register_buffer('mul', mul)
+        self.register_buffer('add', add)
+        self.register_buffer('div', D)
+        self.signed = signed
+        self.n_levels_out = n_levels
+
+    def forward(self, x):
+        x = x * self.mul
+        x = x + self.add
+        x = (x/self.div).floor()
+        if not self.signed:
+            x = torch.clip(x, 0., float(self.n_levels_out-1))
+        else:
+            c = np.floor(self.n_levels_out/2+0.001)
+            if self.n_levels_out % 2:
+                x = torch.clip(x, -c, c)
+            else:
+                x = torch.clip(x, -c, c-1)
+        return x
 
 
 __all__ = [
@@ -46,8 +70,52 @@ __all__ = [
     'PACTIntegerGELU',
     'PACTSoftmax',
     'PACTGELU',
-    'PACTLayerNorm'
+    'PACTLayerNorm',
+    'PACTIntegerEmbedding',
+    'PACTEmbedding'
 ]
+
+class PACTEmbedding(torch.nn.Module):
+
+    def __init__(self, n_levels:int = 256, weights : torch.Tensor = torch.Tensor((1.,))):
+        super().__init__()
+        self.weights = nn.Parameter(weights)
+        self.adder = PACTIntegerAdd(n_levels=n_levels, num_args = 2)
+
+        self.register_buffer('maxval', torch.Tensor((0.,)))
+        
+    def reassign_epsilons(self):
+        self.adder.reassign_epsilons()
+        
+    def forward(self, x):
+        out = self.adder(x,self.weights)
+        self.maxval.data[0] = max(torch.max(torch.abs(out)).item(), self.maxval)
+        
+        return out
+
+class PACTIntegerEmbedding(torch.nn.Module):
+
+    def __init__(self, n_levels: int = 256, weight : torch.Tensor = torch.Tensor((1.,)), eps_in:float = 1./255, eps_adder:float=1./255, maxval:float=1.):
+        super().__init__()
+        self.n_levels = n_levels
+
+        self.register_buffer('floor', torch.Tensor((False,)))
+        self.register_buffer('clip_gradient', torch.Tensor((True,)))
+        self.register_buffer('noisy', torch.Tensor((False,)))
+        
+        clip_lo = -(torch.max(torch.max(torch.abs(weight))))
+        clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+
+        eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+        eps_bias = eps_weights/eps_adder
+        
+        self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias))
+        self.rqs1 = RequantShift(mul=torch.floor(2**16*eps_in/eps_adder), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((2**16,)), n_levels=n_levels)
+        self.rqs3 = RequantShift(mul=torch.floor(2**16*eps_adder/(maxval/self.n_levels)), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((2**16,)), n_levels=n_levels)
+        
+    def forward(self, x):
+        out = self.rqs3(self.rqs1(x) + self.weight)
+        return out
 
 class PACTSoftmax(torch.nn.Module):
 
@@ -84,7 +152,7 @@ class PACTIntegerSoftmax(torch.nn.Module):
         p = 0
         #eps2 = torch.Tensor((0.35815147 / 2**p,))
         eps2 = torch.Tensor((0.3585,))
-
+        
         self.coeffA.data[0] = torch.round(0.3585/eps2)
         self.coeffB.data[0] = torch.round(1.353/eps)
         self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2))
@@ -691,10 +759,6 @@ class PACTIntegerAdd(torch.nn.Module):
             for i in self.acts:
                 i.clip_hi.data.copy_(clip_hi)
                 i.clip_lo.data.copy_(clip_lo)
-
-
-
-
 
     def forward(self, *x: torch.Tensor):
         total = self.acts[0](x[0])

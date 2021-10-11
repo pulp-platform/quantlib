@@ -17,11 +17,13 @@ PACT_OPS = set([PACTUnsignedAct,
                 PACTIntegerSoftmax,
                 PACTIntegerGELU,
                 PACTIntegerLayerNorm,
+                PACTEmbedding,
 ])
 
 PACT_OPS_INT = set([PACTIntegerAdd,
                     PACTIntegerConcat,
-                    PACTIntegerMatmul])
+                    PACTIntegerMatmul,
+                    PACTIntegerEmbedding])
 
 #All PACT operations - ordinarily we would want to trace through the
 #integerized operations
