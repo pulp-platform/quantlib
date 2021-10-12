@@ -21,7 +21,8 @@ class OpTree:
         assert self.open_branches > 0, "Tried to create OpTree with no branches - something is wrong!"
         # assume that order and assignment of args and kwargs does not matter
         # and they are all treated the same.
-        self._args = list(end_node.args) + [v for v in end_node.kwargs.values()]
+        self._args = list(end_node._args) #+ [v for v in end_node.kwargs.values()]
+        self.kwargs = end_node.kwargs
         # note the users of the final node now - it may get
         # deleted and then end_node.users becomes useless
         self.users = [u for u in end_node.users]
@@ -48,7 +49,9 @@ class OpTree:
         # really ugly list comprehensions:
         # the inputs to the tree is the list of all inputs to all nodes in the
         # tree, except those inputs which are tree nodes themselves.
-        all_args = [arg for node in self.nodes for arg in node.args if arg not in self.nodes] + [v for node in self.nodes for v in node.kwargs.values() if v not in self.nodes]
+
+        #SCHEREMO : This was some heavy monkey coding right here -- Why would you cast kwargs to their values? They could be reordered or whatever else!!!
+        all_args = [arg for node in self.nodes for arg in node._input_nodes.keys() if arg not in self.nodes] #+ [v for node in self.nodes for v in node.kwargs.values() if v not in self.nodes]
         # in the case of concat nodes, the arguments are lists or tuples, so we
         # unpack them
         all_args_unpacked = []
@@ -114,6 +117,7 @@ class OpTreeReplacementPass(FxPass):
         op_trees = []
         self.trace_op_trees(out_node, self.node_specs, None, op_trees, set(), self.always_terminate)
         # we have the op trees, now replace them with a module
+
         for i, tree in enumerate(op_trees):
             # then add the submodule
             module = self.replacement_fn(tree)
@@ -130,7 +134,6 @@ class OpTreeReplacementPass(FxPass):
 
         # and we're done...
         return gm
-
 
 class MatmulReplacementPass(OpTreeReplacementPass):
     matmul_node_specs = [('call_function', (torch.bmm, torch.matmul)),
@@ -171,10 +174,10 @@ class ConcatTreeReplacementPass(SequentialPass):
         super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
     def cat_replacement_fn(self, tree):
-        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False)
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
 
     def stack_replacement_fn(self, tree):
-        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True)
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
 
 class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
     before_modules = (nn.Conv1d,

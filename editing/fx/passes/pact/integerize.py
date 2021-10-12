@@ -17,6 +17,8 @@ from .canonicalize import LayerNormDisassemblePass
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
+from quantlib.algorithms.pact.pact_ops import RequantShift
+
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
 __all__ = ['IntegerizePACTConvPass',
@@ -28,8 +30,7 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizeLayerNormPass',
            'IntegerizeEmbeddingsPass',
            'PACTTracer',
-           'PACT_symbolic_trace',
-           'RequantShift']
+           'PACT_symbolic_trace',]
 
 def integerize_softmax_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -94,28 +95,28 @@ class IntegerizeGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_gelu_fun, f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
-class RequantShift(nn.Module):
-    def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
-        super(RequantShift, self).__init__()
-        self.register_buffer('mul', mul)
-        self.register_buffer('add', add)
-        self.register_buffer('div', D)
-        self.signed = signed
-        self.n_levels_out = n_levels
+# class RequantShift(nn.Module):
+#     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
+#         super(RequantShift, self).__init__()
+#         self.register_buffer('mul', mul)
+#         self.register_buffer('add', add)
+#         self.register_buffer('div', D)
+#         self.signed = signed
+#         self.n_levels_out = n_levels
 
-    def forward(self, x):
-        x = x * self.mul
-        x = x + self.add
-        x = (x/self.div).floor()
-        if not self.signed:
-            x = torch.clip(x, 0., float(self.n_levels_out-1))
-        else:
-            c = np.floor(self.n_levels_out/2+0.001)
-            if self.n_levels_out % 2:
-                x = torch.clip(x, -c, c)
-            else:
-                x = torch.clip(x, -c, c-1)
-        return x
+#     def forward(self, x):
+#         x = x * self.mul
+#         x = x + self.add
+#         x = (x/self.div).floor()
+#         if not self.signed:
+#             x = torch.clip(x, 0., float(self.n_levels_out-1))
+#         else:
+#             c = np.floor(self.n_levels_out/2+0.001)
+#             if self.n_levels_out % 2:
+#                 x = torch.clip(x, -c, c)
+#             else:
+#                 x = torch.clip(x, -c, c-1)
+#         return x
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
