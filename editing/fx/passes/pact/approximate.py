@@ -118,23 +118,3 @@ class CanonicalizeEmbeddingsPass(SequentialPass):
         pattern = nn.Sequential(ProtoPACTEmbedding(torch.Tensor((1.,))))
         passes.append(ReplaceSingleInputPatternPass(pattern, PACT_symbolic_trace_inclusive, partial(embedding_replacement_fun, n_levels=n_levels), f'_CANONICALIZE_EMBEDDING_PASS'))
         super().__init__(*passes, name_prefix='_CANONICALIZE_EMBEDDING_PASS')
-
-
-def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
-    modules = gm_modules(gm)
-    
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    n_levels = modules[matched_nodes[0].target].adder.n_levels
-    bias = modules[matched_nodes[0].target]._parameters['weights']
-    
-    new_embedding = PACTIntegerEmbedding(n_levels, bias)
-
-    return new_embedding
-        
-# This can be made much more general -- Current workaround
-class IntegerizeEmbeddingsPass(SequentialPass):
-    def __init__(self, **kwargs):
-        passes = []
-        pattern = nn.Sequential(PACTEmbedding(torch.Tensor((1.,))))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace_inclusive, partial(embedding_integerize_fun), f'_INTEGERIZE_EMBEDDINGS_PASS'))
-        super().__init__(*passes, name_prefix='_INTEGERIZE_EMBEDDING_PASS')

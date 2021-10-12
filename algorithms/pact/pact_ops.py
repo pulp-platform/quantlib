@@ -95,26 +95,45 @@ class PACTEmbedding(torch.nn.Module):
 
 class PACTIntegerEmbedding(torch.nn.Module):
 
-    def __init__(self, n_levels: int = 256, weight : torch.Tensor = torch.Tensor((1.,)), eps_in:float = 1./255, eps_adder:float=1./255, maxval:float=1.):
+    def __init__(self, n_levels: int = 256, weight : torch.Tensor = torch.Tensor((1.,)), eps_in:float = 1./255, eps_adder:float=1./255, maxval:float=1., twoStage = False):
         super().__init__()
         self.n_levels = n_levels
 
         self.register_buffer('floor', torch.Tensor((False,)))
         self.register_buffer('clip_gradient', torch.Tensor((True,)))
         self.register_buffer('noisy', torch.Tensor((False,)))
-        
-        clip_lo = -(torch.max(torch.max(torch.abs(weight))))
-        clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+        self.twoStage = twoStage
 
-        eps_weights = (clip_hi-clip_lo)/(n_levels-1)
-        eps_bias = eps_weights/eps_adder
+        eps_out = maxval/(self.n_levels-1)
+        self.eps_out = torch.Tensor((eps_out,))
         
-        self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias))
-        self.rqs1 = RequantShift(mul=torch.floor(2**16*eps_in/eps_adder), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((2**16,)), n_levels=n_levels)
-        self.rqs3 = RequantShift(mul=torch.floor(2**16*eps_adder/(maxval/self.n_levels)), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((2**16,)), n_levels=n_levels)
+        if twoStage:
+
+            clip_lo = -(torch.max(torch.max(torch.abs(weight))))
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+
+            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+            eps_bias = eps_weights/eps_adder
+            D = 2**16
+            
+            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias))
+            self.rqs1 = RequantShift(mul=torch.floor(D*eps_in/eps_adder), add=D*self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels)
+            self.rqs2 = RequantShift(mul=torch.floor(D*eps_adder/eps_out), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((D,)), n_levels=n_levels)
+        else:
+
+            clip_lo = -torch.abs(maxval)
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+            D = 2**16
+            
+            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_out/D, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / (eps_out/D)))
+            self.rq = RequantShift(mul=torch.floor(D*eps_in/eps_out), add=self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels)
         
     def forward(self, x):
-        out = self.rqs3(self.rqs1(x) + self.weight)
+        if self.twoStage:
+            out = self.rqs2(self.rqs1(x))
+        else:
+            out = self.rq(x)
+            
         return out
 
 class PACTSoftmax(torch.nn.Module):
