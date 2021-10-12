@@ -104,7 +104,7 @@ class PACTIntegerEmbedding(torch.nn.Module):
         self.register_buffer('noisy', torch.Tensor((False,)))
         self.twoStage = twoStage
 
-        eps_out = maxval/(self.n_levels-1)
+        eps_out = maxval/(self.n_levels//2-1)
         self.eps_out = torch.Tensor((eps_out,))
         
         if twoStage:
