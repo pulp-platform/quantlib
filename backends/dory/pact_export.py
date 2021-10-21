@@ -1,7 +1,27 @@
+#
+# pact_export.py
+# 
+# Author(s):
+# Georg Rutishauser <georgr@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
 from functools import partial
 from pathlib import Path
 
-from PIL import Image
 
 import torch
 from torch import nn
@@ -77,17 +97,22 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
         mult_attr = onnx.helper.make_attribute(key='mult_bits', value=requant_bits)
         n.attribute.append(mult_attr)
 
-def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, D : float = 2**24, opset_version : int  = 10, in_data : torch.Tensor = None):
+def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10):
     net = net.eval()
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     onnx_file = f"{name}_ql_integerized.onnx"
     onnx_path = out_path.joinpath(onnx_file)
 
-    net_traced = qlfx.passes.pact.PACT_symbolic_trace(net)
     shape_in = in_data.shape
-    int_pass = qlfx.passes.pact.IntegerizePACTNetPass(shape_in=shape_in,  eps_in=eps_in, D=D)
-    net_integerized = int_pass(net_traced)
+
+    if integerize:
+        net_traced = qlfx.passes.pact.PACT_symbolic_trace(net)
+
+        int_pass = qlfx.passes.pact.IntegerizePACTNetPass(shape_in=shape_in,  eps_in=eps_in, D=D)
+        net_integerized = int_pass(net_traced)
+    else: # assume the net is already integerized
+        net_integerized = net
     # the integerization pass annotates the conv layers with the number of
     # weight levels. from this information we can make a dictionary of the number of
     # weight bits.
@@ -130,11 +155,8 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, D : f
     # open the supplied input image
     if in_data is not None:
         im_tensor = in_data.clone()
-        # add a batch dimension
-        im_tensor_in = im_tensor.reshape((1,)+ tuple(im_tensor.shape[-3:])).to(dtype=torch.float32)
 
-        net_integerized = net_integerized
-        output = net_integerized(im_tensor_in)
+        output = net_integerized(im_tensor.to(dtype=torch.float32))
 
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
@@ -150,8 +172,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, D : f
                 for el in t.flatten():
                     fp.write(f"{int(el)},\n")
 
-        save_beautiful_text(im_tensor_in, "input", "input")
-        import ipdb; ipdb.set_trace()
+        save_beautiful_text(im_tensor, "input", "input")
         save_beautiful_text(output, "output", "output")
         for i, (name, t) in enumerate(acts):
             save_beautiful_text(t, name, f"out_layer{i}")

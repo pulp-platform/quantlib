@@ -545,8 +545,6 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         else:
             w = self.weight
 
-        if x is None:
-            import ipdb; ipdb.set_trace()
         return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
