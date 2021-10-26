@@ -487,3 +487,44 @@ class PACTIntegerModulesController(Controller):
         net_nodes_intmodules_intact = LightweightGraph.build_nodes_list(net, leaf_types=(PACTIntegerAdd, PACTIntegerConcat))
         filter_intmodules = TypeFilter(PACTIntegerAdd) | TypeFilter(PACTIntegerConcat)
         return [n.module for n in filter_intmodules(net_nodes_intmodules_intact)]
+
+class PACTDynamicPrecController(Controller):
+
+    def __init__(self, module_spec_list : list):
+        # module_spec_list is a list of tuples with each entry taking the form:
+        # (m : nn.Module, levels : list[int], select_levels_trn : callable, select_levels_val : callable)
+        # m is a PACT op module with an n_levels member
+        # levels is a list of permissible n_levels parameters
+        # select_levels_trn is a callable which takes 2 parameters:
+        #  - l : list   -- the `levels` list
+        #  - e : epoch  -- the current epoch; this allows us to e.g. implement
+        #                  some type of annealing
+        #   it is called in step_pre_training_batch and should return ann
+        #   element of `l` to be used for training the current batch. Most
+        #   commonly, this will be an implementation of the uniform distribution.
+        # select_levels_val is expected to be the same type as
+        # select_levels_trn but is used for validation - most commonly this
+        # will be a constant function.
+        self.module_spec_list = module_spec_list
+        self.epoch = 0
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict):
+        pass
+
+    def step_pre_training_epoch(self, e : int, *args, **kwargs):
+        self.epoch = e
+
+    def step_pre_training_batch(self, *args, **kwargs):
+        # all we need to do here is call the selection function for each module
+        # and set the module's `n_levels` parameter to the result
+        for m, l, sel, _  in self.module_spec_list:
+            m.n_levels = sel(l, self.epoch)
+
+    def step_pre_validation_epoch(self, e : int, *args, **kwargs):
+        # same as pre_training_batch but with the select_levels_val function
+        for m, l, _, sel in self.module_spec_list:
+            m.n_levels = sel(l, e)
+
