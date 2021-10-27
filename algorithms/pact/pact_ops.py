@@ -31,6 +31,9 @@ from .util import assert_param_valid, almost_symm_quant
 import math
 import copy
 
+from torch.onnx.symbolic_helper import parse_args
+import torch.onnx.symbolic_registry as sym_registry
+
 __all__ = [
     'PACTUnsignedAct',
     'PACTAsymmetricAct',
@@ -48,31 +51,51 @@ __all__ = [
     'PACTGELU',
     'PACTLayerNorm',
     'PACTIntegerEmbedding',
-    'PACTEmbedding'
+    'PACTEmbedding', 
 ]
 
 class RequantShift(nn.Module):
+
+    class MyRequantShift(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, mul, add, div, signed, n_levels_out):
+            x = x * mul
+            x = x + add
+            x = (x/div).floor()
+            if not signed:
+                x = torch.clip(x, 0., float(n_levels_out-1))
+            else:
+                c = torch.floor(n_levels_out/2+0.001)
+                if n_levels_out % 2:
+                    x = torch.clip(x, -c, c)
+                else:
+                    x = torch.clip(x, -c, c-1)
+            return x
+        
+        @staticmethod
+        @parse_args('v', 't', 't', 't', 't', 't')
+        def symbolic(g, x, mul, add, div, signed, n_levels_out):
+
+            mul_ = g.op("Constant", value_t=mul)
+            add_ = g.op("Constant", value_t=add)
+            div_ = g.op("Constant", value_t=div)
+            signed_ = g.op("Constant", value_t=signed)
+            n_levels_out_ = g.op("Constant", value_t=n_levels_out)
+            
+            return g.op("PACTOps::RequantShift", x, mul_t=mul, add_t=add, div_t=div, signed_t=signed, n_levels_t=n_levels_out)
+            return g.op("PACTOps::RequantShift", x)
+    
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
         super(RequantShift, self).__init__()
-        self.register_buffer('mul', mul)
-        self.register_buffer('add', add)
-        self.register_buffer('div', D)
-        self.signed = signed
-        self.n_levels_out = n_levels
+        self.mul = torch.clone(mul).detach()
+        self.add = torch.clone(add).detach()
+        self.div = torch.clone(D).detach()
+        self.signed = torch.Tensor((signed,)).detach()
+        self.n_levels_out = torch.Tensor((n_levels,)).detach()
 
     def forward(self, x):
-        x = x * self.mul
-        x = x + self.add
-        x = (x/self.div).floor()
-        if not self.signed:
-            x = torch.clip(x, 0., float(self.n_levels_out-1))
-        else:
-            c = np.floor(self.n_levels_out/2+0.001)
-            if self.n_levels_out % 2:
-                x = torch.clip(x, -c, c)
-            else:
-                x = torch.clip(x, -c, c-1)
-        return x
+        return self.MyRequantShift.apply(x, self.mul, self.add, self.div, self.signed, self.n_levels_out)
 
 
 class PACTEmbedding(torch.nn.Module):
@@ -168,15 +191,43 @@ class PACTSoftmax(torch.nn.Module):
     
 class PACTIntegerSoftmax(torch.nn.Module):
 
+    class MySoftmax(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            xTilde = (x - torch.max(x))
+            z = torch.floor(-xTilde / log2)
+            p = xTilde + z * log2
+            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) / 2**(z-8))
+            ysum = torch.sum(y, -1, keepdim=True)
+            norm = torch.floor(y*(n_levels-1)/(ysum))
+            out = torch.clip(norm, zero, n_levels-1)
+
+            return out
+        
+        @staticmethod
+        @parse_args('v', 't', 't', 't', 't', 't', 't')
+        def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
+
+            log2_ = g.op("Constant", value_t=log2)
+            coeffA_ = g.op("Constant", value_t=coeffA)
+            coeffB_ = g.op("Constant", value_t=coeffB)
+            coeffC_ = g.op("Constant", value_t=coeffC)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+            
+            return g.op("PACTOps::iSoftmax", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
+    
     def __init__(self, n_levels: int = 256, eps_in: float = 1./255):
         super().__init__()
-        self.n_levels = n_levels
-        self.eps_in = eps_in
 
-        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
-        self.register_buffer('coeffB', torch.Tensor((1.353,)))
-        self.register_buffer('coeffC', torch.Tensor((0.344,)))
-        self.register_buffer('log2', torch.Tensor((1.,)))
+        self.eps_in = eps_in
+        self.n_levels = torch.Tensor((n_levels,))
+        self.coeffA = torch.Tensor((0.35815147,))
+        self.coeffB = torch.Tensor((1.353,))
+        self.coeffC = torch.Tensor((0.344,))
+        self.log2 = torch.Tensor((1.,))
+        self.zero = torch.Tensor((0.,))
 
         self.updateCoeffs(eps_in)
         
@@ -210,16 +261,8 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
         """
         
-        xTilde = (x - torch.max(x))
-        z = torch.floor(-xTilde / self.log2)
-        p = xTilde + z * self.log2
-        y = torch.floor(((self.coeffA*(p + self.coeffB)**2 + self.coeffC)) / 2**(z-8))
-        ysum = torch.sum(y, -1, keepdim=True)
-        norm = torch.floor(y*(self.n_levels-1)/(ysum))
-        out = torch.clip(norm, 0., self.n_levels-1)
-        
-        return out
-
+        return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+    
 class PACTGELU(torch.nn.Module):
 
     def __init__(self,  n_levels: int = 256):
@@ -250,19 +293,45 @@ class PACTGELU(torch.nn.Module):
 
 class PACTIntegerGELU(torch.nn.Module):
 
+    class MyGELU(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, b, one, totScaler, D, n_levels, zero):
+            L = torch.sign(x) * (-(torch.clip(torch.abs(x), min=zero, max=-b) + b)**2 + one)
+            y = x*((one+L)>>1)
+
+            y = torch.floor((y * totScaler)/D)
+            y = torch.clip(y, min=-n_levels//2, max = n_levels//2-1)
+
+            return y    
+        
+        @staticmethod
+        @parse_args('v', 't','t','t','t','t','t')
+        def symbolic(g, x, b, one, totScaler, D, n_levels, zero):
+
+            b_ = g.op("Constant", value_t=b)
+            one_ = g.op("Constant", value_t=one)
+            totScaler_ = g.op("Constant", value_t=totScaler)
+            D_ = g.op("Constant", value_t=D)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+            
+            return g.op("PACTOps::iGELU", x, b_t=b, one_t=one, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
+    
     def __init__(self, n_levels: int = 256, eps_in = 1.):
         super().__init__()
 
-        self.n_levels = n_levels
+        self.n_levels = torch.Tensor((n_levels,)).detach()
 
-        self.register_buffer('a', torch.Tensor((-0.288,)))
-        self.register_buffer('b', torch.Tensor((-1.769,)))
-        self.register_buffer('one', torch.Tensor((1.,)))
-        self.register_buffer('sqrttwo', torch.Tensor((4,)))
+        self.a = torch.Tensor((-0.288,)).detach()
+        self.b = torch.Tensor((-1.769,)).detach()
+        self.one = torch.Tensor((1.,)).detach()
+        self.sqrttwo = torch.Tensor((4,)).detach()
 
-        self.register_buffer('D', torch.Tensor((2**24,)))
-        self.register_buffer('totScaler', torch.Tensor((255.,)))
-        self.register_buffer('maxval', torch.Tensor((1.,)))
+        self.D = torch.Tensor((2.**24,)).detach()
+        self.totScaler = torch.Tensor((255.,)).detach()
+        self.maxval = torch.Tensor((0.,)).detach()
+
+        self.zero = torch.Tensor((0.,)).detach()
 
         self.updateCoeffs(eps_in)
         
@@ -306,37 +375,63 @@ class PACTIntegerGELU(torch.nn.Module):
         :rtype: 
 
         """
+        return self.MyGELU.apply(x, self.b.type_as(x), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
         
-        L = torch.sign(x) * (-(torch.clip(torch.abs(x), min=0, max=-self.b.data[0]) + self.b)**2 + self.one)
-        y = x*((self.one+L)>>1)
-
-        y = torch.floor((y * self.totScaler)/self.D)
-        y = torch.clip(y, min=-self.n_levels//2, max = self.n_levels//2-1)
-        
-        return y
-
 class PACTIntegerLayerNorm(torch.nn.Module):
 
+    class MyLayerNorm(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, weight, bias, totScaler, D, n_levels, dummyOne, dummyZero):
+            nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
+            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))))+1
+
+            if not torch.equal(weight, dummyOne):
+                nom = nom * weight
+            else:
+                nom = nom * totScaler
+
+            y = (torch.floor(torch.div(nom,denom)))
+
+            if not torch.equal(bias, dummyZero):
+                y = y + (bias)
+
+            y = torch.floor(y/(D))
+            y = torch.clip(y, -n_levels//2, n_levels//2-1)
+            return y
+
+        @staticmethod
+        def symbolic(g, x, weight,  bias, totScaler, D, n_levels, dummyOne, dummyZero):
+
+            n_levels_ = g.op("Constant", value_t=n_levels)
+            weight_ = g.op("Constant", value_t=weight)
+            bias_ = g.op("Constant", value_t=bias)
+            totScaler_ = g.op("Constant", value_t=totScaler)
+            
+            return g.op("PACTOps::iLayerNorm", x, weight, bias, totScaler, D, n_levels)
+
+    
     def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,))):
         super().__init__()
 
-        self.n_levels = n_levels
+        self.n_levels = torch.Tensor((n_levels,)).detach()
         
-        self.register_buffer('eps', torch.Tensor((eps_in,)))
-        self.register_buffer('D', torch.Tensor((2**24,)))
+        self.eps = torch.Tensor((eps_in,)).detach()
+        self.D = torch.Tensor((2**24,)).detach()
 
         # dummyOne and dummyZero are there to have a comparison value on Multi-GPU systems to check if weight and bias are used
-        self.register_buffer('dummyOne', torch.Tensor((1.,)))
-        self.register_buffer('dummyZero', torch.Tensor((0.,)))
 
-        self.register_buffer('floor', torch.Tensor((False,)))
-        self.register_buffer('clip_gradient', torch.Tensor((True,)))
-        self.register_buffer('noisy', torch.Tensor((False,)))
+        self.floor = torch.Tensor((False,)).detach()
+        self.clip_gradient = torch.Tensor((True,)).detach()
+        self.noisy = torch.Tensor((False,)).detach()
 
         # Maxval is used to track statistics
-        self.register_buffer('maxval', torch.Tensor((maxval,)))
+        self.maxval = torch.Tensor((maxval,)).detach()
 
-        if not torch.equal(weight, self.dummyOne) and not torch.equal(bias, self.dummyZero):
+        dummyOne =  torch.Tensor((1.,)).type_as(weight)
+        dummyZero = torch.Tensor((0.,)).type_as(bias)
+        
+        if not torch.equal(weight, dummyOne) and not torch.equal(bias, dummyZero):
             clip_lo = -max(torch.max(torch.abs(bias)), torch.max(torch.abs(weight)))
             clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
 
@@ -345,38 +440,23 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             
             self.eps_weights = eps_weights
 
-            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ))
-            self.register_buffer('bias', torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias))
-            self.register_buffer('totScaler', torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)))
+            self.weight = torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()
+            self.bias = torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach()
+            self.totScaler = torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach()
 
             self.weight *= self.totScaler
             self.bias *= self.totScaler
             
         else:
 
-            self.register_buffer('weight', torch.Tensor((1.,)))
-            self.register_buffer('bias', torch.Tensor((0.,)))
-            self.register_buffer('totScaler', torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)))
+            self.weight = torch.Tensor((1.,)).detach()
+            self.bias = torch.Tensor((0.,)).detach()
+            self.totScaler = torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach()
             
     def forward(self, x):
-        nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
-        denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))))+1
-        
-        if not torch.equal(self.weight, self.dummyOne):
-            nom = nom * self.weight
-        else:
-            nom = nom * self.totScaler
-            
-        y = (torch.floor(torch.div(nom,denom)))
-        
-        if not torch.equal(self.bias, self.dummyZero):
-            y = y + (self.bias)
-            
-        y = torch.floor(y/(self.D))
-        #y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
-        
-
-        return y
+        dummyOne =  torch.Tensor((1.,))
+        dummyZero = torch.Tensor((0.,))
+        return self.MyLayerNorm.apply(x, self.weight, self.bias, self.totScaler, self.D, self.n_levels, dummyOne.type_as(x), dummyZero.type_as(x))
     
 class PACTLayerNorm(torch.nn.Module):
 
@@ -397,7 +477,7 @@ class PACTLayerNorm(torch.nn.Module):
 
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
-            
+        
     def forward(self, x):
 
         nom = x - torch.mean(x, -1, keepdim=True)
