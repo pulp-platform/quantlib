@@ -18,6 +18,7 @@ PACT_OPS = set([PACTUnsignedAct,
                 PACTIntegerGELU,
                 PACTIntegerLayerNorm,
                 PACTEmbedding,
+                PACTWrapModule
 ])
 
 PACT_OPS_INT = set([PACTIntegerAdd,
@@ -28,7 +29,6 @@ PACT_OPS_INT = set([PACTIntegerAdd,
 #All PACT operations - ordinarily we would want to trace through the
 #integerized operations
 PACT_OPS_INCLUSIVE = PACT_OPS | PACT_OPS_INT
-
 
 PACTTracer = LeafTracer(leaf_types=list(PACT_OPS))
 PACTInclusiveTracer = LeafTracer(leaf_types=list(PACT_OPS_INCLUSIVE))

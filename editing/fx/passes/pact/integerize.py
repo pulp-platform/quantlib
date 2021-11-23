@@ -13,7 +13,7 @@ from quantlib.algorithms.pact.pact_ops import *
 from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
-from .canonicalize import LayerNormDisassemblePass
+from .canonicalize import LayerNormDisassemblePass, ApplyPassToWrapModule
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
@@ -163,8 +163,9 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     # note the new node's intended integer precision in the precision dict
     #if prec_dict is not None:
         #nbits = int(np.log2(lin.n_levels) + 0.2)
-#        prec_dict[name] = nbits
+        #        prec_dict[name] = nbits
 
+    #import IPython; IPython.embed()
     new_lin = nn.Linear(in_features=lin.in_features,
                         out_features=lin.out_features,
                         bias=(lin.bias is not None))
@@ -274,7 +275,7 @@ def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
     maxval = modules[matched_nodes[0].target].maxval
     eps_in = extract_eps(matched_nodes[0].meta['quant'].eps_in)
     
-    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval, twoStage=True)
+    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval, twoStage=False)
 
     return new_embedding
         
@@ -288,7 +289,7 @@ class IntegerizeEmbeddingsPass(SequentialPass):
 
         
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -310,7 +311,7 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeSoftmaxPass())
         passes.append(IntegerizeLayerNormPass())
         passes.append(IntegerizeGELUPass())
-#         # now, PACT Activations (combined with BN layers) can be converted to
-#         # RequantShift layers
         passes.append(IntegerizeBNActPass(D))
+        passes.append(IntegerizeEmbeddingsPass())
+            
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")

@@ -26,9 +26,6 @@ def eps_conversion_invalid(m : torch.nn.Module, *eps_in : torch.Tensor, **kw_eps
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
 def eps_conversion_pact_gelu(m : torch.nn.Module, eps_in : torch.Tensor):
-    print("GELU")
-    print(m.maxval)
-    print(m.n_levels)
     #return (1./(m.n_levels//2-1))
     return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
     #return torch.Tensor(((m.n_levels//2-1)/m.maxval),)
@@ -41,9 +38,6 @@ def eps_conversion_pact_softmax(m : torch.nn.Module, eps_in : torch.Tensor):
     #return torch.Tensor((m.maxval/(m.n_levels-1),))
 
 def eps_conversion_pact_layernorm(m : torch.nn.Module, eps_in : torch.Tensor):
-    print("LN")
-    print(m.maxval)
-    print(m.n_levels)
     return torch.Tensor(max((m.maxval/(m.n_levels//2-1)), 0.),)
 
 def eps_conversion_identity(*eps_ins):
@@ -51,6 +45,10 @@ def eps_conversion_identity(*eps_ins):
 
 def eps_conversion_embedding(m : torch.nn.Module, eps_in : torch.Tensor):
     return m.maxval/(m.adder.n_levels//2-1)
+
+def eps_conversion_PACTWrapModule(m : torch.nn.Module, *eps_in):
+    return m.statTracker.get_eps()
+
 
 #return torch.Tensor((1./m.n_levels,))
 
@@ -65,6 +63,7 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     nn.Conv2d : eps_conversion_invalid,
                     nn.Conv3d : eps_conversion_invalid,
                     nn.Linear: eps_conversion_invalid,
+                    PACTWrapModule : eps_conversion_PACTWrapModule,
                     PACTEmbedding : eps_conversion_embedding,
                     PACTIntegerGELU : eps_conversion_pact_gelu,
                     PACTIntegerSoftmax : eps_conversion_pact_softmax,
@@ -72,6 +71,7 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTSoftmax : eps_conversion_pact_softmax,
                     PACTIntegerLayerNorm : eps_conversion_pact_layernorm,
                     PACTLayerNorm : eps_conversion_pact_layernorm,
+                    PACTIntegerMatmul: eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
@@ -89,13 +89,13 @@ class AnnotateEpsPass(FxPass):
     def __init__(self, eps_in : Optional[Union[torch.Tensor, float]]):
         super(AnnotateEpsPass, self).__init__()
         if not isinstance(eps_in, torch.Tensor) and eps_in is not None:
-            self.eps_in = torch.tensor(eps_in).reshape(1)
+            self.eps_in = torch.tensor(eps_in).reshape(-1)
             self.noeps = False
         elif eps_in is None:
             self.eps_in = torch.tensor(1.0).reshape(1)
             self.noeps = True
         else:
-            self.eps_in = eps_in.reshape(1)
+            self.eps_in = eps_in.reshape(-1)
             self.noeps = False
 
     def run_pass(self, gm : fx.GraphModule):

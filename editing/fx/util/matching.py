@@ -17,7 +17,7 @@ class NonUniqueGeneralMatcher:
         self.pattern_anchor = next(iter(reversed(self.p.graph.nodes)))
         # this will be the graph module that we search for the pattern
         self.searched_gm : fx.GraphModule = None
-
+        
     @property
     def searched_modules(self):
         # a dictionary of the modules contained in the searched GraphModule
@@ -33,7 +33,9 @@ class NonUniqueGeneralMatcher:
         # class
         #TODO: is this really a nice way to return the results? (None if no
         # match, Match object if match)
+
         match = self._match_nodes(self.pattern_anchor, anchor)
+        
         if match is None:
             return []
         try:

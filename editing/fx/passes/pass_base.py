@@ -97,8 +97,6 @@ class SequentialPass(FxPass):
         for i, p in enumerate(passes):
             self.register_subpass(self.name_prefix+'_'+str(i), p)
 
-
-
 class ModifyMatchedModulesPass(FxPass):
     # applies mod_fun to the list of matched modules in a Match object
     def __init__(self, match : Match, mod_fun : callable, **kwargs):
@@ -131,61 +129,60 @@ class ModifySequentialPatternPass(SequentialPass):
 
         super(ModifySequentialPatternPass, self).setup_passes(passes)
 
-class ReplaceMatchWithModulePass(FxPass):
-    #Matches are specific to graph instances, so don't use this type of pass on its
-    #own if you want to reuse it!
-    def __init__(self, match : Match, module : nn.Module, name : str, insert_target : Optional[str] = None):
-        # this class needs a name field because the inserted submodules will be named
-        super(ReplaceMatchWithModulePass, self).__init__()
-        self.match = match
-        self.module = module
-        self.name = name
-        self.insert_target = insert_target
+# class ReplaceMatchWithModulePass(FxPass):
+#     #Matches are specific to graph instances, so don't use this type of pass on its
+#     #own if you want to reuse it!
+#     def __init__(self, match : Match, module : nn.Module, name : str, insert_target : Optional[str] = None):
+#         # this class needs a name field because the inserted submodules will be named
+#         super(ReplaceMatchWithModulePass, self).__init__()
+#         self.match = match
+#         self.module = module
+#         self.name = name
+#         self.insert_target = insert_target
 
-    def run_pass(self, gm : fx.GraphModule):
-        matched_nodes = get_ordered_active_nodes(self.match)
-        first_matched_node = matched_nodes[0]
-        out_node = matched_nodes[-1]
-        if self.module is not None:
-            # we use the first matched node as the hierarchy level to insert the
-            # new submodule. if the first matched node is not a module, try to use
-            # the insert_target field
-            target_list = []
-            if self.insert_target is None and first_matched_node.op == 'call_module':
-                first_pattern_node_target = get_qualified_prefix(first_matched_node.target)
-                if len(first_pattern_node_target):
-                    target_list.append(get_qualified_prefix(first_matched_node.target))
-            elif self.insert_target is not None:
-                target_list.append(self.insert_target)
+#     def run_pass(self, gm : fx.GraphModule):
+#         matched_nodes = get_ordered_active_nodes(self.match)
+#         first_matched_node = matched_nodes[0]
+#         out_node = matched_nodes[-1]
+#         if self.module is not None:
+#             # we use the first matched node as the hierarchy level to insert the
+#             # new submodule. if the first matched node is not a module, try to use
+#             # the insert_target field
+#             target_list = []
+#             if self.insert_target is None and first_matched_node.op == 'call_module':
+#                 first_pattern_node_target = get_qualified_prefix(first_matched_node.target)
+#                 if len(first_pattern_node_target):
+#                     target_list.append(get_qualified_prefix(first_matched_node.target))
+#             elif self.insert_target is not None:
+#                 target_list.append(self.insert_target)
 
-            target_list.append(f"_QL_REPLACED_{self.name.upper()}")
-            target = '.'.join(target_list)
-            #add the submodule
-            gm.add_submodule(target, self.module)
-            try:
-                with gm.graph.inserting_after(first_matched_node.all_input_nodes[0]):
-                    # TODO: The bug's here
-                    new_node = gm.graph.call_module(target, args=first_matched_node.args, kwargs=first_matched_node.kwargs)
-            except:
-                import IPython; IPython.embed()
+#             target_list.append(f"_QL_REPLACED_{self.name.upper()}")
+#             target = '.'.join(target_list)
+#             #add the submodule
+#             gm.add_submodule(target, self.module)
+#             try:
+#                 with gm.graph.inserting_after(first_matched_node.all_input_nodes[0]):
+#                     # TODO: The bug's here
+#                     new_node = gm.graph.call_module(target, args=first_matched_node.args, kwargs=first_matched_node.kwargs)
+#             except:
+#                 import IPython; IPython.embed()
+#         else:
+#             # if module is none, simply remove the matched nodes and stitch the
+#             # graph together
+#             assert len(first_matched_node.all_input_nodes) == 1, f"To remove a match, the first node must take only one input - node '{first_matched_node}' takes {len(first_matched_node.all_input_nodes)} inputs..."
+#             new_node = first_matched_node.all_input_nodes[0]
+#             #import IPython; IPython.embed()
 
-        else:
-            # if module is none, simply remove the matched nodes and stitch the
-            # graph together
-            assert len(first_matched_node.all_input_nodes) == 1, f"To remove a match, the first node must take only one input - node '{first_matched_node}' takes {len(first_matched_node.all_input_nodes)} inputs..."
-            new_node = first_matched_node.all_input_nodes[0]
-            #import IPython; IPython.embed()
-
-        #replace all uses of the output node with the new module's output or
-        #the input to the match
-        out_node.replace_all_uses_with(new_node)
+#         #replace all uses of the output node with the new module's output or
+#         #the input to the match
+#         out_node.replace_all_uses_with(new_node)
         
-        for n in reversed(matched_nodes):
-            gm.graph.erase_node(n)
-            if n.op == 'call_module':
-                gm.delete_submodule(n.target)
+#         for n in reversed(matched_nodes):
+#             gm.graph.erase_node(n)
+#             if n.op == 'call_module':
+#                 gm.delete_submodule(n.target)
 
-        return gm
+#         return gm
         
 class ReplaceMatchWithModulePass(FxPass):
     #Matches are specific to graph instances, so don't use this type of pass on its
@@ -242,7 +239,7 @@ class ReplaceMatchWithModulePass(FxPass):
             gm.graph.erase_node(n)
             if n.op == 'call_module':
                 gm.delete_submodule(n.target)
-
+                
         return gm
 
 class ReplacePartialSingleInputMatchWithModulePass(FxPass):

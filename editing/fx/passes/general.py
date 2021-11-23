@@ -209,11 +209,19 @@ class InsertModuleBetweenModulesPass(SequentialPass):
 
 class ShapePropPass(FxPass):
     # a wrapper for the shape propagation pass of torch.fx
-    def __init__(self, *shapes_in : Union[Tuple[int], List[int], torch.Size], dtype_in : torch.dtype = torch.float32):
+    def __init__(self, *shapes_in, dtype_in : torch.dtype = torch.float32):
         super(ShapePropPass, self).__init__()
-        self.shapes_in = [torch.Size(s) for s in shapes_in]
-        self.dtype_in = dtype_in
 
+        # SCHEREMO: Workaround for unpacking multi input shapes
+        try:
+            self.shapes_in = [torch.Size(s) for s in shapes_in]
+        except:
+            # This case should ONLY be called if the input is a tuple of a list
+            shapes_in = shapes_in[0]
+            self.shapes_in = [torch.Size(s) for s in shapes_in]
+            
+        self.dtype_in = dtype_in
+        
     def run_pass(self, gm : fx.GraphModule):
         training = gm.training
         gm.eval()

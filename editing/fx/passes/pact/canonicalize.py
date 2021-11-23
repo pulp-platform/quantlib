@@ -8,9 +8,13 @@ from torch.fx.subgraph_rewriter import Match
 from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
 from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, ReplaceSequentialPatternPass
-from ...util import gm_modules
+from ...util import gm_modules, get_qualified_prefix
+from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
+
+from functools import partial
+import copy
 
 class OpTree:
 
@@ -260,5 +264,209 @@ class LayerNormDisassemblePass(SequentialPass):
         pattern = nn.Sequential(PACTLayerNorm(256))
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
         super().__init__(*passes, name_prefix='_LAYERNORM_DISASSEMBLE_PASS')
+
+def apply_pass_to_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, _tracer = None):
+
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    wrap_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    wrap_module = matched_modules[0]
+    n_levels = wrap_module.n_levels
+    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+
+    cloneModule = copy.deepcopy(wrap_module.module)
+    fx_graph = _tracer.trace(cloneModule)
+    fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
+    
+    fx_model = _pass.apply(fx_model)
+    node = PACTWrapModule(fx_model, n_levels)
+
+    return node
+
+    
+class ApplyPassToWrapModule(SequentialPass):
+    def __init__(self, _pass, name=''):
+        passes = []
+        pattern = nn.Sequential(PACTWrapModule(nn.Identity(), n_levels=256))
         
+        tracer = LeafTracer(PACT_OPS_INCLUSIVE)
+        trace = partial(custom_symbolic_trace, tracer=tracer)
         
+        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(apply_pass_to_wrap_module, _pass=_pass, _tracer=tracer), f'_WRAP_PASS_{name}_subpass'))
+        super().__init__(*passes, name_prefix='_WRAP_PASS_{name}_subpass')        
+
+def insert_final_activation(fx_model, n_levels):
+
+    #     SCHEREMO: That's a hack
+    node = list(fx_model.graph.nodes.__reversed__())[1]
+    totidx = 0
+    with fx_model.graph.inserting_after(node):
+
+        new_node_target = f'__QL__WRAPPASS__PACTAct_{totidx}'
+        target_prefix = get_qualified_prefix(node.target)
+        if type(target_prefix) == str and target_prefix != '':
+            new_node_target = '.'.join([target_prefix, new_node_target])
+
+        fx_model.add_submodule(new_node_target, PACTAsymmetricAct(n_levels, leaky=0, act_kind='identity', symm=True))
+        #fx_model.add_submodule(new_node_target, qa.pact.PACTUnsignedAct(n_levels, leaky=0, act_kind='relu'))
+        new_node = fx_model.graph.call_module(new_node_target, args=tuple([node]))
+        totidx = totidx + 1
+
+    for output_node in list(node.users):
+        helperList = list(output_node.args)
+        for idx, arg in enumerate(helperList):
+            if arg == node:
+                helperList[idx] = new_node
+
+        output_node.args = tuple(helperList)
+
+    new_node.args = tuple([node])
+
+    # re-route the input of the second linop to the output of the asymmetric quant
+    # X ---> Y                X ---> PACTAct ---> Y
+    #    |             ====> 
+    #    |--> PACTAct
+
+    fx_model.graph.lint()
+    fx_model.recompile()
+    return fx_model
+
+    
+def integerize_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, _tracer = None):
+
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    wrap_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    wrap_module = matched_modules[0]
+    n_levels = wrap_module.n_levels
+    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+
+    # SCHEREMO: Workaround SPECIFICALLY for MultiHead Self-Attention
+    eps_in = torch.tensor(wrap_node.meta['quant'].eps_in[0])[0]
+    shapes_in = [wrap_node.meta['tensor_meta'].shape]*3
+    cloneModule = copy.deepcopy(wrap_module.module)
+    
+    fx_graph = _tracer.trace(cloneModule)
+    fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
+
+    # fx_model = insert_final_activation(fx_model, n_levels)
+    
+    IntegerizePass = _pass(shapes_in, eps_in = eps_in)
+    fx_model = IntegerizePass.apply(fx_model)
+    node = PACTWrapModule(fx_model, n_levels)
+    
+    return node
+    
+        
+class IntegerizeWrapModules(SequentialPass):
+    def __init__(self, _pass, name=''):
+        passes = []
+        pattern = nn.Sequential(PACTWrapModule(nn.Identity(), 256))
+        
+        tracer = LeafTracer(PACT_OPS_INCLUSIVE)
+        trace = partial(custom_symbolic_trace, tracer=tracer)
+        
+        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(integerize_wrap_module, _pass=_pass, _tracer=tracer), f'_WRAP_PASS_INTEGERIZE_subpass'))
+        super().__init__(*passes, name_prefix='_WRAP_PASS_INTEGERIZE_subpass')        
+
+def wrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None, n_levels=256, _tracer=None):
+
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    wrap_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    wrap_module = matched_modules[0]
+    assert isinstance(wrap_module, wrapClass), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+
+    cloneModule = copy.deepcopy(wrap_module)
+    
+    fx_graph = _tracer.trace(cloneModule)
+    fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
+
+    x_model = insert_final_activation(fx_model, n_levels)
+
+    node = PACTWrapModule(fx_model, n_levels)
+    
+    return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
+        
+class WrapModulePass(SequentialPass):
+    def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, **kwargs):
+        passes = []
+        pattern = nn.Sequential(wrapClassCallable())
+        
+        tracer = LeafTracer(PACT_OPS | set([wrapClass]))
+        trace = partial(custom_symbolic_trace, tracer=tracer)
+        
+        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(wrap_module_fun, wrapClass=wrapClass, n_levels=n_levels, _tracer=tracer), f'_WRAP_{name}_PASS'))
+        super().__init__(*passes, name_prefix='_WRAP_{name}_PASS')
+
+def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
+
+    def reqShiftParams(module):
+        return (module.mul, module.add, module.div)
+    
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    wrap_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    wrap_module = matched_modules[0]
+    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+
+    mod = dict(wrap_module.module.named_parameters())
+    wk_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.weight']
+    wq_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.weight']
+    wv_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_2.weight']
+    wo_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_3.weight']
+    
+    try:
+        wk_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.bias']
+    except:
+        wk_bias = torch.Tensor((0,))
+    try:
+        wq_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.bias']
+    except:
+        wq_bias = torch.Tensor((0,))
+    try:
+        wv_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_2.bias']
+    except:
+        wv_bias = torch.Tensor((0,))
+    try:
+        wo_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_3.bias']
+    except:
+        wo_bias = torch.Tensor((0,))
+
+    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
+    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
+    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
+    attn_requant_mul, attn_requant_add, attn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
+    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_4)
+
+    sm = wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGER_SOFTMAX_PASS_0
+
+    isoftmaxA = sm.coeffA
+    isoftmaxB = sm.coeffB
+    isoftmaxC = sm.coeffC
+    isoftmaxlog2 = sm.log2
+    n_levels = wrap_module.n_levels
+    
+    node = PACTWrapMHSA(wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+                        wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+                        wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                        attn_requant_mul, attn_requant_div,
+                        wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                        isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels)
+    
+    return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
+        
+class UnwrapModulePass(SequentialPass):
+    def __init__(self, ReplacementClass, name=''):
+        passes = []
+        pattern = nn.Sequential(PACTWrapModule(nn.Identity(), 256))
+        
+        tracer = LeafTracer(PACT_OPS)
+        trace = partial(custom_symbolic_trace, tracer=tracer)
+        
+        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(unwrap_module_fun, wrapClass=ReplacementClass), f'_UNWRAP_{name}_PASS'))
+        super().__init__(*passes, name_prefix='_UNWRAP_{name}_PASS')

@@ -34,6 +34,8 @@ import copy
 from torch.onnx.symbolic_helper import parse_args
 import torch.onnx.symbolic_registry as sym_registry
 
+from inspect import signature
+
 __all__ = [
     'PACTUnsignedAct',
     'PACTAsymmetricAct',
@@ -51,27 +53,161 @@ __all__ = [
     'PACTGELU',
     'PACTLayerNorm',
     'PACTIntegerEmbedding',
-    'PACTEmbedding', 
+    'PACTEmbedding',
+    'PACTWrapModule',
+    'PACTWrapMHSA',
 ]
 
+class PACTWrapMHSA(nn.Module):
+
+    class MyMHSA(torch.autograd.Function):
+        
+        @staticmethod
+        def forward(ctx, q,k,v,
+                     wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+                     wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+                     wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                     att_requant_mul, att_requant_div,
+                     wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                     isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
+                     n_levels):
+            return q
+        
+        @staticmethod
+        @parse_args('v','v','v',
+                    't', 't', 't', 't',
+                    't', 't', 't', 't',
+                    't', 't', 't', 't',
+                    't', 't',
+                    't', 't', 't', 't',
+                    't', 't', 't', 't',
+                    't')        
+        def symbolic(g, q,k,v,
+                     wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+                     wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+                     wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                     attn_requant_mul, attn_requant_div,
+                     wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                     isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
+                     n_levels):
+
+            wk_weight_ = g.op("Constant", value_t=wk_weight)
+            wk_bias_ = g.op("Constant", value_t=wk_bias)
+            wk_requant_mul_ = g.op("Constant", value_t=wk_requant_mul)
+            wk_requant_div_ = g.op("Constant", value_t=wk_requant_div)
+            wq_weight_ = g.op("Constant", value_t=wq_weight)
+            wq_bias_ = g.op("Constant", value_t=wq_bias)
+            wq_requant_mul_ = g.op("Constant", value_t=wq_requant_mul)
+            wq_requant_div_ = g.op("Constant", value_t=wq_requant_div)
+            wv_weight_ = g.op("Constant", value_t=wv_weight)
+            wv_bias_ = g.op("Constant", value_t=wv_bias)
+            wv_requant_mul_ = g.op("Constant", value_t=wv_requant_mul)
+            wv_requant_div_ = g.op("Constant", value_t=wv_requant_div)
+            wo_weight_ = g.op("Constant", value_t=wo_weight)
+            wo_bias_ = g.op("Constant", value_t=wo_bias)
+            wo_requant_mul_ = g.op("Constant", value_t=wo_requant_mul)
+            wo_requant_div_ = g.op("Constant", value_t=wo_requant_div)
+            attn_requant_mul_ = g.op("Constant", value_t=attn_requant_mul)
+            attn_requant_div_ = g.op("Constant", value_t=attn_requant_div)
+            isoftmaxA_ = g.op("Constant", value_t=isoftmaxA)
+            isoftmaxB_ = g.op("Constant", value_t=isoftmaxB)
+            isoftmaxC_ = g.op("Constant", value_t=isoftmaxC)
+            isoftmaxlog2_ = g.op("Constant", value_t=isoftmaxlog2)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::MultiHeadSelfAttention", q,k,v,
+                        wq_weight_t=wq_weight, wq_bias_t=wq_bias, wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
+                        wk_weight_t=wk_weight, wk_bias_t=wk_bias, wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
+                        wv_weight_t=wv_weight, wv_bias_t=wv_bias, wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
+                        wo_weight_t=wo_weight, wo_bias_t=wo_bias, wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
+                        attn_requant_mul_t=attn_requant_mul, attn_requant_div_t=attn_requant_div,
+                        isoftmaxA_t=isoftmaxA, isoftmaxB_t=isoftmaxB, isoftmaxC_t=isoftmaxC, isoftmaxlog2_t=isoftmaxlog2, n_levels_t=n_levels)
+            
+#             return g.op("PACTOps::MultiHeadSelfAttention", q,k,v,
+#                         wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+#                         wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+#                         wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+#                         attn_requant_mul, attn_requant_div,
+#                         wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+#                         isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels)
+        #return g.op("PACTOps::RequantShift", x)
+
+    def __init__(self,  wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+                        wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+                        wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                        attn_requant_mul, attn_requant_div,
+                        wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                        isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels):
+        
+        super().__init__()
+        self.wk_weight = torch.clone(wk_weight).detach()
+        self.wk_bias = torch.clone(wk_bias).detach()
+        self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
+        self.wk_requant_div = torch.clone(wk_requant_div).detach()
+        self.wq_weight = torch.clone(wq_weight).detach()
+        self.wq_bias = torch.clone(wq_bias).detach()
+        self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
+        self.wq_requant_div = torch.clone(wq_requant_div).detach()
+        self.wv_weight = torch.clone(wv_weight).detach()
+        self.wv_bias = torch.clone(wv_bias).detach()
+        self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
+        self.wv_requant_div = torch.clone(wv_requant_div).detach()
+        self.wo_weight = torch.clone(wo_weight).detach()
+        self.wo_bias = torch.clone(wo_bias).detach()
+        self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
+        self.wo_requant_div = torch.clone(wo_requant_div).detach()
+        self.attn_requant_mul = torch.clone(attn_requant_mul).detach()
+        self.attn_requant_div = torch.clone(attn_requant_div).detach()
+        self.isoftmaxA = torch.clone(isoftmaxA).detach()
+        self.isoftmaxB = torch.clone(isoftmaxB).detach()
+        self.isoftmaxC = torch.clone(isoftmaxC).detach()
+        self.isoftmaxlog2 = torch.clone(isoftmaxlog2).detach()        
+        self.n_levels = torch.clone(torch.Tensor((n_levels,))).detach()
+        
+    def forward(self, q,k,v, **kwargs):
+        print(self.wk_weight.type_as(q))
+        return self.MyMHSA.apply(q,k,v,self.wk_weight.type_as(q), self.wk_bias.type_as(q), self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
+                            self.wq_weight.type_as(q), self.wq_bias.type_as(q), self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
+                            self.wv_weight.type_as(q), self.wv_bias.type_as(q), self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
+                            self.attn_requant_mul.type_as(q), self.attn_requant_div.type_as(q),
+                            self.wo_weight.type_as(q), self.wo_bias.type_as(q), self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
+                            self.isoftmaxA.type_as(q), self.isoftmaxB.type_as(q), self.isoftmaxC.type_as(q), self.isoftmaxlog2.type_as(q),
+                            self.n_levels.type_as(q))
+
+class PACTWrapModule(nn.Module):
+    
+    def __init__(self, module, n_levels):
+        super().__init__()
+        self.module = copy.deepcopy(module)
+        self.n_levels = n_levels
+        self.statTracker = PACTAsymmetricAct(n_levels=n_levels, act_kind='identity', leaky=0., symm=True)
+        
+    def forward(self, *x, **kwargs):
+        y = self.module.forward(*x, **kwargs)
+        self.statTracker(y)
+        return y
+            
 class RequantShift(nn.Module):
 
     class MyRequantShift(torch.autograd.Function):
 
         @staticmethod
         def forward(ctx, x, mul, add, div, signed, n_levels_out):
-            x = x * mul
-            x = x + add
-            x = (x/div).floor()
-            if not signed:
-                x = torch.clip(x, 0., float(n_levels_out-1))
-            else:
-                c = torch.floor(n_levels_out/2+0.001)
-                if n_levels_out % 2:
-                    x = torch.clip(x, -c, c)
-                else:
-                    x = torch.clip(x, -c, c-1)
-            return x
+            dummyTwo = torch.tensor(2.).type_as(x)
+            dummyOne = torch.tensor(1.).type_as(x)
+            dummyZero = torch.tensor(0.).type_as(x)
+            
+            y = x * mul
+            y = y + add
+            y = (y/div).floor()
+            
+            x1 = torch.clip(y, dummyZero, n_levels_out-dummyOne).type_as(x)
+            
+            c = torch.floor(n_levels_out/dummyTwo+torch.tensor(0.001).type_as(x)).type_as(x)
+            x2 = torch.clip(y, -c, c - ((n_levels_out+dummyOne)%dummyTwo)).type_as(x)
+                
+            y = (((signed+dummyOne)%dummyTwo)*x1 + signed*x2)
+            return y
         
         @staticmethod
         @parse_args('v', 't', 't', 't', 't', 't')
@@ -84,19 +220,19 @@ class RequantShift(nn.Module):
             n_levels_out_ = g.op("Constant", value_t=n_levels_out)
             
             return g.op("PACTOps::RequantShift", x, mul_t=mul, add_t=add, div_t=div, signed_t=signed, n_levels_t=n_levels_out)
-            return g.op("PACTOps::RequantShift", x)
+            #return g.op("PACTOps::RequantShift", x)
     
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
         super(RequantShift, self).__init__()
         self.mul = torch.clone(mul).detach()
         self.add = torch.clone(add).detach()
-        self.div = torch.clone(D).detach()
+        self.div = torch.clone(D.type_as(add)).detach()
         self.signed = torch.Tensor((signed,)).detach()
         self.n_levels_out = torch.Tensor((n_levels,)).detach()
 
     def forward(self, x):
-        return self.MyRequantShift.apply(x, self.mul, self.add, self.div, self.signed, self.n_levels_out)
-
+        return self.MyRequantShift.apply(x, self.mul.type_as(x), self.add.type_as(x), self.div.type_as(x), self.signed.type_as(x), self.n_levels_out.type_as(x))
+    
 
 class PACTEmbedding(torch.nn.Module):
 
@@ -401,6 +537,7 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             return y
 
         @staticmethod
+        @parse_args('v', 't','t','t','t','t','t','t')
         def symbolic(g, x, weight,  bias, totScaler, D, n_levels, dummyOne, dummyZero):
 
             n_levels_ = g.op("Constant", value_t=n_levels)
@@ -408,7 +545,7 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             bias_ = g.op("Constant", value_t=bias)
             totScaler_ = g.op("Constant", value_t=totScaler)
             
-            return g.op("PACTOps::iLayerNorm", x, weight, bias, totScaler, D, n_levels)
+            return g.op("PACTOps::iLayerNorm", x, weight_t=weight, bias_t=bias, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
 
     
     def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,))):
@@ -417,7 +554,7 @@ class PACTIntegerLayerNorm(torch.nn.Module):
         self.n_levels = torch.Tensor((n_levels,)).detach()
         
         self.eps = torch.Tensor((eps_in,)).detach()
-        self.D = torch.Tensor((2**24,)).detach()
+        self.D = torch.Tensor((2.**24,)).detach()
 
         # dummyOne and dummyZero are there to have a comparison value on Multi-GPU systems to check if weight and bias are used
 
@@ -456,7 +593,7 @@ class PACTIntegerLayerNorm(torch.nn.Module):
     def forward(self, x):
         dummyOne =  torch.Tensor((1.,))
         dummyZero = torch.Tensor((0.,))
-        return self.MyLayerNorm.apply(x, self.weight, self.bias, self.totScaler, self.D, self.n_levels, dummyOne.type_as(x), dummyZero.type_as(x))
+        return self.MyLayerNorm.apply(x, self.weight.type_as(x), self.bias.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), dummyOne.type_as(x), dummyZero.type_as(x))
     
 class PACTLayerNorm(torch.nn.Module):
 
