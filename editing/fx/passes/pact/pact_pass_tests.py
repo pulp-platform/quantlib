@@ -1,24 +1,24 @@
-# 
+#
 # general.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 import unittest
 from unittest import TestCase
@@ -32,14 +32,14 @@ from quantlib.editing.fx.passes.pact.canonicalize import *
 from quantlib.editing.fx.passes.pact.pact_util import *
 
 
-
 class NastyAdder(nn.Module):
+
     def __init__(self):
         super(NastyAdder, self).__init__()
-        self.conv1 = nn.Conv1d(1,1,4)
-        self.conv2 = nn.Conv1d(1,1,4)
-        self.conv3 = nn.Conv1d(1,1,4)
-        self.conv4 = nn.Conv1d(1,1,4)
+        self.conv1 = nn.Conv1d(1, 1, 4)
+        self.conv2 = nn.Conv1d(1, 1, 4)
+        self.conv3 = nn.Conv1d(1, 1, 4)
+        self.conv4 = nn.Conv1d(1, 1, 4)
 
     def forward(self, x):
         x1 = self.conv1(x)
@@ -53,13 +53,15 @@ class NastyAdder(nn.Module):
         y4 = y1 + y2
         return y4 + y3
 
+
 class NastyConcat(nn.Module):
-    def __init__(self, stack : bool):
+
+    def __init__(self, stack: bool):
         super(NastyConcat, self).__init__()
-        self.conv1 = nn.Conv1d(1,1,4)
-        self.conv2 = nn.Conv1d(1,1,4)
-        self.conv3 = nn.Conv1d(1,1,4)
-        self.conv4 = nn.Conv1d(1,1,4)
+        self.conv1 = nn.Conv1d(1, 1, 4)
+        self.conv2 = nn.Conv1d(1, 1, 4)
+        self.conv3 = nn.Conv1d(1, 1, 4)
+        self.conv4 = nn.Conv1d(1, 1, 4)
         self.stack = stack
         # stack=True doesn't actually work...
         self.cat_op = torch.stack if stack else torch.cat
@@ -89,7 +91,8 @@ class TestCanonicalize(TestCase):
         tree_passed = add_pass(tree_traced)
 
         out_test = tree_passed(dummy_in)
-        self.assertTrue(bool(torch.all(torch.abs(out_test-out_golden) < self.eps)))
+        self.assertTrue(
+            bool(torch.all(torch.abs(out_test - out_golden) < self.eps)))
 
     def test_mnv2(self):
         model = MobileNetV2()
@@ -108,7 +111,8 @@ class TestCanonicalize(TestCase):
 
         out_golden = model(dummy_in)
         out_test = model_passed(dummy_in)
-        self.assertTrue(bool(torch.all(torch.abs(out_test-out_golden) < self.eps)))
+        self.assertTrue(
+            bool(torch.all(torch.abs(out_test - out_golden) < self.eps)))
 
     def test_cat_tree(self):
         cat_tree = NastyConcat(stack=False)
@@ -118,7 +122,8 @@ class TestCanonicalize(TestCase):
         tree_traced_cat = fx.symbolic_trace(cat_tree)
         tree_passed_cat = cat_pass(tree_traced_cat)
         out_test_cat = tree_passed_cat(dummy_in)
-        self.assertTrue(bool(torch.all(out_test_cat==out_golden_cat)))
+        self.assertTrue(bool(torch.all(out_test_cat == out_golden_cat)))
+
 
 if __name__ == "__main__":
     unittest.main()

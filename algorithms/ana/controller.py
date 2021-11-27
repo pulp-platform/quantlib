@@ -1,23 +1,23 @@
-# 
+#
 # controller.py
-# 
+#
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from functools import partial
 from typing import NamedTuple
@@ -43,8 +43,8 @@ def bws(t: int, tstart: int, tend: int, alpha: int) -> float:
     # assert 0 <= tstart < tend
     # assert 0 <= alpha
 
-    t          = min(max(t, tstart), tend)
-    multiplier = (float(tend - t) / float(tend - tstart)) ** alpha
+    t = min(max(t, tstart), tend)
+    multiplier = (float(tend - t) / float(tend - tstart))**alpha
 
     return multiplier
 
@@ -56,8 +56,8 @@ def uws(t: int, tstart: int, eps: float, alpha: int) -> float:
     # assert 0.0 <= eps
     # assert 0 <= alpha
 
-    t          = max(t, tstart)
-    multiplier = (1 / float(t - tstart + 1)) ** alpha
+    t = max(t, tstart)
+    multiplier = (1 / float(t - tstart + 1))**alpha
     multiplier = 0.0 if multiplier < eps else multiplier
 
     return multiplier
@@ -68,19 +68,18 @@ _AC_MAPPER = {'bws': bws, 'uws': uws}
 
 class ANATimer(object):
 
-    def __init__(self,
-                 mi_spec:    dict,
-                 sigma_spec: dict):
+    def __init__(self, mi_spec: dict, sigma_spec: dict):
 
         self._mi = None
         assert ANATimer.check_spec(mi_spec, is_sigma=False)
         self._mi_beta = mi_spec['beta']
-        self._mi_fun  = partial(_AC_MAPPER[mi_spec['fun']], **mi_spec['kwargs'])
+        self._mi_fun = partial(_AC_MAPPER[mi_spec['fun']], **mi_spec['kwargs'])
 
         self._sigma = None
         assert ANATimer.check_spec(sigma_spec, is_sigma=True)
         self._sigma_beta = sigma_spec['beta']
-        self._sigma_fun  = partial(_AC_MAPPER[sigma_spec['fun']], **sigma_spec['kwargs'])
+        self._sigma_fun = partial(_AC_MAPPER[sigma_spec['fun']],
+                                  **sigma_spec['kwargs'])
 
     @property
     def mi(self) -> Union[None, float]:
@@ -93,22 +92,31 @@ class ANATimer(object):
     @staticmethod
     def check_spec(spec: dict, is_sigma: bool) -> bool:
 
-        check_beta = isinstance(spec['beta'], float) and (True if not is_sigma else (0.0 <= spec['beta']))
-        spec_type  = spec['fun']
-        check_fun  = spec_type in set(_AC_MAPPER.keys())
+        check_beta = isinstance(spec['beta'],
+                                float) and (True if not is_sigma else
+                                            (0.0 <= spec['beta']))
+        spec_type = spec['fun']
+        check_fun = spec_type in set(_AC_MAPPER.keys())
 
         if check_beta and check_fun:
             spec_kwargs = spec['kwargs']
             if spec_type == 'bws':
-                check_tstart = isinstance(spec_kwargs['tstart'], int) and (0 <= spec_kwargs['tstart'])
-                check_tend   = isinstance(spec_kwargs['tend'], int)   and (spec_kwargs['tstart'] < spec_kwargs['tend'])
-                check_alpha  = isinstance(spec_kwargs['alpha'], int)  and (0 <= spec_kwargs['alpha'])
+                check_tstart = isinstance(spec_kwargs['tstart'],
+                                          int) and (0 <= spec_kwargs['tstart'])
+                check_tend = isinstance(
+                    spec_kwargs['tend'],
+                    int) and (spec_kwargs['tstart'] < spec_kwargs['tend'])
+                check_alpha = isinstance(spec_kwargs['alpha'],
+                                         int) and (0 <= spec_kwargs['alpha'])
                 is_correct = check_tstart and check_tend and check_alpha
             elif spec_type == 'uws':
-                check_tstart = isinstance(spec_kwargs['tstart'], int) and (0 <= spec_kwargs['tstart'])
-                check_eps    = isinstance(spec_kwargs['eps'], float)  and (0.0 <= spec_kwargs['eps'])
-                check_alpha  = isinstance(spec_kwargs['alpha'], int)  and (0 <= spec_kwargs['alpha'])
-                is_correct   = check_tstart and check_eps and check_alpha
+                check_tstart = isinstance(spec_kwargs['tstart'],
+                                          int) and (0 <= spec_kwargs['tstart'])
+                check_eps = isinstance(spec_kwargs['eps'],
+                                       float) and (0.0 <= spec_kwargs['eps'])
+                check_alpha = isinstance(spec_kwargs['alpha'],
+                                         int) and (0 <= spec_kwargs['alpha'])
+                is_correct = check_tstart and check_eps and check_alpha
             else:
                 raise NotImplemented
         else:
@@ -117,12 +125,13 @@ class ANATimer(object):
         return is_correct
 
     def step(self, t: int) -> None:
-        self._mi    = self._mi_beta    * self._mi_fun(t)
+        self._mi = self._mi_beta * self._mi_fun(t)
         self._sigma = self._sigma_beta * self._sigma_fun(t)
 
 
-Timer2Modules = NamedTuple('Timer2Modules', [('timer',   ANATimer),
-                                             ('modules', List[torch.nn.Module])])
+Timer2Modules = NamedTuple('Timer2Modules',
+                           [('timer', ANATimer),
+                            ('modules', List[torch.nn.Module])])
 
 
 class ANAController(Controller):
@@ -144,7 +153,7 @@ class ANAController(Controller):
 
     def __init__(self, module: torch.nn.Module, ctrl_spec: List):
 
-        self._global_step   = -1
+        self._global_step = -1
         self._timer2modules = []
 
         self._n2m = self.get_modules(module)
@@ -152,35 +161,50 @@ class ANAController(Controller):
         if isinstance(module, nn.DataParallel):
             # the network is wrapped inside an nn.DataParallel module:
             # this requires to resolve an additional naming layer
-            ctrl_spec = copy.deepcopy(ctrl_spec)  # TODO: find a better workaround to avoid overwriting the original controller specifications
+            ctrl_spec = copy.deepcopy(
+                ctrl_spec
+            )  # TODO: find a better workaround to avoid overwriting the original controller specifications
             for timer_spec in ctrl_spec:
-                timer_spec['modules'] = ['.'.join(['module', m]) for m in timer_spec['modules']]
+                timer_spec['modules'] = [
+                    '.'.join(['module', m]) for m in timer_spec['modules']
+                ]
 
         # verify that each ANA module is linked to exactly one timer (i.e., check that ANA targets form a partition of the collection of ANA modules)
         all_ana_module_names = set(self._n2m.keys())
-        ana_timer_targets    = []
+        ana_timer_targets = []
         for timer_spec in ctrl_spec:
             ana_timer_target = set(timer_spec['modules'])
-            assert ana_timer_target.issubset(all_ana_module_names)  # non-ANA module specified as ANA target
+            assert ana_timer_target.issubset(
+                all_ana_module_names)  # non-ANA module specified as ANA target
             ana_timer_targets.append(ana_timer_target)
-        assert len(all_ana_module_names) == sum([len(ana_timer_target) for ana_timer_target in ana_timer_targets])
+        assert len(all_ana_module_names) == sum(
+            [len(ana_timer_target) for ana_timer_target in ana_timer_targets])
         assert len(all_ana_module_names) == len(set.union(*ana_timer_targets))
 
         # build timers and link them to the specified ANA modules
         for timer_spec in ctrl_spec:
-            timer   = ANATimer(timer_spec['mi'], timer_spec['sigma'])
-            modules = list(map(lambda n: self._n2m[n], set(timer_spec['modules'])))
-            self._timer2modules.append(Timer2Modules(timer=timer, modules=modules))
+            timer = ANATimer(timer_spec['mi'], timer_spec['sigma'])
+            modules = list(
+                map(lambda n: self._n2m[n], set(timer_spec['modules'])))
+            self._timer2modules.append(
+                Timer2Modules(timer=timer, modules=modules))
 
     @staticmethod
-    def get_modules(module: torch.nn.Module, parent_name: str = '', n2m: OrderedDict = OrderedDict()):
+    def get_modules(module: torch.nn.Module,
+                    parent_name: str = '',
+                    n2m: OrderedDict = OrderedDict()):
 
         for n, m in module.named_children():
-            if len(list(m.children())) == 0:  # ``Module`` is not ``nn.Sequential`` or other container type; i.e., this is a "leaf" ``Module``
+            if len(
+                    list(m.children())
+            ) == 0:  # ``Module`` is not ``nn.Sequential`` or other container type; i.e., this is a "leaf" ``Module``
                 if isinstance(m, ANAModule):
                     n2m.update({parent_name + n: m})
             else:
-                ANAController.get_modules(m, parent_name=''.join([parent_name, n, '.']), n2m=n2m)
+                ANAController.get_modules(m,
+                                          parent_name=''.join(
+                                              [parent_name, n, '.']),
+                                          n2m=n2m)
 
         return n2m
 

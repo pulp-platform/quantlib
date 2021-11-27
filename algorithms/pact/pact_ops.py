@@ -30,7 +30,6 @@ from .util import assert_param_valid, almost_symm_quant
 import math
 import copy
 
-
 __all__ = [
     'PACTUnsignedAct',
     'PACTAsymmetricAct',
@@ -44,7 +43,6 @@ __all__ = [
     'PACTIntegerSoftmax',
     'PACTIntegerLayerNorm',
 ]
-
 r"""Broadly configurable implementations of the PACT
 (https://arxiv.org/pdf/1807.06964) and TQT (https://arxiv.org/abs/1903.08066)
 algorithms. These layers require the corresponding `Controller`s to work correctly!
@@ -69,6 +67,7 @@ The QuantLab project contains an example (MobileNetV2) of how to achieve this
 easily and cleanly.
 """
 
+
 class _PACTActivation(nn.Module):
     # base class to provide common code for PACT Activations
     r"""PACT/TQT activation base class. Before it is 'started', this layer will
@@ -80,20 +79,21 @@ class _PACTActivation(nn.Module):
         - running average with momentum 0.9
         - running variance with momentum 0.9
         """
+
     def __init__(self,
-                 n_levels : int,
-                 init_clip : str,
-                 learn_clip : bool,
-                 act_kind : str,
-                 leaky : float = 0.1,
-                 nb_std : Union[float, int] = 3,
-                 symm : bool = True,
-                 noisy : bool = False,
-                 rounding : bool = False,
-                 tqt : bool = False,
-                 tqt_beta : float = 0.9,
-                 tqt_clip_grad : bool = True,
-                 signed : bool = True):
+                 n_levels: int,
+                 init_clip: str,
+                 learn_clip: bool,
+                 act_kind: str,
+                 leaky: float = 0.1,
+                 nb_std: Union[float, int] = 3,
+                 symm: bool = True,
+                 noisy: bool = False,
+                 rounding: bool = False,
+                 tqt: bool = False,
+                 tqt_beta: float = 0.9,
+                 tqt_clip_grad: bool = True,
+                 signed: bool = True):
         r"""Constructor.
 
         :param n_levels: currently targeted quantization level (default 256).
@@ -113,17 +113,23 @@ class _PACTActivation(nn.Module):
         super(_PACTActivation, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
+        assert_param_valid(self, act_kind, 'act_kind',
+                           ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
+        assert_param_valid(self, init_clip, 'init_clip',
+                           ['max', 'std', 'const'])
 
         self.tqt = tqt
         self.n_levels = n_levels
 
-        self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=(learn_clip and not symm) and not tqt)
+        self.clip_hi = torch.nn.Parameter(
+            torch.Tensor((1.,)),
+            requires_grad=(learn_clip and not symm) and not tqt)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
-        self.clipping_params = {'high' : self.clip_hi}
+        self.clipping_params = {'high': self.clip_hi}
         if signed:
-            self.clip_lo = torch.nn.Parameter(torch.Tensor((-1.,)), requires_grad=learn_clip and not tqt)
+            self.clip_lo = torch.nn.Parameter(torch.Tensor((-1.,)),
+                                              requires_grad=learn_clip
+                                              and not tqt)
             self.clipping_params['low'] = self.clip_lo
         else:
             self.register_buffer('clip_lo', torch.zeros(1))
@@ -139,8 +145,11 @@ class _PACTActivation(nn.Module):
         self.signed = signed
 
         if tqt:
-            assert (not noisy and learn_clip and symm), f"{self.__class__.__name__}: TQT quantization requires noisy=False, learn_clip=True - you provided noisy={noisy}, learn_clip={learn_clip}, symm={symm}"
-            self.register_parameter("log_t", nn.Parameter(torch.tensor((0.)), requires_grad=True))
+            assert (
+                not noisy and learn_clip and symm
+            ), f"{self.__class__.__name__}: TQT quantization requires noisy=False, learn_clip=True - you provided noisy={noisy}, learn_clip={learn_clip}, symm={symm}"
+            self.register_parameter(
+                "log_t", nn.Parameter(torch.tensor((0.)), requires_grad=True))
             self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
             self.register_buffer("tqt_running_beta", torch.tensor(1.))
             self.register_buffer("tqt_running_grad_var", torch.tensor((0.)))
@@ -155,15 +164,21 @@ class _PACTActivation(nn.Module):
         self.register_buffer('started', torch.tensor(False))
 
         # these are only used to gather statistics
-        self.max          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
-        self.min          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
-        self.running_mean = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
-        self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
+        self.max = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data),
+                                      requires_grad=False)
+        self.min = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data),
+                                      requires_grad=False)
+        self.running_mean = torch.nn.Parameter(torch.zeros_like(
+            self.clip_hi.data),
+                                               requires_grad=False)
+        self.running_var = torch.nn.Parameter(torch.ones_like(
+            self.clip_hi.data),
+                                              requires_grad=False)
         self.register_buffer('clip_gradient', torch.tensor(True))
 
-
     def get_eps(self, *args):
-        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
+        return ((self.clip_hi - self.clip_lo) /
+                (self.n_levels - 1)).detach().clone()
 
     def extra_repr(self):
         r = f"n_levels={self.n_levels}, init_clip='{self.init_clip}', learn_clip={self.learn_clip}, act_kind='{self.act_kind}', leaky={self.leaky}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
@@ -171,12 +186,16 @@ class _PACTActivation(nn.Module):
 
     def forward(self, x):
         if not self.started:
-            x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
+            x_stat = torch.tensor(
+                x, device=self.max.device,
+                dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             with torch.no_grad():
                 self.max[:] = max(self.max.item(), x_stat.max())
                 self.min[:] = min(self.min.item(), x_stat.min())
-                self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
-                self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
+                self.running_mean[:] = 0.9 * self.running_mean.item(
+                ) + 0.1 * x_stat.mean()
+                self.running_var[:] = 0.9 * self.running_var.item(
+                ) + 0.1 * x_stat.std() * x_stat.std()
             if self.act_kind == 'identity':
                 return x
             elif self.act_kind == 'relu':
@@ -192,19 +211,31 @@ class _PACTActivation(nn.Module):
             if self.tqt:
                 #Make sure that the activation is correctly registered with a
                 #controller which assigns clip_hi = 2**log_t!
-                return TQTQuantize(x, eps, self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, self.rounding)
+                return TQTQuantize(x, eps, self.log_t, self.clip_lo,
+                                   self.clip_hi, self.tqt_beta,
+                                   self.tqt_running_grad_var,
+                                   self.tqt_running_beta, self.tqt_clip_grad,
+                                   self.rounding)
             else:
                 if self.learn_clip and self.symm and self.signed:
-                    clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+                    clip_upper = AlmostSymmQuantFunc.apply(
+                        self.clip_lo, self.n_levels)
                 else:
                     clip_upper = self.clip_hi
-                return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
+                return PACTQuantize(x,
+                                    eps,
+                                    self.clip_lo,
+                                    clip_upper,
+                                    floor=(not self.rounding),
+                                    clip_gradient=self.clip_gradient,
+                                    noisy=self.noisy)
 
 
 class PACTUnsignedAct(_PACTActivation):
     r"""PACT/TQT activation for unsigned outputs - lower clipping bound is fixed to 0.
     This class is intended to replace ReLU(6), etc. activations in quantized networks.
     Before it's 'started', this layer will collect statistics."""
+
     def __init__(self, *args, **kwargs):
         super(PACTUnsignedAct, self).__init__(*args, **kwargs, signed=False)
 
@@ -218,6 +249,7 @@ class PACTAsymmetricAct(_PACTActivation):
     def __init__(self, *args, **kwargs):
         super(PACTAsymmetricAct, self).__init__(*args, **kwargs, signed=True)
 
+
 class PACTIntegerConcat(torch.nn.Module):
     r"""Fake-quantized concatenation node. Each input is requantized before being
     concatenated. The
@@ -228,14 +260,13 @@ class PACTIntegerConcat(torch.nn.Module):
     instead of :func:`torch.cat`, set `stack_flag` parameter to True.
 
     """
-    def __init__(
-            self,
-            num_args = 1,
-            dim: int = 0,
-            stack_flag : bool = False,
-            signed : bool = True,
-            **kwargs
-    ):
+
+    def __init__(self,
+                 num_args=1,
+                 dim: int = 0,
+                 stack_flag: bool = False,
+                 signed: bool = True,
+                 **kwargs):
 
         super().__init__()
         self.dim = dim
@@ -261,7 +292,7 @@ class PACTIntegerConcat(torch.nn.Module):
 
         # SCHEREMO: This is the part that I might have to think about a bit more...
         for i in self.acts:
-            if abs(i.min) < abs(i.max)/2:
+            if abs(i.min) < abs(i.max) / 2:
                 i.symm = False
                 i.clip_hi.data = torch.Tensor((max_clip - min_clip,))
                 i.clip_lo.data = torch.Tensor((0.,))
@@ -269,10 +300,12 @@ class PACTIntegerConcat(torch.nn.Module):
                 i.symm = True
                 if (abs(min_clip) > max_clip):
                     # Almost symmetrically quantized:
-                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(abs(min_clip), i.n_levels)
+                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(
+                        abs(min_clip), i.n_levels)
                 else:
                     # Unsigned quantization
-                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(max_clip/2, i.n_levels)
+                    i.clip_lo.data, i.clip_hi.data = almost_symm_quant(
+                        max_clip / 2, i.n_levels)
 
         self.act_out.eps_in = self.acts[0].get_eps()
 
@@ -287,6 +320,7 @@ class PACTIntegerConcat(torch.nn.Module):
         y = torch.cat(z_act, dim=self.dim)
         return y
 
+
 class PACTIntegerAdd(torch.nn.Module):
     r"""
     Fake-quantized addition node. Each input is quantized before being added. The
@@ -295,13 +329,12 @@ class PACTIntegerAdd(torch.nn.Module):
     that all input epsilons are identical, forcing each input activation to the
     maximum epsilon of all the inputs.
     """
-    def __init__(
-            self,
-            num_args = 1,
-            force_out_eps=False,
-            signed : bool = True,
-            **kwargs
-    ):
+
+    def __init__(self,
+                 num_args=1,
+                 force_out_eps=False,
+                 signed: bool = True,
+                 **kwargs):
 
         super().__init__()
         act_cls = PACTAsymmetricAct if signed else PACTUnsignedAct
@@ -327,7 +360,7 @@ class PACTIntegerAdd(torch.nn.Module):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
-                    eps = diff/(self.n_levels-1)
+                    eps = diff / (self.n_levels - 1)
 
             # SCHEREMO: This is the part that I might have to think about a bit more...
             for i in self.acts:
@@ -336,13 +369,18 @@ class PACTIntegerAdd(torch.nn.Module):
                 # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
                 if abs(i.clip_lo) < i.get_eps():
                     i.symm = False
-                    i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
+                    i.clip_hi.data.copy_(
+                        torch.Tensor((eps * (self.n_levels - 1),)))
                     i.clip_lo.data.copy_(torch.Tensor((0.,)))
                     # Closer to signed than unsigned
                 else:
                     i.symm = True
-                    i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
-                    i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
+                    i.clip_lo.data.copy_(
+                        torch.Tensor((-(self.n_levels / 2) * eps,)))
+                    i.clip_hi.data.copy_(
+                        torch.Tensor(((self.n_levels / 2 - 1) * eps,)))
+
+
 #                     i.clip_lo.data.copy_(lower_bound)
 #                     i.clip_hi.data.copy_(upper_bound)
         else:
@@ -355,21 +393,20 @@ class PACTIntegerAdd(torch.nn.Module):
     def forward(self, *x: torch.Tensor):
         total = self.acts[0](x[0])
         for idx, i in enumerate(x[1:]):
-            total = total + self.acts[idx+1](i)
+            total = total + self.acts[idx + 1](i)
         return self.act_out(total)
 
 
 class PACTIntegerMatmul(torch.nn.Module):
-    def __init__(
-            self,
-            n_levels=256,
-            init_clip='max',
-            learn_clip=True,
-            act_kind='relu',
-            symm=False,
-            leaky=0,
-            nb_std=3
-    ):
+
+    def __init__(self,
+                 n_levels=256,
+                 init_clip='max',
+                 learn_clip=True,
+                 act_kind='relu',
+                 symm=False,
+                 leaky=0,
+                 nb_std=3):
 
         super().__init__()
 
@@ -377,7 +414,7 @@ class PACTIntegerMatmul(torch.nn.Module):
         pass
 
     def forward(self, x: torch.Tensor, y: torch.Tensor):
-        mulresult = torch.matmul(x,y)
+        mulresult = torch.matmul(x, y)
         return mulresult
 
 
@@ -389,19 +426,16 @@ class _PACTLinOp:
     def __init__(self, *args, **kwargs):
         pass
 
-
-    def setup_quant_params(
-            self,
-            n_levels : int = 256,
-            quantize : str = 'per_layer',
-            init_clip : str= 'sawb_asymm',
-            learn_clip : bool = False,
-            symm_wts : bool = True,
-            nb_std : Union[int, float]= 3,
-            tqt : bool = False,
-            tqt_beta : float = 0.9,
-            tqt_clip_grad : bool = True
-    ):
+    def setup_quant_params(self,
+                           n_levels: int = 256,
+                           quantize: str = 'per_layer',
+                           init_clip: str = 'sawb_asymm',
+                           learn_clip: bool = False,
+                           symm_wts: bool = True,
+                           nb_std: Union[int, float] = 3,
+                           tqt: bool = False,
+                           tqt_beta: float = 0.9,
+                           tqt_clip_grad: bool = True):
         """
         :param n_levels: Number of weight quantization levels
         :param quantize: how to quantize weights - 'per_layer' or 'per_channel'
@@ -414,8 +448,10 @@ class _PACTLinOp:
 
         quantize = quantize.lower()
         init_clip = init_clip.lower()
-        assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
+        assert_param_valid(self, quantize, 'quantize',
+                           ['per_layer', 'per_channel'])
+        assert_param_valid(self, init_clip, 'init_clip',
+                           ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
         if init_clip == 'const':
             assert not symm_wts, f"{self.__class__.__name__}: argument combination init_clip='const' and symm_wts=True not supported!"
 
@@ -432,23 +468,32 @@ class _PACTLinOp:
         # clip_lo & clip_hi should have dimension (out_channels, 1, 1, 1) in case of per-channel quantization.
         # The PACTController will take care of managing them according to the configuration (per-channel, per-layer)
         clip_lo = self.expand_bounds(clip_lo)
-        self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip and not tqt)
+        self.clip_lo = nn.Parameter(clip_lo,
+                                    requires_grad=learn_clip and not tqt)
         self.register_buffer('clip_gradient', torch.tensor(True))
         clip_hi = torch.tensor(1.)
         clip_hi = self.expand_bounds(clip_hi)
         # in the case when learn_clip and symm_wts are both True, clip_hi is not actually used;
         # instead the upper clipping bound is calculated from clip_lo with AlmostSymmQuantFunc.
         # This way, only the lower clip bound is
-        self.clip_hi = nn.Parameter(clip_hi, requires_grad=((learn_clip and not tqt) and not symm_wts))
+        self.clip_hi = nn.Parameter(clip_hi,
+                                    requires_grad=((learn_clip and not tqt)
+                                                   and not symm_wts))
         # to provide convenient access for the controller to the clipping params, store them in a dict.
-        self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
+        self.clipping_params = {'low': self.clip_lo, 'high': self.clip_hi}
 
         if tqt:
-            assert (learn_clip and symm_wts), f"{self.__class__.__name__}: TQT quantization requires learn_clip=True and symm_wts=True, you provided learn_clip={learn_clip}, symm_wts={symm_wts}"
-            self.register_parameter("log_t", nn.Parameter(torch.zeros_like(self.clip_lo.data), requires_grad=True))
+            assert (
+                learn_clip and symm_wts
+            ), f"{self.__class__.__name__}: TQT quantization requires learn_clip=True and symm_wts=True, you provided learn_clip={learn_clip}, symm_wts={symm_wts}"
+            self.register_parameter(
+                "log_t",
+                nn.Parameter(torch.zeros_like(self.clip_lo.data),
+                             requires_grad=True))
             self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
             self.register_buffer("tqt_running_beta", torch.tensor(1.))
-            self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
+            self.register_buffer("tqt_running_grad_var",
+                                 torch.zeros_like(self.clip_lo.data))
             self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
             self.clipping_params["log_t"] = self.log_t
         else:
@@ -464,13 +509,14 @@ class _PACTLinOp:
         """
         :return: epsilon of the weight quantization.
         """
-        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).clone().detach()
+        return ((self.clip_hi - self.clip_lo) /
+                (self.n_levels - 1)).clone().detach()
 
     def get_eps_out(self, eps_in, *args, **kwargs):
         """
         :return: epsilons of the output pre-activations
         """
-        return self.get_eps_w()*eps_in
+        return self.get_eps_w() * eps_in
 
     def extra_repr(self):
         # this might be a little bit dangerous - always inherit from the
@@ -483,13 +529,22 @@ class _PACTLinOp:
     def weight_q(self):
         if not self.tqt:
             if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo,
+                                                       self.n_levels)
             else:
                 clip_upper = self.clip_hi
 
-            return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            return PACTQuantize(self.weight,
+                                self.get_eps_w(),
+                                self.clip_lo,
+                                clip_upper,
+                                floor=False,
+                                clip_gradient=self.clip_gradient)
         else:
-            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
+            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t,
+                               self.clip_lo, self.clip_hi, self.tqt_beta,
+                               self.tqt_running_grad_var, self.tqt_running_beta,
+                               self.tqt_clip_grad)
 
     @property
     def weight_int(self):
@@ -497,22 +552,21 @@ class _PACTLinOp:
 
 
 class PACTConv2d(nn.Conv2d, _PACTLinOp):
-    def __init__(
-            self,
-            in_channels,
-            out_channels,
-            kernel_size,
-            n_levels = 256,
-            quantize = 'per_layer',
-            init_clip = 'sawb_asymm',
-            learn_clip = False,
-            symm_wts = True,
-            nb_std = 3,
-            tqt = False,
-            tqt_beta = 0.9,
-            tqt_clip_grad = True,
-            **kwargs
-    ):
+
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 n_levels=256,
+                 quantize='per_layer',
+                 init_clip='sawb_asymm',
+                 learn_clip=False,
+                 symm_wts=True,
+                 nb_std=3,
+                 tqt=False,
+                 tqt_beta=0.9,
+                 tqt_clip_grad=True,
+                 **kwargs):
         """
         :param in_channels: See torch.nn.Conv2d
         :param out_channels: See torch.nn.Conv2d
@@ -520,7 +574,8 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         :param kwargs: passed to Conv2d constructor
         """
 
-        super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
+        super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size,
+                                         **kwargs)
         self.setup_quant_params(n_levels=n_levels,
                                 quantize=quantize,
                                 init_clip=init_clip,
@@ -530,14 +585,14 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
                                 tqt_clip_grad=tqt_clip_grad)
+
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
                 t = torch.reshape(t, (1,))
-                t = torch.cat(self.out_channels*[t])
+                t = torch.cat(self.out_channels * [t])
             t = torch.reshape(t, (self.out_channels, 1, 1, 1))
         return t
-
 
     def forward(self, x):
         if self.started:
@@ -545,26 +600,26 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         else:
             w = self.weight
 
-        return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
-
+        return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding,
+                                    self.dilation, self.groups)
 
     # this is not very pretty. Any suggestions on how to avoid it are welcome...
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
 
     @classmethod
-    def from_conv2d(cls, c : nn.Conv2d, **kwargs):
+    def from_conv2d(cls, c: nn.Conv2d, **kwargs):
         # kwargs should be arguments to PACTConv2d
         pact_conv = cls(in_channels=c.in_channels,
-                   out_channels=c.out_channels,
-                   kernel_size=c.kernel_size,
-                   stride=c.stride,
-                   padding=c.padding,
-                   dilation=c.dilation,
-                   groups=c.groups,
-                   bias=(c.bias is not None),
-                   padding_mode=c.padding_mode,
-                   **kwargs)
+                        out_channels=c.out_channels,
+                        kernel_size=c.kernel_size,
+                        stride=c.stride,
+                        padding=c.padding,
+                        dilation=c.dilation,
+                        groups=c.groups,
+                        bias=(c.bias is not None),
+                        padding_mode=c.padding_mode,
+                        **kwargs)
         # initialize parameters from the nn.Conv2d
         pact_conv.weight.data.copy_(c.weight.data)
         if c.bias is not None:
@@ -574,29 +629,29 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
 
 
 class PACTConv1d(nn.Conv1d, _PACTLinOp):
-    def __init__(
-            self,
-            in_channels,
-            out_channels,
-            kernel_size,
-            n_levels = 256,
-            quantize = 'per_layer',
-            init_clip = 'sawb_asymm',
-            learn_clip = False,
-            symm_wts = True,
-            nb_std = 3,
-            tqt = False,
-            tqt_beta = 0.9,
-            tqt_clip_grad = True,
-            **kwargs
-    ):
+
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 n_levels=256,
+                 quantize='per_layer',
+                 init_clip='sawb_asymm',
+                 learn_clip=False,
+                 symm_wts=True,
+                 nb_std=3,
+                 tqt=False,
+                 tqt_beta=0.9,
+                 tqt_clip_grad=True,
+                 **kwargs):
         """
         :param in_channels: See torch.nn.Conv2d
         :param out_channels: See torch.nn.Conv2d
         :param kernel_size: See torch.nn.Conv2d
         :param kwargs: passed to Conv1d constructor
         """
-        super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
+        super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size,
+                                         **kwargs)
         self.setup_quant_params(n_levels=n_levels,
                                 quantize=quantize,
                                 init_clip=init_clip,
@@ -611,32 +666,34 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
                 t = torch.reshape(t, (1,))
-                t = torch.cat(self.out_channels*[t])
+                t = torch.cat(self.out_channels * [t])
             t = torch.reshape(t, (self.out_channels, 1, 1))
         return t
+
     def forward(self, x):
         if self.started:
             w = self.weight_q
         else:
             w = self.weight
-        return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding,
+                                    self.dilation, self.groups)
 
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
 
     @classmethod
-    def from_conv1d(cls, c : nn.Conv1d, **kwargs):
+    def from_conv1d(cls, c: nn.Conv1d, **kwargs):
         # kwargs should be arguments to PACTConv1d
         pact_conv = cls(in_channels=c.in_channels,
-                   out_channels=c.out_channels,
-                   kernel_size=c.kernel_size,
-                   stride=c.stride,
-                   padding=c.padding,
-                   dilation=c.dilation,
-                   groups=c.groups,
-                   bias=(c.bias is not None),
-                   padding_mode=c.padding_mode,
-                   **kwargs)
+                        out_channels=c.out_channels,
+                        kernel_size=c.kernel_size,
+                        stride=c.stride,
+                        padding=c.padding,
+                        dilation=c.dilation,
+                        groups=c.groups,
+                        bias=(c.bias is not None),
+                        padding_mode=c.padding_mode,
+                        **kwargs)
         # initialize parameters from the nn.Conv1d
         pact_conv.weight.data.copy_(c.weight.data)
         if c.bias is not None:
@@ -645,21 +702,20 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         return pact_conv
 
 
-
-
 class PACTLinear(nn.Linear, _PACTLinOp):
+
     def __init__(self,
-                 in_features : int,
-                 out_features : int,
-                 n_levels : int = 256,
-                 quantize : str = 'per_layer',
-                 init_clip : str = 'sawb_asymm',
-                 learn_clip : bool = False,
-                 symm_wts : bool = True,
-                 nb_std : int = 3,
-                 tqt = False,
-                 tqt_beta = 0.9,
-                 tqt_clip_grad = True,
+                 in_features: int,
+                 out_features: int,
+                 n_levels: int = 256,
+                 quantize: str = 'per_layer',
+                 init_clip: str = 'sawb_asymm',
+                 learn_clip: bool = False,
+                 symm_wts: bool = True,
+                 nb_std: int = 3,
+                 tqt=False,
+                 tqt_beta=0.9,
+                 tqt_clip_grad=True,
                  **kwargs):
         """
         :param in_features:   see nn.Linear
@@ -685,17 +741,22 @@ class PACTLinear(nn.Linear, _PACTLinOp):
                 t = torch.cat(self.out_features * [t])
             t = t.reshape((self.out_features, 1))
         return t
+
     # do not use in training!
     def get_bias_q(self, eps_in):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip it
         with torch.no_grad():
-            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+            b = PACTQuantize(self.bias,
+                             self.get_eps_out(eps_in),
+                             -1000. * torch.ones_like(self.clip_lo),
+                             1000. * torch.ones_like(self.clip_hi),
+                             clip_gradient=self.clip_gradient)
         return b
 
     # do not use in training!
     def get_bias_int(self, eps_in):
-        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
+        return (self.get_bias_q(eps_in) / self.get_eps_out(eps_in)).round()
 
     def forward(self, x):
         if self.started:
@@ -708,7 +769,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
         return _PACTLinOp.extra_repr(self)
 
     @classmethod
-    def from_linear(cls, l : nn.Linear, **kwargs):
+    def from_linear(cls, l: nn.Linear, **kwargs):
         pact_linear = cls(in_features=l.in_features,
                           out_features=l.out_features,
                           bias=(l.bias is not None),
@@ -725,6 +786,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 # PACTIntegerLayerNorm, PACTIntegerMatmul, PACTIntegerSoftmax
 # ARE STILL IN BETA STADIUM - DO NOT USE FOR IMPORTANT THINGS!
 #############################################################
+
 
 class PACTIntegerLayerNorm(torch.nn.Module):
 
@@ -744,21 +806,27 @@ class PACTIntegerLayerNorm(torch.nn.Module):
     def forward(self, x):
         if self.frozen:
             nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
-            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
-            y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
-            y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
+            denom = torch.floor(
+                torch.sqrt(
+                    torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))
+                    + self.eps))
+            y = torch.floor(
+                (torch.floor(torch.div(self.totScaler * nom, denom))) / self.D)
+            y = torch.clip(y, -self.n_levels // 2, self.n_levels // 2 - 1)
         else:
             y = self.module(x)
 
-            self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-            scaler = (self.n_levels)/self.maxval
+            self.maxval.data[0] = max(
+                torch.max(torch.abs(y)).item(), self.maxval)
+            scaler = (self.n_levels) / self.maxval
             self.totScaler.data[0] = math.floor(self.D * scaler)
 
         return y
 
+
 class PACTIntegerSoftmax(torch.nn.Module):
 
-    def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
+    def __init__(self, module, eps_in: float = 1. / 255, n_levels: int = 256):
         super().__init__()
         self.n_levels = n_levels
         self.module = copy.deepcopy(module)
@@ -771,21 +839,21 @@ class PACTIntegerSoftmax(torch.nn.Module):
         self.register_buffer('log2', torch.Tensor((4.,)))
 
     def updateCoeffs(self, eps):
-        eps2 = (1./(2**8))/(eps**2)
+        eps2 = (1. / (2**8)) / (eps**2)
 
-        self.coeffA.data[0] = math.floor(0.3585/eps2)
-        self.coeffB.data[0] = math.floor(1.353/eps)
-        self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
-        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
+        self.coeffA.data[0] = math.floor(0.3585 / eps2)
+        self.coeffB.data[0] = math.floor(1.353 / eps)
+        self.coeffC.data[0] = math.floor(0.344 / (eps**2 * eps2))
+        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2) / (eps)))
 
     def forward(self, x):
         if self.frozen:
             xTilde = (x - torch.max(x))
             z = torch.floor(-xTilde / self.log2)
             p = xTilde + z * self.log2
-            y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
+            y = (self.coeffA * (p + self.coeffB)**2 + self.coeffC) / 2**z
             ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-            out = torch.floor(y*(self.n_levels-1)/ysum)
+            out = torch.floor(y * (self.n_levels - 1) / ysum)
             return out
         else:
             y = self.module(x)

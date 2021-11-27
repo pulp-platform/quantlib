@@ -23,7 +23,6 @@ import torch
 
 from quantlib.algorithms.ana.lib import ana_normal, ana_logistic, ana_uniform, ana_triangular
 
-
 try:
     import ana_uniform_cuda
     import ana_triangular_cuda
@@ -33,7 +32,6 @@ try:
 except ImportError:
     use_ana_cuda_kernels = False
 
-
 __all__ = [
     'ANAUniform',
     'ANATriangular',
@@ -41,8 +39,8 @@ __all__ = [
     'ANALogistic',
 ]
 
-
 # uniform noise
+
 
 class ANAUniform(torch.autograd.Function):
     """A stochastic process composed by step functions.
@@ -51,13 +49,16 @@ class ANAUniform(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and uniform noise on
     the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)
         if use_ana_cuda_kernels and x_in.is_cuda:
-            x_out = ana_uniform_cuda.forward(x_in, q, t, mi, sigma, strategy, torch.Tensor([training]).to(sigma))
+            x_out = ana_uniform_cuda.forward(x_in, q, t, mi, sigma, strategy,
+                                             torch.Tensor([training]).to(sigma))
         else:
-            x_out = ana_uniform.forward(x_in, q, t, mi, sigma, strategy, training)
+            x_out = ana_uniform.forward(x_in, q, t, mi, sigma, strategy,
+                                        training)
         return x_out
 
     @staticmethod
@@ -72,6 +73,7 @@ class ANAUniform(torch.autograd.Function):
 
 # triangular noise
 
+
 class ANATriangular(torch.autograd.Function):
     """A stochastic process composed by step functions.
 
@@ -79,26 +81,32 @@ class ANATriangular(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and triangular noise
     on the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)
         if use_ana_cuda_kernels and x_in.is_cuda:
-            x_out = ana_triangular_cuda.forward(x_in, q, t, mi, sigma, strategy, torch.Tensor([training]).to(sigma))
+            x_out = ana_triangular_cuda.forward(
+                x_in, q, t, mi, sigma, strategy,
+                torch.Tensor([training]).to(sigma))
         else:
-            x_out = ana_triangular.forward(x_in, q, t, mi, sigma, strategy, training)
+            x_out = ana_triangular.forward(x_in, q, t, mi, sigma, strategy,
+                                           training)
         return x_out
 
     @staticmethod
     def backward(ctx, grad_in):
         x_in, q, t, mi, sigma = ctx.saved_tensors
         if use_ana_cuda_kernels and grad_in.is_cuda:
-            grad_out = ana_triangular_cuda.backward(grad_in, x_in, q, t, mi, sigma)
+            grad_out = ana_triangular_cuda.backward(grad_in, x_in, q, t, mi,
+                                                    sigma)
         else:
             grad_out = ana_triangular.backward(grad_in, x_in, q, t, mi, sigma)
         return grad_out, None, None, None, None, None, None
 
 
 # normal noise
+
 
 class ANANormal(torch.autograd.Function):
     """A stochastic process composed by step functions.
@@ -107,13 +115,16 @@ class ANANormal(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and normal noise on
     the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)
         if use_ana_cuda_kernels and x_in.is_cuda:
-            x_out = ana_normal_cuda.forward(x_in, q, t, mi, sigma, strategy, torch.Tensor([training]).to(sigma))
+            x_out = ana_normal_cuda.forward(x_in, q, t, mi, sigma, strategy,
+                                            torch.Tensor([training]).to(sigma))
         else:
-            x_out = ana_normal.forward(x_in, q, t, mi, sigma, strategy, training)
+            x_out = ana_normal.forward(x_in, q, t, mi, sigma, strategy,
+                                       training)
         return x_out
 
     @staticmethod
@@ -128,6 +139,7 @@ class ANANormal(torch.autograd.Function):
 
 # logistic noise
 
+
 class ANALogistic(torch.autograd.Function):
     """A stochastic process composed by step functions.
 
@@ -135,20 +147,25 @@ class ANALogistic(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and logistic noise on
     the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)
         if use_ana_cuda_kernels and x_in.is_cuda:
-            x_out = ana_logistic_cuda.forward(x_in, q, t, mi, sigma, strategy, torch.Tensor([training]).to(sigma))
+            x_out = ana_logistic_cuda.forward(
+                x_in, q, t, mi, sigma, strategy,
+                torch.Tensor([training]).to(sigma))
         else:
-            x_out = ana_logistic.forward(x_in, q, t, mi, sigma, strategy, training)
+            x_out = ana_logistic.forward(x_in, q, t, mi, sigma, strategy,
+                                         training)
         return x_out
 
     @staticmethod
     def backward(ctx, grad_in):
         x_in, q, t, mi, sigma = ctx.saved_tensors
         if use_ana_cuda_kernels and grad_in.is_cuda:
-            grad_out = ana_logistic_cuda.backward(grad_in, x_in, q, t, mi, sigma)
+            grad_out = ana_logistic_cuda.backward(grad_in, x_in, q, t, mi,
+                                                  sigma)
         else:
             grad_out = ana_logistic.backward(grad_in, x_in, q, t, mi, sigma)
         return grad_out, None, None, None, None, None, None

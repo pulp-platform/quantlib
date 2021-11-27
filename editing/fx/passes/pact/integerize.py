@@ -1,24 +1,24 @@
 #
 # general.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from typing import Union, Optional, Tuple, List
 from dataclasses import dataclass
@@ -40,16 +40,20 @@ from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
-__all__ = ['IntegerizePACTConvPass',
-           'IntegerizePACTLinearPass',
-           'IntegerizeBNActPass',
-           'IntegerizePACTNetPass',
-           'PACTTracer',
-           'PACT_symbolic_trace',
-           'RequantShift']
+__all__ = [
+    'IntegerizePACTConvPass', 'IntegerizePACTLinearPass', 'IntegerizeBNActPass',
+    'IntegerizePACTNetPass', 'PACTTracer', 'PACT_symbolic_trace', 'RequantShift'
+]
+
 
 class RequantShift(nn.Module):
-    def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
+
+    def __init__(self,
+                 mul: torch.Tensor,
+                 add: torch.Tensor,
+                 n_levels: int,
+                 signed: bool = False,
+                 D: torch.Tensor = torch.tensor(2**24)):
         super(RequantShift, self).__init__()
         self.register_buffer('mul', mul)
         self.register_buffer('add', add)
@@ -60,22 +64,29 @@ class RequantShift(nn.Module):
     def forward(self, x):
         x = x * self.mul
         x = x + self.add
-        x = (x/self.div).floor()
+        x = (x / self.div).floor()
         if not self.signed:
-            x = torch.clip(x, 0., float(self.n_levels_out-1))
+            x = torch.clip(x, 0., float(self.n_levels_out - 1))
         else:
-            c = np.floor(self.n_levels_out/2+0.001)
+            c = np.floor(self.n_levels_out / 2 + 0.001)  # spmatteo: why not simply `self.n_levels_out // 2`?
             if self.n_levels_out % 2:
                 x = torch.clip(x, -c, c)
             else:
-                x = torch.clip(x, -c, c-1)
+                x = torch.clip(x, -c, c - 1)
         return x
 
-def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
+
+def integerize_pact_conv_fun(gm: fx.GraphModule, match: Match):
     modules = gm_modules(gm)
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    matched_modules = [
+        modules[m.target]
+        for k, m in match.nodes_map.items()
+        if k.op == 'call_module'
+    ][::-1]
     conv = matched_modules[0]
-    assert isinstance(conv, (PACTConv1d, PACTConv2d)), f"integerize_pact_conv_fun got bad match - expected PACTConv, got {type(conv)}"
+    assert isinstance(
+        conv, (PACTConv1d, PACTConv2d)
+    ), f"integerize_pact_conv_fun got bad match - expected PACTConv, got {type(conv)}"
     assert conv.bias is None, "integerize_pact_conv_fun: Conv layer has bias"
 
     conv_type = nn.Conv2d if isinstance(conv, PACTConv2d) else nn.Conv1d
@@ -97,26 +108,39 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
 
 
 class IntegerizePACTConvPass(SequentialPass):
+
     def __init__(self):
         passes = []
         for i, c in enumerate((PACTConv1d, PACTConv2d)):
-            pattern = nn.Sequential(c(1,1,1))
+            pattern = nn.Sequential(c(1, 1, 1))
             name = f"_INTEGERIZE_PACT_CONV{i+1}D_PASS"
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name))
-        super(IntegerizePACTConvPass, self).__init__(*passes, name_prefix='_INTEGERIZE_PACT_CONVS_PASS')
+            passes.append(
+                ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace,
+                                             integerize_pact_conv_fun, name))
+        super(IntegerizePACTConvPass,
+              self).__init__(*passes, name_prefix='_INTEGERIZE_PACT_CONVS_PASS')
 
-def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
+
+def integerize_pact_linear_fun(gm: fx.GraphModule, match: Match):
     modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    matched_nodes = [
+        m for k, m in match.nodes_map.items() if k.op == 'call_module'
+    ]
     lin_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    matched_modules = [
+        modules[m.target]
+        for k, m in match.nodes_map.items()
+        if k.op == 'call_module'
+    ][::-1]
     lin = matched_modules[0]
     eps_in = extract_eps(lin_node.meta['quant'].eps_in)
-    assert isinstance(lin, PACTLinear), f"integerize_pact_linear_fun got bad match - expected PACTLinear, got {type(lin)}"
+    assert isinstance(
+        lin, PACTLinear
+    ), f"integerize_pact_linear_fun got bad match - expected PACTLinear, got {type(lin)}"
     # note the new node's intended integer precision in the precision dict
     #if prec_dict is not None:
-        #nbits = int(np.log2(lin.n_levels) + 0.2)
-#        prec_dict[name] = nbits
+    #nbits = int(np.log2(lin.n_levels) + 0.2)
+    #        prec_dict[name] = nbits
 
     new_lin = nn.Linear(in_features=lin.in_features,
                         out_features=lin.out_features,
@@ -129,43 +153,64 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
 
     return new_lin
 
+
 class IntegerizePACTLinearPass(ReplaceSequentialPatternPass):
+
     def __init__(self):
-        pattern = nn.Sequential(PACTLinear(1,1))
+        pattern = nn.Sequential(PACTLinear(1, 1))
         name = "_INTEGERIZE_PACT_LIN_PASS"
-        super(IntegerizePACTLinearPass, self).__init__(pattern, PACT_symbolic_trace, integerize_pact_linear_fun, name)
+        super(IntegerizePACTLinearPass,
+              self).__init__(pattern, PACT_symbolic_trace,
+                             integerize_pact_linear_fun, name)
 
 
-def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
+def bn_act_to_requant_fun(gm: fx.GraphModule, match: Match, D=2**24):
     modules = dict(gm.named_modules())
     if not isinstance(D, torch.Tensor):
         D = torch.tensor(D)
     matched_nodes = [n for n in match.nodes_map.values()][-2:0:-1]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    assert len(matched_nodes) == len(matched_modules), "bn_act_to_requant got unexpected non-'call_module' nodes!"
+    matched_modules = [
+        modules[m.target]
+        for k, m in match.nodes_map.items()
+        if k.op == 'call_module'
+    ][::-1]
+    assert len(matched_nodes) == len(
+        matched_modules
+    ), "bn_act_to_requant got unexpected non-'call_module' nodes!"
     if len(matched_modules) == 1:
         act = matched_modules[0]
         act_node = matched_nodes[0]
         bn = None
     else:
-        assert len(matched_modules) == 2, "bn_act_to_requant expected match of length 1 or 2!"
+        assert len(matched_modules
+                  ) == 2, "bn_act_to_requant expected match of length 1 or 2!"
         act = matched_modules[1]
         act_node = matched_nodes[1]
         bn = matched_modules[0]
         bn_node = matched_nodes[0]
-        assert isinstance(bn, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)), f"bn_act_to_requant called on incompatible BN layer {type(bn)}"
-    assert isinstance(act, (PACTUnsignedAct, PACTAsymmetricAct)), f"bn_act_to_requant called on incompatible activation {type(act)}"
+        assert isinstance(
+            bn,
+            (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d
+            )), f"bn_act_to_requant called on incompatible BN layer {type(bn)}"
+    assert isinstance(
+        act,
+        (PACTUnsignedAct, PACTAsymmetricAct
+        )), f"bn_act_to_requant called on incompatible activation {type(act)}"
 
     signed_act = isinstance(act, PACTAsymmetricAct)
-    eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze()
+    eps_in = extract_eps(
+        act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze()
     eps_out = act_node.meta['quant'].eps_out.cpu().clone().detach().squeeze()
 
     # if the requant node would perform an identity operation, don't insert it.
-    if eps_in.numel() == eps_out.numel() == 1 and eps_in == eps_out and bn is None:
+    if eps_in.numel() == eps_out.numel(
+    ) == 1 and eps_in == eps_out and bn is None:
         return None
 
-    gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
-    beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
+    gamma_h = (bn.weight / torch.sqrt(bn.running_var + bn.eps)
+              ) if bn is not None else torch.ones_like(eps_in)
+    beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(
+        gamma_h)
     gamma_h *= eps_in
     gamma_h /= eps_out
     beta_h /= eps_out
@@ -203,22 +248,53 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
     requant = RequantShift(gamma_h, beta_h, act.n_levels, signed_act, D)
     return requant
 
+
 class IntegerizeBNActPass(SequentialPass):
-    def __init__(self, D : float = 2**24):
+
+    def __init__(self, D: float = 2**24):
         passes = []
         # replace all combinations of BN + PACT activation with RequantShift layers
-        for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
-            for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
-                pattern = nn.Sequential(bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D))
+        for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct),
+                                   ("SIGNED_ACT", PACTAsymmetricAct)]:
+            for bn_name, bn_type in [("BN1D", nn.BatchNorm1d),
+                                     ("BN2D", nn.BatchNorm2d),
+                                     ("BN3D", nn.BatchNorm3d)]:
+                pattern = nn.Sequential(
+                    bn_type(1),
+                    act_type(n_levels=256,
+                             init_clip='max',
+                             learn_clip=False,
+                             act_kind='identity'))
+                passes.append(
+                    ReplaceSequentialPatternPass(
+                        pattern,
+                        PACT_symbolic_trace,
+                        bn_act_to_requant_fun,
+                        f"_INTEGERIZE_{bn_name}_{act_name}_PASS",
+                        D=D))
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
-            pattern = nn.Sequential(act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D))
+            pattern = nn.Sequential(
+                act_type(n_levels=256,
+                         init_clip='max',
+                         learn_clip=False,
+                         act_kind='identity'))
+            passes.append(
+                ReplaceSequentialPatternPass(pattern,
+                                             PACT_symbolic_trace,
+                                             bn_act_to_requant_fun,
+                                             f"_INTEGERIZE_{act_name}_PASS",
+                                             D=D))
 
-        super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
+        super(IntegerizeBNActPass,
+              self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
+
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
+
+    def __init__(self,
+                 shape_in: Union[Tuple[int], List[int], torch.Size],
+                 eps_in: Optional[Union[torch.Tensor, float]] = None,
+                 D: float = 2**24):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -236,4 +312,5 @@ class IntegerizePACTNetPass(SequentialPass):
         # now, PACT Activations (combined with BN layers) can be converted to
         # RequantShift layers
         passes.append(IntegerizeBNActPass(D))
-        super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")
+        super(IntegerizePACTNetPass,
+              self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")
