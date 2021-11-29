@@ -27,7 +27,8 @@ from numpy.random import default_rng
 
 __all__ = ["select_levels_const",
            "select_levels_static",
-           "select_levels_uniform"]
+           "select_levels_uniform",
+           "select_levels_anneal"]
 _rng = default_rng()
 
 def select_levels_const(n_levels : int):
@@ -38,3 +39,14 @@ def select_levels_static(p : list):
 
 def select_levels_uniform():
     return select_levels_static(p=None)
+
+def select_levels_anneal(start_p : list, end_p : list, n_epochs : int):
+     def interpolate_p(st, end, epoch):
+          return st + (end-st) * (epoch/(n_epochs-1))
+
+     def get_levels(l, ep):
+          p_intp = [interpolate_p(ps, pe, ep) for ps, pe in zip(start_p, end_p)]
+          return _rng.choice(l, p=p_intp)
+
+     return get_levels
+

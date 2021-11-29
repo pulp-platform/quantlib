@@ -37,7 +37,8 @@ from .util import assert_param_valid, almost_symm_quant
 __all__ = [
     'PACTActController',
     'PACTLinearController',
-    'PACTIntegerModulesController'
+    'PACTIntegerModulesController',
+    'PACTDynamicPrecController'
 ]
 
 
@@ -520,11 +521,24 @@ class PACTDynamicPrecController(Controller):
     def step_pre_training_batch(self, *args, **kwargs):
         # all we need to do here is call the selection function for each module
         # and set the module's `n_levels` parameter to the result
-        for m, l, sel, _  in self.module_spec_list:
-            m.n_levels = sel(l, self.epoch)
+        for modules, l, sel, _  in self.module_spec_list:
+            # if "modules" is a list, we can apply the same (random)
+            # quantization policy to multiple modules
+            if not isinstance(modules, list):
+                modules = [modules]
+            nl = sel(l, self.epoch)
+            # to constrain low-p weights to be the MSBs of high-p weights, we
+            # only use rounded weights if we are using the highest available
+            # precision.
+
+            for m in modules:
+                m.n_levels = nl
 
     def step_pre_validation_epoch(self, e : int, *args, **kwargs):
         # same as pre_training_batch but with the select_levels_val function
-        for m, l, _, sel in self.module_spec_list:
-            m.n_levels = sel(l, e)
-
+        for modules, l, _, sel in self.module_spec_list:
+            if not isinstance(modules, list):
+                modules = [modules]
+            nl = sel(l, self.epoch)
+            for m in modules:
+                m.n_levels = nl
