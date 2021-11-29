@@ -23,7 +23,8 @@
 from functools import partial
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from quantlib.algorithms.pact import *
+from quantlib.algorithms.pact.pact_ops import *
+from quantlib.algorithms.generic.generic_ops import *
 
 
 
@@ -32,7 +33,10 @@ PACT_OPS = set([PACTUnsignedAct,
             PACTAsymmetricAct,
             PACTConv2d,
             PACTConv1d,
-            PACTLinear])
+            PACTLinear,
+            PACTHardsigmoid,
+            PACTHardswish,
+            Multiply])
 
 PACT_OPS_INT = set([PACTIntegerAdd,
                     PACTIntegerConcat,

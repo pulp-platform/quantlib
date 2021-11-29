@@ -21,7 +21,7 @@
 # limitations under the License.
 #
 
-from typing import Union
+from typing import Union, Optional
 import torch
 from torch import nn
 
@@ -43,6 +43,8 @@ __all__ = [
     'PACTIntegerMatmul',
     'PACTIntegerSoftmax',
     'PACTIntegerLayerNorm',
+    'PACTHardswish',
+    'PACTHardsigmoid'
 ]
 
 r"""Broadly configurable implementations of the PACT
@@ -400,7 +402,8 @@ class _PACTLinOp:
             nb_std : Union[int, float]= 3,
             tqt : bool = False,
             tqt_beta : float = 0.9,
-            tqt_clip_grad : bool = True
+            tqt_clip_grad : bool = True,
+            rounding : bool = True
     ):
         """
         :param n_levels: Number of weight quantization levels
@@ -424,6 +427,7 @@ class _PACTLinOp:
         self.quantize = quantize
         self.init_clip = init_clip
         self.learn_clip = learn_clip
+        self.rounding = rounding
         # this member indicates that quantization is enabled
         self.register_buffer('started', torch.tensor(False))
         self.symm_wts = symm_wts
@@ -487,9 +491,9 @@ class _PACTLinOp:
             else:
                 clip_upper = self.clip_hi
 
-            return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=not self.rounding, clip_gradient=self.clip_gradient)
         else:
-            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
+            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, rounding=self.rounding)
 
     @property
     def weight_int(self):
@@ -511,6 +515,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             tqt = False,
             tqt_beta = 0.9,
             tqt_clip_grad = True,
+            rounding = True,
             **kwargs
     ):
         """
@@ -529,7 +534,8 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
                                 nb_std=nb_std,
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
-                                tqt_clip_grad=tqt_clip_grad)
+                                tqt_clip_grad=tqt_clip_grad,
+                                rounding=rounding)
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
@@ -588,6 +594,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             tqt = False,
             tqt_beta = 0.9,
             tqt_clip_grad = True,
+            rounding = True,
             **kwargs
     ):
         """
@@ -605,7 +612,8 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
                                 nb_std=nb_std,
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
-                                tqt_clip_grad=tqt_clip_grad)
+                                tqt_clip_grad=tqt_clip_grad,
+                                rounding=rounding)
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -660,6 +668,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
                  tqt = False,
                  tqt_beta = 0.9,
                  tqt_clip_grad = True,
+                 rounding = True,
                  **kwargs):
         """
         :param in_features:   see nn.Linear
@@ -676,7 +685,8 @@ class PACTLinear(nn.Linear, _PACTLinOp):
                                 nb_std=nb_std,
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
-                                tqt_clip_grad=tqt_clip_grad)
+                                tqt_clip_grad=tqt_clip_grad,
+                                rounding=rounding)
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -725,6 +735,65 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 # PACTIntegerLayerNorm, PACTIntegerMatmul, PACTIntegerSoftmax
 # ARE STILL IN BETA STADIUM - DO NOT USE FOR IMPORTANT THINGS!
 #############################################################
+
+class PACTHardswish(nn.Module):
+    def __init__(self, eps_s : float, eps_in_fn : Optional[callable] = None):
+        super(PACTHardswish, self).__init__()
+        self.eps_s = eps_s
+        self.eps_in_fn = eps_in_fn
+
+    def forward(self, x):
+        inp = x
+        three = torch.tensor(3., dtype=x.dtype, device=x.device)
+        six = 2 * three
+        z = torch.zeros(1, dtype=x.dtype, device=x.device)
+        o = torch.ones(1, dtype=x.dtype, device=x.device)
+        # if we have a handle on the input epsilon, quantize the constants 3
+        # and 6 to eps_in
+        if self.eps_in_fn:
+            three = PACTQuantize(three, self.eps_in_fn(), 2., 4., floor=False)
+            six = PACTQuantize(six, self.eps_in_fn(), 5., 6., floor=False)
+        # now perform quantized hswish with the input data:
+        # 1. relu6(x+3)
+        x = x + three
+        x = torch.minimum(torch.maximum(z, x), six)
+        # 2. /6
+        one_over_six = PACTQuantize(o/6, self.eps_s, 0., 1., floor=False)
+        x = x * one_over_six
+        # 3. x * (ans)
+        return inp * x
+
+    def get_eps_out(self, eps_in):
+        return self.eps_s * eps_in * eps_in
+
+
+class PACTHardsigmoid(nn.Module):
+    def __init__(self, eps_s : float, eps_in_fn : Optional[callable] = None):
+        super(PACTHardsigmoid, self).__init__()
+        self.eps_s = eps_s
+        self.eps_in_fn = eps_in_fn
+
+    def forward(self, x):
+        three = torch.tensor(3., dtype=x.dtype, device=x.device)
+        six = 2 * three
+        z = torch.zeros(1, dtype=x.dtype, device=x.device)
+        o = torch.ones(1, dtype=x.dtype, device=x.device)
+        # if we have a handle on the input epsilon, quantize the constants 3
+        # and 6 to eps_in
+        if self.eps_in_fn:
+            three = PACTQuantize(three, self.eps_in_fn(), 2., 4., floor=False)
+            six = PACTQuantize(six, self.eps_in_fn(), 5., 6.5, floor=False)
+        # now perform quantized hswish with the input data:
+        # 1. relu6(x+3)
+        x = x + three
+        x = torch.minimum(torch.maximum(z, x), six)
+        # 2. /6
+        one_over_six = PACTQuantize(o/six, self.eps_s, z, o, floor=False)
+        return x * one_over_six
+
+    def get_eps_out(self, eps_in):
+        return self.eps_s * eps_in
+
 
 class PACTIntegerLayerNorm(torch.nn.Module):
 
