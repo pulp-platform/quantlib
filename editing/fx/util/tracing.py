@@ -20,39 +20,81 @@
 #
 
 from typing import Any, Dict, NamedTuple, Optional, Set, Tuple, Type, List, Callable, Union
+import itertools
 
 import torch
 from torch import fx, nn
 
-__all__ = ['LeafTracer', 'custom_symbolic_trace']
+from quantlib.algorithms.ana.ops import ANAModule
+
+__all__ = [
+    'TracerFactory',
+    'CustomTracer',
+    'custom_symbolic_trace',
+]
 
 
-class LeafTracer(fx.Tracer):
-    # Allows tracing modules with custom granularity: Any modules of a type
-    # contained in the leaf_types list will not be traced through and will
-    # instead be represented as call_module nodes.
+_QL_modules = {
+    'ANA': [ANAModule],
+}
+
+
+class CustomTracer(fx.Tracer):
+    """An ``fx.Tracer`` with custom granularity.
+
+    This class provides ``Tracer``s that interpret user-defined ``nn.Module``
+    classes as atomic ``fx.Node``s during symbolic tracing.
+    """
+
     def __init__(self,
-                 leaf_types: List[torch.nn.Module] = None,
+                 leaf_types: Optional[List[torch.nn.Module]] = None,
                  *args,
                  **kwargs):
-        self.leaf_types = [] if leaf_types is None else leaf_types
+
         super().__init__(*args, **kwargs)
+        self._leaf_types = () if leaf_types is None else tuple(leaf_types)
 
     def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str):
-        base_condition = super(LeafTracer,
-                               self).is_leaf_module(m, module_qualified_name)
+        """Extend the base class check to custom ``nn.Module``s."""
+        fxtracer_cond = super(CustomTracer, self).is_leaf_module(m, module_qualified_name)
+        custom_cond = isinstance(m, self._leaf_types)
+        return fxtracer_cond and custom_cond
 
-        return base_condition or isinstance(m, tuple(self.leaf_types))
+
+class TracerFactory(object):
+
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def get_tracer(ql_algorithms: Union[str, List[str]],
+                   *args,
+                   **kwargs):
+
+        # canonicalise input
+        if isinstance(ql_algorithms, (str, list)):
+            if isinstance(ql_algorithms, str):
+                ql_algorithms = [ql_algorithms]
+        else:
+            raise TypeError("TracerFactory expects str or List[str], but type {} was passed.".format(type(ql_algorithms)))
+
+        # retrieve the ``nn.Module``s to be traced as atoms
+        ql_modules = list(itertools.chain(*[_QL_modules[k] for k in ql_algorithms]))
+        return CustomTracer(ql_modules, *args, **kwargs)
 
 
 def custom_symbolic_trace(root: Union[Callable, nn.Module],
                           concrete_args: Optional[Dict[str, Any]] = None,
                           enable_cpatching: bool = False,
                           tracer: Optional[fx.Tracer] = None):
-    if tracer is None:
-        tracer = fx.Tracer(enable_cpatching=enable_cpatching)
 
-    graph = tracer.trace(root, concrete_args)
-    name = root.__class__.__name__ if isinstance(
-        root, torch.nn.Module) else root.__name__
-    return fx.GraphModule(tracer.root, graph, name)
+    if tracer is None:
+        gm = fx.symbolic_trace(root, concrete_args=concrete_args, enable_cpatching=enable_cpatching)
+
+    else:
+        graph = tracer.trace(root, concrete_args)
+        name = root.__class__.__name__ if isinstance(
+            root, torch.nn.Module) else root.__name__
+        gm = fx.GraphModule(tracer.root, graph, name)
+
+    return gm

@@ -36,7 +36,7 @@ from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
 from ...util import gm_modules, module_of_node
-from ...util.tracing import LeafTracer, custom_symbolic_trace
+from ...util.tracing import CustomTracer, custom_symbolic_trace
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
