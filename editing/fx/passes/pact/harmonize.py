@@ -291,8 +291,10 @@ class OpTreeReplacementPass(FxPass):
             for input_ in node.all_input_nodes:
                 OpTreeReplacementPass.find_op_trees(input_, node_specs, visited_nodes, optree, optrees)
 
-            if optree is not None:  # only flush real `OpTree`s to output
-                optrees.append(optree)
+            # only flush real `OpTree`s to output when the search down its root is completed
+            if optree is not None:
+                if node is optree.root:
+                    optrees.append(optree)
 
         else:  # `node in visited_nodes`: this node has already been visited
             pass
