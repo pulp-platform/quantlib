@@ -4,6 +4,7 @@
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
 #
 # Copyright (c) 2020-2021 ETH Zurich.
 #
@@ -20,7 +21,135 @@
 # limitations under the License.
 #
 
-from typing import Optional, Union
+"""
+**The algebra of fake-quantised (FQ) arrays**
+
+A fake-quantised array is associated to two quantities:
+* its underlying **integer range** :math:`Q`, which is specified by an integer
+  **precision** :math:`B > 0` and an integer **offset** :math:`z \in
+  \mathbb{Z}`;
+* its **representation quantum**, a positive floating-point number
+  :math:`\epsilon`.
+We therefore express a FQ array as :math:`x = \hat{x} \epsilon_{x}`, where
+:math:`\epsilon_{x}` is the quantum and :math:`\hat{x}_{i} \in Q_{x}`, with
+:math:`Q_{x}` being the integer range associated with the array.
+
+We will now discuss two example binary operations with FQ quantised arrays
+that show why and how (quantitavely speaking) the quanta associated with the
+two arrays impact the performance of the corresponding operations. For
+simplicity, we will consider to apply the operations to two one-dimensional
+FQ arrays :math:`a, b` with :math:`N > 0` components each.
+
+The first example is the element-wise sum between :math:`a` and :math:`b`.
+When both arrays share the same quantum, i.e., when :math:`\epsilon_{a} =
+\epsilon_{b} = \epsilon_{c}`, we can rewrite
+
+.. math::
+
+   \begin{split}
+   c_{i}
+   &= a_{i} + b_{i} \\
+   &= \hat{a}_{i} \epsilon_{a} + \hat{b}_{i} \epsilon_{b} \\
+   &= \epsilon_{c} (\hat{a}_{i} + \hat{b}_{i})
+   \end{split}
+
+by means of the distributive property of real multiplication. From this
+equation we notice the following:
+* when the arrays do not share the same quantum, adding them up requires
+  :math:`N` floating-point additions;
+* with respect to the original :math:`N` floating-point additions, the
+  reformulation requires :math:`N` integer additions;
+* identifying the integer ranges of :math:`a` and :math:`b` respectively with
+  the symbols :math:`Q_{a}, Q_{b}` and assuming that they both have zero
+  offsets, the integer range of :math:`c` will also have zero offset, whereas
+  its precision will be :math:`B_{c} = \max\{ B_{a}, B_{b} \} + 1`.
+
+The second example is the dot-product between :math:`a` and :math:`b`.
+Performing the operation between the fake-quantised arrays requires :math:`N`
+floating-point multiplicatoins and :math:`N-1` floating-point additions (or
+:math:`N` floating-point multiply-accumulate, MAC, operations). By using the
+elementary commutative, associative, and distributive property (in this order)
+of real multiplication, we can reformulate the dot product to use only two
+floating-point multiplications, :math:`N` integer multiplications and
+:math:`N-1` integer additions (or :math:`N` integer MAC operations):
+
+.. math::
+
+   \begin{split}
+   \langle a, b \rangle
+   &= \sum_{i = 1}^{N} a_{i} b_{i} \\
+   &= \sum_{i = 1}^{N} \hat{a}_{i} \epsilon_{a} \hat{b}_{i} \epsilon_{b} \\
+   &= \sum_{i = 1}^{N} \epsilon_{a} \epsilon_{b} \hat{a}_{i} \hat{b}_{i} \\
+   &= \sum_{i = 1}^{N} (\epsilon_{a} \epsilon{b}) (\hat{a}_{i} \hat{b}_{i}) \\
+   &= \epsilon_{a} \epsilon_{b} \sum_{i = 1}^{N} \hat{a}_{i} \hat{b}_{i} \,.
+   \end{split}
+
+Let now :math:`\epsilon_{A_{1}} \neq \epsilon_{A_{2}}` be two quanta, and let
+:math:`A_{1}, A_{2}` be a partition of :math:`\{ 1, \dots, N \}` such that all
+the components of :math:`a` with index in :math:`A_{1}` have quantum
+:math:`\epsilon_{A_{1}}`, and all the components with index in :math:`A_{2}`
+have quantum :math:`\epsilon_{A_{2}}`. In more formal terms and for an
+arbitrary partition :math:`\{ A_{j} \}` of :math:`\{ 1, \dots, N \}`, if we
+define
+
+.. math::
+
+   \begin{split}
+   \chi_{A_{j}} \,:\,
+   \{ 1, \dots, N \} &\to \{ 0, 1 \} \\
+   i &\mapsto
+   \begin{cases}
+     0, \,\text{if } i \notin A_{j}, \\
+     1, \,\text{if } i \in A_{j},
+   \end{cases}
+   \end{split}
+
+to be the indicator function of the :math:`j`-th partition, we define the
+**component quantum** to be the function
+
+.. math::
+   
+   \epsilon_{\{ A_{j} \}}
+   := \sum_{j = 1}^{| \{ A_{j} \} |} \chi_{A_{j}} \epsilon_{A_{j}} \,.
+   
+In this formalism, we can see that the dot product between :math:`a` and
+:math:`b` has to be rewritten:
+
+.. math::
+
+   \begin{split}
+   \langle a, b \rangle
+   &= \sum_{i = 1}^{N} a_{i} b_{i} \\
+   &= \sum_{i = 1}^{N} \hat{a}_{i} \epsilon_{\{ A_{1}, A_{2} \}}(i) \hat{b}_{i} \epsilon_{b} \\
+   &= \sum_{i \in A_{1}} \hat{a}_{i} \epsilon_{A_{1}} \hat{b}_{i} \epsilon_{b} + \sum_{i \in A_{2}} \hat{a}_{i} \epsilon_{A_{2}} \hat{b}_{i} \epsilon_{b} \\
+   &= \epsilon_{A_{1}} \epsilon_{b} \sum_{i \in A_{1}} \hat{a}_{i} \hat{b}_{i} + \epsilon_{A_{2}} \epsilon_{b} \sum_{i \in A_{2}} \hat{a}_{i} \hat{b}_{i} \,.
+   \end{split}
+    
+From this equation, we see that computing the dot product requires :math:`N`
+integer multiplications or :math:`N - 2` integer additions (or still :math:`N`
+MACs in total), but four floating-point multiplications (although they can be
+reduced to three by collecting the multiplications by :math:`\epsilon_{b}`.
+For more general partitions on both :math:`a`'s and :math:`b`'s quanta, we
+will generate :math:`| \{ A_{j} \} | | \{ B_{k} \} |` subsets of :math:`\{ 1,
+\dots, N \}` (since each index can belong to exactly one item from each
+partition), and each subset will require two floating-point multiplications.
+This second discussion should have shown why it is important to ensure that as
+many elements as possible inside an array share the same precision.
+
+The first example (element-wise addition of two FQ arrays) highlights the
+importance of equating the quanta of two FQ arrays before summing them up. The
+second example (dot product between two FQ arrays) hightlights the necessity
+of reducing the heterogeneity of the quanta associated with an array; in
+practical contexts, these heterogeneous quanta inside the same array arise
+when concatenating (or stacking) FQ arrays which have different quanta. For
+these reasons, this module introduces abstractions that traverse computational
+graphs of QNNs ensuring that element-wise additions between FQ arrays process
+arrays which share the same quantum, and that concatenation operations produce
+arrays with homogeneous quanta (which facilitate the integerisation of
+downstream linear operations, i.e., operations involving dot products).
+"""
+
+from typing import Optional, Union, Tuple, List
 import operator
 
 import torch
@@ -32,75 +161,67 @@ from .pact_util import PACT_symbolic_trace
 from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass
 
 
+import collections
+NodeSpec = collections.namedtuple('NodeSpec', ['op', 'targets'])
+
+
 class OpTree:
 
-    def __init__(self, end_node: fx.Node):
-        self.end_node = end_node
-        self.nodes = [end_node]
-        self.open_branches = len(end_node.all_input_nodes)
-        assert self.open_branches > 0, "Tried to create OpTree with no branches - something is wrong!"
-        # assume that order and assignment of args and kwargs does not matter
-        # and they are all treated the same.
-        self._args = list(end_node.args) + [v for v in end_node.kwargs.values()]
-        # note the users of the final node now - it may get
-        # deleted and then end_node.users becomes useless
-        self.users = [u for u in end_node.users]
+    def __init__(self, root: fx.Node):
 
-    def add_node(self, node: fx.Node):
-        assert node not in self.nodes, "OpTree.add_node(): something went wrong: you tried to add the same node to a tree twice..."
-        assert not self.is_terminated, "Tried to add a node to a terminated tree!"
-        self.nodes.append(node)
-        # we assume that no node in our tree has more than 1 user
-        self.open_branches += (len(node.all_input_nodes) - 1)
+        # start from the node which is most-donwstream from the point-of-view of the computational graph
+        self._root = root
+        self._nodes = [self._root]
 
-    def terminate_branch(self):
-        # one branch has reached a node which is not part of the tree, so one
-        # branch can be subtracted
-        assert not self.is_terminated, "Tried to terminate a branch in an already-terminated tree!"
-        self.open_branches -= 1
+        # root may get deleted afterwards, therefore this is the best moment to note down information about it
+        self._root_args = self.inbound_frontier
+        self._root_users = [u for u in self._root.users]  # root may get deleted: I need to note down NOW which other dependant nodes might get useless
 
     @property
-    def is_terminated(self):
-        return self.open_branches == 0
+    def root(self) -> fx.Node:
+        return self._root
 
     @property
-    def args(self):
-        # really ugly list comprehensions:
-        # the inputs to the tree is the list of all inputs to all nodes in the
-        # tree, except those inputs which are tree nodes themselves.
-        # >>><<<
-        # spmatteo: this seems the "inbound 1-frontier of the tree";
-        #           possible (elegant?) alternative:
-        #
-        #           def tuplify(x):
-        #               return (x,) if not hasattr(x, '__iter__') else tuple(item_ for item_ in x)
-        #
-        #           all_args = set().union(*[set(tuplify(node.args)) | set(tuplify(node.kwargs.values())) for node in self.nodes])
-        #           all_args = all_args.difference(self.nodes)
-        #
-        # >>><<<
-        all_args = [
+    def nodes(self) -> List[fx.Node]:
+        return self._nodes
+
+    @property
+    def inbound_frontier(self) -> Tuple[fx.Node]:
+        """Compute the `fx.Node`s that are input to the `OpTree`.
+
+        The flattening assumes that the order of arguments and keyword
+        arguments is not important (i.e., information about the order of the
+        arguments is not retained from the output data structure).
+        """
+        inbound_frontier = [
             arg for node in self.nodes
             for arg in node.args if arg not in self.nodes
         ] + [
             v for node in self.nodes
             for v in node.kwargs.values() if v not in self.nodes
         ]
-        # in the case of concat nodes, the arguments are lists or tuples, so we
-        # unpack them
-        all_args_unpacked = []
-        for arg in all_args:
+
+        # I want a flat data structure, i.e., no item in the output iterable should be a container of `fx.Node`s
+        # (e.g., `torch.concat` calls take as inputs iterables of `torch.Tensor`s)
+        inbound_frontier_flattened = []
+        for arg in inbound_frontier:
             if isinstance(arg, (list, tuple)):
-                all_args_unpacked += [a for a in arg]
+                inbound_frontier_flattened.extend([a for a in arg])
             else:
-                all_args_unpacked.append(arg)
-        return tuple(all_args_unpacked)
+                inbound_frontier_flattened.append(arg)
+
+        return tuple(inbound_frontier_flattened)
+
+    def add_node(self, node: fx.Node):
+        if node in self.nodes:
+            raise RuntimeError("QuantLab: OpTree should not be registering a node that has already been registered (possible non-DAG).")
+        self.nodes.append(node)
 
 
 class OpTreeReplacementPass(FxPass):
 
     def __init__(self,
-                 node_specs: list,
+                 node_specs: List[NodeSpec],
                  replacement_fn: callable,
                  name: str = '',
                  always_terminate: bool = False):
@@ -111,152 +232,106 @@ class OpTreeReplacementPass(FxPass):
         self.always_terminate = always_terminate
 
     @staticmethod
-    def node_matches_spec(node: fx.Node, node_spec: tuple):
-        # >>><<<
-        # spmatteo: it seems that `node_spec` is a pair;
-        #           what are the types of its two components supposed to be?
-        #           By looking at the `AddReplacementPass` and `ConcatReplacementPass`
-        #           classes, it seems that:
-        #             - the first item is a string corresponding to a `torch.fx`
-        #               node class, as can be found in the table "A quick primer on graphs"
-        #               in `torch.fx`'s documentation (https://pytorch.org/docs/stable/fx.html)
-        #             - the second item is an iterable containing several classes/functions
-        #               that are instances of PyTorch's functional API or even of the standard
-        #               Python library, such as `operator.add`.
-        # >>><<<
-        return node.op == node_spec[0] and node.target in node_spec[1]
+    def node_matches_spec(node: fx.Node, node_spec: NodeSpec):
+        return (node.op == node_spec.op) and (node.target in node_spec.targets)
 
     @staticmethod
-    def trace_op_trees(node: fx.Node,
-                       node_specs: list,
-                       cur_tree: Union[None, OpTree],
-                       op_trees: list,
-                       seen_nodes: Optional[set],
-                       always_terminate: bool = False):
-        # >>><<<
-        # spmatteo: the mechanic of this function is not straightforward to me.
-        #           I get that it is a recursive function.
-        #           I get that it aims at finding "trees" of operations which I suppose
-        #           are binary, e.g., additions, concatenations (including the `torch.stack`
-        #           concatenation "variant").
-        #           It looks to me like it performs depth-first search (DFS) over the
-        #           computational graph.
-        #           A problematic aspect is the overwriting of symbol `cur_tree`: the logic
-        #           of its overwriting is not well-documented.
-        #
-        #           I labelled the branches below. I will now try to reformulate the flow
-        #           in what I think might be a smoother form.
-        #
-        #           BRANCH A
-        #           if node in seen_nodes:  # due to DFS, the traversal of said node has already run to completion
-        #               ...
-        #           BRANCH B
-        #           elif node not in seen_nodes:
-        #               if cur_tree is None:
-        #                   if node_matches_any_spec(node, specs):
-        #                       assert len(node.users) > 0  # the recursive call means that this node is input to some other node
-        #                       [start sub-tree traversal]
-        #                   else:
-        #                       pass  # will proceed to DFS recursive call
-        #               else:  # I am already in a tree of binary ops
-        #                   if node_matches_any_spec(node, specs):
-        #                       assert len(node.users) > 0  # the recursive call means that this node is input to some other node
-        #                       if len(node.users) > 1:  # this node is the entry of a branching flow (e.g., ResNets)
-        #                           [start traversal of new sub-tree]
-        #                           [notify parent sub-tree that this branch has been explored]
-        #                           !!! the notification of sub-tree traversal should happen after the DFS recursive call, not before!
-        #                           REMARK: the DFS choice in combination with the appending `op_trees` mechanics is indeed clever.
-        #                                   In fact, this ensures that in case a binary tree is a "dependency" for a branching point,
-        #                                   it will be traversed before its "dependants", and therefore put in the list `op_trees` before
-        #                                   its dependants; at epsilon-alignment time, this will ensure that the epsilon consistency
-        #                                   is correctly computed over all the input branches.
-        #                       elif len(node.users) == 1:
-        #                           [add node to sub-tree]
-        #                           !!! traversal of sub-tree should happen before adding the node!
-        #                   else:
-        #                       [terminate traversal of current sub-tree]
-        #                       [notify parent sub-tree that this branch has been explored]
-        #                       !!! the notification of sub-tree traversal should happen after the DFS recursive call, not before!
-        #                       [reset DFS travesal from this point]
-        #
-        # >>><<<
+    def node_matches_any_spec(node: fx.Node, node_specs: List[NodeSpec]):
+        return any(map(lambda ns: OpTreeReplacementPass.node_matches_spec(node, ns), node_specs))
 
-        # BRANCH A
-        if node in seen_nodes:
-            # if we have already seen this node, it is either already part of a
-            # tree or it will never be, so if we exited a tree, terminate the
-            # branch and return
-            if cur_tree is not None:
-                cur_tree.terminate_branch()
-                if cur_tree.is_terminated:
-                    op_trees.append(cur_tree)
-            return
+    @staticmethod
+    def find_op_trees(node: fx.Node,
+                      node_specs: list,
+                      visited_nodes: Optional[set],
+                      current_optree: Optional[OpTree],
+                      optrees: list):
+        """Detect all trees whose nodes are of specified type(s).
 
-        # BRANCH B
-        seen_nodes.add(node)
-        # BRANCH B.1
-        if any(
-                OpTreeReplacementPass.node_matches_spec(node, spec)
-                for spec in node_specs):
-            # the current node belongs to a tree
-            # BRANCH B.1.i
-            if cur_tree is not None and (len(node.users) > 1
-                                         or always_terminate):
-                # there is a branch, so we need to cut the tree and start a new one
-                cur_tree.terminate_branch()
-                if cur_tree.is_terminated:
-                    op_trees.append(cur_tree)
-                cur_tree = OpTree(end_node=node)
-            # BRANCH B.1.ii
-            elif cur_tree is None:
-                cur_tree = OpTree(end_node=node)
-            # BRANCH B.1.iii
-            else:
-                cur_tree.add_node(node)
-        # BRANCH B.2
-        elif cur_tree is not None:
-            # we exited a tree => terminate this branch
-            cur_tree.terminate_branch()
-            if cur_tree.is_terminated:
-                op_trees.append(cur_tree)
-            cur_tree = None
+        This function will return a list of application points for the
+        harmonisation GRR. Each application point is an object of class
+        `OpTree`.
 
-        # (still BRANCH B) RECURSIVE DEPTH-FIRST CALL
-        # follow the graph upstream
-        for inp in node.all_input_nodes:
-            OpTreeReplacementPass.trace_op_trees(inp, node_specs, cur_tree,
-                                                 op_trees, seen_nodes,
-                                                 always_terminate)
+        No `fx.Node` can belong to more than one `OpTree` at a time. Thanks to
+        a depth-first traversal logic, the `OpTree`s returned satisfy the
+        following property: that the root of the :math:`i`-th `OpTree` is
+        topologically antecedent to the root of the :math:`(i+1)`-th `OpTree`.
+        This property can be used during the application part of the GRR, when
+        the quanta are harmonised proceeding downstream from the network's
+        input.
+        """
+        if node not in visited_nodes:
 
-        # (implicit) return of BRANCH B
+            visited_nodes.add(node)
+
+            if current_optree is not None:  # I am traversing an `OpTree`
+
+                assert len(node.users) > 0, "QuantLab: OpTreeReplacementPass should not be performing recursive calls on `fx.Node`s which are not inputs to other operations. Who triggered the recursive call?"
+
+                if OpTreeReplacementPass.node_matches_any_spec(node, node_specs):  # I am still inside the `OpTree` from the previous stack frame
+
+                    if len(node.users) == 1:  # continue the traversal of the same `OpTree`
+                        optree = current_optree
+                        optree.add_node(node)
+
+                    else:  # `1 < len(node.users)`: I have found a branching point in the network topology, which I use as the root for a new `OpTree`
+                        optree = OpTree(root=node)
+
+                else:  # I have exited the current `OpTree`; I will continue traversal down this node looking for new roots
+                    optree = None
+
+            else:  # `current_optree is None`
+
+                if OpTreeReplacementPass.node_matches_any_spec(node, node_specs):  # I am possibly entering a new tree
+                    optree = OpTree(root=node)
+
+                else:
+                    optree = None
+
+            # depth-first recursive call
+            for input_ in node.all_input_nodes:
+                OpTreeReplacementPass.find_op_trees(input_, node_specs, visited_nodes, optree, optrees)
+
+            if optree is not None:  # only flush real `OpTree`s to output
+                optrees.append(optree)
+
+        else:  # `node in visited_nodes`: this node has already been visited
+            pass
+
+        return
 
     def run_pass(self, gm: fx.GraphModule):
-        out_node = list(gm.graph.nodes)[-1]
-        op_trees = []
-        self.trace_op_trees(out_node, self.node_specs, None, op_trees, set(),
-                            self.always_terminate)
-        # we have the op trees, now replace them with a module
-        for i, tree in enumerate(op_trees):
-            # then add the submodule
-            module = self.replacement_fn(tree)
-            new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper()}{'_' if self.name != '' else ''}{i}"
+
+        # find the application points
+        output_ = list(gm.graph.nodes)[-1]  # TODO: for now, I assume that there is exactly one output node, but users might want to process multi-output networks
+
+        visited_nodes = set()
+        optree = None
+        optrees = []
+        self.find_op_trees(output_, self.node_specs, visited_nodes, optree, optrees)
+
+        # apply the rewriting to all the application points
+        for i, optree in enumerate(optrees):
+
+            # create the replacement graph...
+            module = self.replacement_fn(optree)
+
+            # ...add it to the graph...
+            new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper() + '_' if self.name != '' else ''}{i}"
             gm.add_submodule(new_target, module)
-            # add a node for the submodule call
-            with gm.graph.inserting_before(tree.end_node):
-                new_node = gm.graph.call_module(new_target, args=tree.args)
-            # attach the module to the previous users of the tree's end node
-            tree.end_node.replace_all_uses_with(new_node)
-            # finally, delete the nodes in the tree
-            for node in tree.nodes:
+            with gm.graph.inserting_before(optree.root):  # add a node for the submodule call
+                new_node = gm.graph.call_module(new_target, args=optree.inbound_frontier)
+            optree.root.replace_all_uses_with(new_node)  # attach the module to the previous users of the tree's end node
+
+            # ...and finally delete the "dead code"
+            for node in optree.nodes:
                 gm.graph.erase_node(node)
 
-        # and we're done...
         return gm
 
 
 class AddTreeReplacementPass(OpTreeReplacementPass):
-    add_node_specs = [('call_function', (torch.add, operator.add)),
-                      ('call_method', ('add',))]
+    add_node_specs = [NodeSpec('call_function', (torch.add, operator.add)),
+                      NodeSpec('call_method', ('add',))]
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -265,15 +340,15 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
                              replacement_fn=self.add_replacement_fn,
                              name="ADDITION")
 
-    def add_replacement_fn(self, tree):
-        return PACTIntegerAdd(num_args=len(tree.args),
+    def add_replacement_fn(self, optree: OpTree):
+        return PACTIntegerAdd(num_args=len(optree.inbound_frontier),
                               act_kind='identity',
                               **self.kwargs)
 
 
 class ConcatTreeReplacementPass(SequentialPass):
-    cat_node_specs = [('call_function', (torch.cat,))]
-    stack_node_specs = [('call_function', (torch.stack,))]
+    cat_node_specs = [NodeSpec('call_function', (torch.cat,))]
+    stack_node_specs = [NodeSpec('call_function', (torch.stack,))]
 
     def __init__(self,
                  n_levels: int = 256,
@@ -296,16 +371,16 @@ class ConcatTreeReplacementPass(SequentialPass):
         super(ConcatTreeReplacementPass,
               self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
-    def cat_replacement_fn(self, tree):
-        return PACTIntegerConcat(num_args=len(tree.args),
+    def cat_replacement_fn(self, optree: OpTree):
+        return PACTIntegerConcat(num_args=len(optree.inbound_frontier),
                                  n_levels=self.n_levels,
                                  act_kind='identity',
                                  init_clip=self.init_clip,
                                  nb_std=self.nb_std,
                                  stack_flag=False)
 
-    def stack_replacement_fn(self, tree):
-        return PACTIntegerConcat(num_args=len(tree.args),
+    def stack_replacement_fn(self, optree: OpTree):
+        return PACTIntegerConcat(num_args=len(optree.inbound_frontier),
                                  n_levels=self.n_levels,
                                  act_kind='identity',
                                  init_clip=self.init_clip,

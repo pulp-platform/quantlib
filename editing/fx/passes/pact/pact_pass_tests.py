@@ -28,7 +28,7 @@ from torch import nn, fx
 
 from torchvision.models import MobileNetV2
 
-from quantlib.editing.fx.passes.pact.canonicalize import *
+from quantlib.editing.fx.passes.pact.harmonize import *
 from quantlib.editing.fx.passes.pact.pact_util import *
 
 
