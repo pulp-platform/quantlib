@@ -12,6 +12,7 @@ from quantlib.algorithms.pact.pact_ops import *
 from .pass_base import FxPass, ReplaceSequentialPatternPass
 from ..util import gm_modules, module_of_node
 import math
+import operator
 
 __all__ = ['AnnotateEpsPass',
            'extract_eps']
@@ -42,6 +43,16 @@ def eps_conversion_pact_layernorm(m : torch.nn.Module, eps_in : torch.Tensor):
 
 def eps_conversion_identity(*eps_ins):
     return eps_ins[0]
+
+def eps_conversion_truediv(*eps_ins, **kwargs):
+    import IPython; IPython.embed()
+    return eps_ins[0]
+
+# def eps_conversion_mul(*eps_ins):
+#     try:
+#         return eps_ins[0]*eps_ins[1]
+#     except:
+#         return eps_ins[0]
 
 def eps_conversion_embedding(m : torch.nn.Module, eps_in : torch.Tensor):
     return m.maxval/(m.adder.n_levels//2-1)
@@ -75,6 +86,8 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
+#                     f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
+                    f'_CALL_FUNCTION_{repr(operator.truediv)}' : eps_conversion_truediv,
 }
 
 # modules which "generate" an eps without needing an input eps

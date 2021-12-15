@@ -47,6 +47,7 @@ __all__ = [
     'PACTIntegerConcat',
     'PACTIntegerMatmul',
     'PACTIntegerSoftmax',
+#     'PACTHardSigmoid',
     'PACTIntegerLayerNorm',
     'PACTIntegerGELU',
     'PACTSoftmax',
@@ -75,36 +76,46 @@ class PACTWrapMHSA(nn.Module):
         
         @staticmethod
         @parse_args('v','v','v',
-                    't', 't', 't', 't',
-                    't', 't', 't', 't',
-                    't', 't', 't', 't',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
                     't', 't',
-                    't', 't', 't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
                     't', 't', 't', 't',
                     't')        
         def symbolic(g, q,k,v,
-                     wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
-                     wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
-                     wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                     wk_weight, wk_bias, 
+                     wq_weight, wq_bias, 
+                     wv_weight, wv_bias,
+                     wo_weight, wo_bias,
+                     wk_requant_mul, wk_requant_div,
+                     wq_requant_mul, wq_requant_div,
+                     wv_requant_mul, wv_requant_div,
                      attn_requant_mul, attn_requant_div,
-                     wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                     wo_requant_mul, wo_requant_div,
                      isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
                      n_levels):
 
-            wk_weight_ = g.op("Constant", value_t=wk_weight)
-            wk_bias_ = g.op("Constant", value_t=wk_bias)
+            
+#             wk_weight_ = g.op("Constant", value_t=wk_weight)
+#             wk_bias_ = g.op("Constant", value_t=wk_bias)
+#             wq_weight_ = g.op("Constant", value_t=wq_weight)
+#             wq_bias_ = g.op("Constant", value_t=wq_bias)
+#             wv_weight_ = g.op("Constant", value_t=wv_weight)
+#             wv_bias_ = g.op("Constant", value_t=wv_bias)
+#             wo_weight_ = g.op("Constant", value_t=wo_weight)
+#             wo_bias_ = g.op("Constant", value_t=wo_bias)
+            
             wk_requant_mul_ = g.op("Constant", value_t=wk_requant_mul)
             wk_requant_div_ = g.op("Constant", value_t=wk_requant_div)
-            wq_weight_ = g.op("Constant", value_t=wq_weight)
-            wq_bias_ = g.op("Constant", value_t=wq_bias)
             wq_requant_mul_ = g.op("Constant", value_t=wq_requant_mul)
             wq_requant_div_ = g.op("Constant", value_t=wq_requant_div)
-            wv_weight_ = g.op("Constant", value_t=wv_weight)
-            wv_bias_ = g.op("Constant", value_t=wv_bias)
             wv_requant_mul_ = g.op("Constant", value_t=wv_requant_mul)
             wv_requant_div_ = g.op("Constant", value_t=wv_requant_div)
-            wo_weight_ = g.op("Constant", value_t=wo_weight)
-            wo_bias_ = g.op("Constant", value_t=wo_bias)
             wo_requant_mul_ = g.op("Constant", value_t=wo_requant_mul)
             wo_requant_div_ = g.op("Constant", value_t=wo_requant_div)
             attn_requant_mul_ = g.op("Constant", value_t=attn_requant_mul)
@@ -115,23 +126,31 @@ class PACTWrapMHSA(nn.Module):
             isoftmaxlog2_ = g.op("Constant", value_t=isoftmaxlog2)
             n_levels_ = g.op("Constant", value_t=n_levels)
 
-            return g.op("PACTOps::MultiHeadSelfAttention", q,k,v,
-                        wq_weight_t=wq_weight, wq_bias_t=wq_bias, wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
-                        wk_weight_t=wk_weight, wk_bias_t=wk_bias, wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
-                        wv_weight_t=wv_weight, wv_bias_t=wv_bias, wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
-                        wo_weight_t=wo_weight, wo_bias_t=wo_bias, wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
+            return g.op("PACTOps::MultiHeadSelfAttention", q, k, v,
+                        wq_weight, wq_bias, 
+                        wk_weight, wk_bias, 
+                        wv_weight, wv_bias, 
+                        wo_weight, wo_bias, 
+                        wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
+                        wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
+                        wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
+                        wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
                         attn_requant_mul_t=attn_requant_mul, attn_requant_div_t=attn_requant_div,
                         isoftmaxA_t=isoftmaxA, isoftmaxB_t=isoftmaxB, isoftmaxC_t=isoftmaxC, isoftmaxlog2_t=isoftmaxlog2, n_levels_t=n_levels)
-            
-#             return g.op("PACTOps::MultiHeadSelfAttention", q,k,v,
-#                         wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
-#                         wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
-#                         wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
-#                         attn_requant_mul, attn_requant_div,
-#                         wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
-#                         isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels)
-        #return g.op("PACTOps::RequantShift", x)
 
+#                     return g.op("PACTOps::MultiHeadSelfAttention", q, k, v,
+#                         wq_weight_t=wq_weight, wq_bias_t=wq_bias, 
+#                         wk_weight_t=wk_weight, wk_bias_t=wk_bias, 
+#                         wv_weight_t=wv_weight, wv_bias_t=wv_bias, 
+#                         wo_weight_t=wo_weight, wo_bias_t=wo_bias, 
+#                         wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
+#                         wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
+#                         wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
+#                         wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
+#                         attn_requant_mul_t=attn_requant_mul, attn_requant_div_t=attn_requant_div,
+#                         isoftmaxA_t=isoftmaxA, isoftmaxB_t=isoftmaxB, isoftmaxC_t=isoftmaxC, isoftmaxlog2_t=isoftmaxlog2, n_levels_t=n_levels)
+
+        
     def __init__(self,  wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
                         wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
                         wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
@@ -140,20 +159,20 @@ class PACTWrapMHSA(nn.Module):
                         isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels):
         
         super().__init__()
-        self.wk_weight = torch.clone(wk_weight).detach()
-        self.wk_bias = torch.clone(wk_bias).detach()
+        self.wk_weight = nn.Parameter(torch.clone(wk_weight).detach())
+        self.wk_bias = nn.Parameter(torch.clone(wk_bias).detach())
         self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
         self.wk_requant_div = torch.clone(wk_requant_div).detach()
-        self.wq_weight = torch.clone(wq_weight).detach()
-        self.wq_bias = torch.clone(wq_bias).detach()
+        self.wq_weight = nn.Parameter(torch.clone(wq_weight).detach())
+        self.wq_bias = nn.Parameter(torch.clone(wq_bias).detach())
         self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
         self.wq_requant_div = torch.clone(wq_requant_div).detach()
-        self.wv_weight = torch.clone(wv_weight).detach()
-        self.wv_bias = torch.clone(wv_bias).detach()
+        self.wv_weight = nn.Parameter(torch.clone(wv_weight).detach())
+        self.wv_bias = nn.Parameter(torch.clone(wv_bias).detach())
         self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
         self.wv_requant_div = torch.clone(wv_requant_div).detach()
-        self.wo_weight = torch.clone(wo_weight).detach()
-        self.wo_bias = torch.clone(wo_bias).detach()
+        self.wo_weight = nn.Parameter(torch.clone(wo_weight).detach())
+        self.wo_bias = nn.Parameter(torch.clone(wo_bias).detach())
         self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
         self.wo_requant_div = torch.clone(wo_requant_div).detach()
         self.attn_requant_mul = torch.clone(attn_requant_mul).detach()
@@ -166,13 +185,18 @@ class PACTWrapMHSA(nn.Module):
         
     def forward(self, q,k,v, **kwargs):
         print(self.wk_weight.type_as(q))
-        return self.MyMHSA.apply(q,k,v,self.wk_weight.type_as(q), self.wk_bias.type_as(q), self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
-                            self.wq_weight.type_as(q), self.wq_bias.type_as(q), self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
-                            self.wv_weight.type_as(q), self.wv_bias.type_as(q), self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
-                            self.attn_requant_mul.type_as(q), self.attn_requant_div.type_as(q),
-                            self.wo_weight.type_as(q), self.wo_bias.type_as(q), self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
-                            self.isoftmaxA.type_as(q), self.isoftmaxB.type_as(q), self.isoftmaxC.type_as(q), self.isoftmaxlog2.type_as(q),
-                            self.n_levels.type_as(q))
+        return self.MyMHSA.apply(q,k,v,
+                                 self.wq_weight.type_as(q), self.wq_bias.type_as(q), 
+                                 self.wk_weight.type_as(q), self.wk_bias.type_as(q), 
+                                 self.wv_weight.type_as(q), self.wv_bias.type_as(q),
+                                 self.wo_weight.type_as(q), self.wo_bias.type_as(q), 
+                                 self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
+                                 self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
+                                 self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
+                                 self.attn_requant_mul.type_as(q), self.attn_requant_div.type_as(q),
+                                 self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
+                                 self.isoftmaxA.type_as(q), self.isoftmaxB.type_as(q), self.isoftmaxC.type_as(q), self.isoftmaxlog2.type_as(q),
+                                 self.n_levels.type_as(q))
 
 class PACTWrapModule(nn.Module):
     
@@ -210,22 +234,21 @@ class RequantShift(nn.Module):
             return y
         
         @staticmethod
-        @parse_args('v', 't', 't', 't', 't', 't')
+        @parse_args('v', 'v', 'v', 't', 't', 't')
         def symbolic(g, x, mul, add, div, signed, n_levels_out):
-
-            mul_ = g.op("Constant", value_t=mul)
-            add_ = g.op("Constant", value_t=add)
+#             mul_ = g.op("Constant", value_t=mul)
+#             add_ = g.op("Constant", value_t=add)
             div_ = g.op("Constant", value_t=div)
             signed_ = g.op("Constant", value_t=signed)
             n_levels_out_ = g.op("Constant", value_t=n_levels_out)
             
-            return g.op("PACTOps::RequantShift", x, mul_t=mul, add_t=add, div_t=div, signed_t=signed, n_levels_t=n_levels_out)
+            return g.op("PACTOps::RequantShift", x, mul, add, div_t=div, signed_t=signed, n_levels_t=n_levels_out)
             #return g.op("PACTOps::RequantShift", x)
     
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
         super(RequantShift, self).__init__()
-        self.mul = torch.clone(mul).detach()
-        self.add = torch.clone(add).detach()
+        self.mul = nn.Parameter(torch.clone(mul).detach())
+        self.add = nn.Parameter(torch.clone(add).detach())
         self.div = torch.clone(D.type_as(add)).detach()
         self.signed = torch.Tensor((signed,)).detach()
         self.n_levels_out = torch.Tensor((n_levels,)).detach()
@@ -301,11 +324,37 @@ class PACTIntegerEmbedding(torch.nn.Module):
             
         return out
 
+# class PACTHardSigmoid(torch.nn.Module):
+
+#     def __init__(self, n_levels: int = 256):
+#         super().__init__()
+#         self.n_levels = n_levels
+        
+#     def forward(self, x):
+#         """Approximate Softmax implementation according to the I-BERT paper:
+#         https://arxiv.org/abs/2101.01321
+
+#         :param x: 
+#         :returns: 
+#         :rtype: 
+
+#         """
+
+#         xTilde = (x - torch.max(x))
+#         z = torch.floor(-xTilde / math.log(2))
+#         p = xTilde + z * math.log(2)
+#         y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
+#         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+#         out = y/(ysum)
+#         return out
+
+    
 class PACTSoftmax(torch.nn.Module):
 
-    def __init__(self, n_levels: int = 256):
+    def __init__(self, n_levels: int = 256, dim: int = 1):
         super().__init__()
         self.n_levels = n_levels
+        self.dim = dim
         
     def forward(self, x):
         """Approximate Softmax implementation according to the I-BERT paper:
@@ -316,7 +365,6 @@ class PACTSoftmax(torch.nn.Module):
         :rtype: 
 
         """
-
         xTilde = (x - torch.max(x))
         z = torch.floor(-xTilde / math.log(2))
         p = xTilde + z * math.log(2)
@@ -378,6 +426,7 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
         p = 0
         #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
         eps2 = torch.Tensor((0.3585,))
         
         self.coeffA.data[0] = torch.round(0.3585/eps2)
@@ -537,15 +586,16 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             return y
 
         @staticmethod
-        @parse_args('v', 't','t','t','t','t','t','t')
+        @parse_args('v', 'v','v','t','t','t','t','t')
         def symbolic(g, x, weight,  bias, totScaler, D, n_levels, dummyOne, dummyZero):
 
+#             weight_ = g.op("Constant", value_t=weight)
+#             bias_ = g.op("Constant", value_t=bias)
+            
             n_levels_ = g.op("Constant", value_t=n_levels)
-            weight_ = g.op("Constant", value_t=weight)
-            bias_ = g.op("Constant", value_t=bias)
             totScaler_ = g.op("Constant", value_t=totScaler)
             
-            return g.op("PACTOps::iLayerNorm", x, weight_t=weight, bias_t=bias, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
+            return g.op("PACTOps::iLayerNorm", x, weight, bias, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
 
     
     def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,))):
@@ -577,8 +627,8 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             
             self.eps_weights = eps_weights
 
-            self.weight = torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()
-            self.bias = torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach()
+            self.weight = nn.Parameter(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach(), requires_grad=False)
+            self.bias = nn.Parameter(torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach(), requires_grad=False)
             self.totScaler = torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach()
 
             self.weight *= self.totScaler
