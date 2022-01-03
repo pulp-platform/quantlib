@@ -86,6 +86,7 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
+                    '_CALL_METHOD_reshape' : eps_conversion_identity,
 #                     f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
                     f'_CALL_FUNCTION_{repr(operator.truediv)}' : eps_conversion_truediv,
 }

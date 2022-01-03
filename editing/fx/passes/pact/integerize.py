@@ -275,7 +275,7 @@ def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
     maxval = modules[matched_nodes[0].target].maxval
     eps_in = extract_eps(matched_nodes[0].meta['quant'].eps_in)
     
-    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval, twoStage=False)
+    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval, twoStage=True)
 
     return new_embedding
         

@@ -280,7 +280,7 @@ def apply_pass_to_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, 
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
     
     fx_model = _pass.apply(fx_model)
-    node = PACTWrapModule(fx_model, n_levels)
+    node = PACTWrapModule(fx_model, n_levels, wrap_module._dict)
 
     return node
 
@@ -355,7 +355,7 @@ def integerize_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, _tr
     
     IntegerizePass = _pass(shapes_in, eps_in = eps_in)
     fx_model = IntegerizePass.apply(fx_model)
-    node = PACTWrapModule(fx_model, n_levels)
+    node = PACTWrapModule(fx_model, n_levels, wrap_module._dict)
     
     return node
     
@@ -371,7 +371,7 @@ class IntegerizeWrapModules(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(integerize_wrap_module, _pass=_pass, _tracer=tracer), f'_WRAP_PASS_INTEGERIZE_subpass'))
         super().__init__(*passes, name_prefix='_WRAP_PASS_INTEGERIZE_subpass')        
 
-def wrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None, n_levels=256, _tracer=None):
+def wrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None, n_levels=256, _tracer=None, **kwargs):
 
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
@@ -379,7 +379,7 @@ def wrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None, n_leve
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     wrap_module = matched_modules[0]
     assert isinstance(wrap_module, wrapClass), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
-
+    
     cloneModule = copy.deepcopy(wrap_module)
     
     fx_graph = _tracer.trace(cloneModule)
@@ -387,7 +387,7 @@ def wrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None, n_leve
 
     x_model = insert_final_activation(fx_model, n_levels)
 
-    node = PACTWrapModule(fx_model, n_levels)
+    node = PACTWrapModule(fx_model, n_levels, wrap_module.__dict__)
     
     return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
         
@@ -414,6 +414,12 @@ def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
     wrap_module = matched_modules[0]
     assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
 
+    try:
+        dim = wrap_module._dict['dim']
+        dim_head = wrap_module._dict['inner_dim']
+        heads = wrap_module._dict['h']
+    except Exception as e:
+        import IPython; IPython.embed()
     mod = dict(wrap_module.module.named_parameters())
     wk_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.weight']
     wq_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.weight']
@@ -436,12 +442,13 @@ def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
         wo_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_3.bias']
     except:
         wo_bias = torch.Tensor((0,))
-
+        
     wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
     wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
     wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
-    attn_requant_mul, attn_requant_add, attn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
-    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_4)
+    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
+    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_4)
+    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_5)
 
     sm = wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGER_SOFTMAX_PASS_0
 
@@ -454,8 +461,10 @@ def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
     node = PACTWrapMHSA(wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
                         wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
                         wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
-                        attn_requant_mul, attn_requant_div,
+                        preattn_requant_mul, preattn_requant_div,
+                        postattn_requant_mul, postattn_requant_div,
                         wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                        dim, heads, dim_head,
                         isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels)
     
     return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
