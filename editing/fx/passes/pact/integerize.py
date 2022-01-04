@@ -133,7 +133,7 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          padding=conv.padding,
                          dilation=conv.dilation,
                          groups=conv.groups,
-                         bias=False,
+                         bias=None,
                          padding_mode=conv.padding_mode)
     new_conv.weight.data.copy_(conv.weight_int)
 
@@ -182,9 +182,8 @@ class IntegerizePACTLinearPass(ReplaceSequentialPatternPass):
         pattern = nn.Sequential(PACTLinear(1,1))
         name = "_INTEGERIZE_PACT_LIN_PASS"
         super(IntegerizePACTLinearPass, self).__init__(pattern, PACT_symbolic_trace, integerize_pact_linear_fun, name)
-
-
-def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
+        
+def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, enable_add_first=False):
     modules = dict(gm.named_modules())
     if not isinstance(D, torch.Tensor):
         D = torch.tensor(D)
@@ -248,17 +247,17 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
             gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1, 1))
             beta_h = beta_h.reshape((beta_h.numel(), 1, 1, 1))
 
-    requant = RequantShift(gamma_h, beta_h, act.n_levels, signed_act, D)
+    requant = RequantShift(gamma_h, beta_h, act.n_levels, signed_act, D, enable_add_first)
     return requant
 
 class IntegerizeBNActPass(SequentialPass):
-    def __init__(self, D : float = 2**24):
+    def __init__(self, D : float = 2**24, enable_add_first=False):
         passes = []
         # replace all combinations of BN + PACT activation with RequantShift layers
         for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
             for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
                 pattern = nn.Sequential(bn_type(1), act_type())
-                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D))
+                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(bn_act_to_requant_fun, enable_add_first=True), f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D))
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
             pattern = nn.Sequential(act_type())
             passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D))
@@ -289,7 +288,7 @@ class IntegerizeEmbeddingsPass(SequentialPass):
 
         
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -311,7 +310,7 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeSoftmaxPass())
         passes.append(IntegerizeLayerNormPass())
         passes.append(IntegerizeGELUPass())
-        passes.append(IntegerizeBNActPass(D))
+        passes.append(IntegerizeBNActPass(D, enable_add_first))
         passes.append(IntegerizeEmbeddingsPass())
             
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")
