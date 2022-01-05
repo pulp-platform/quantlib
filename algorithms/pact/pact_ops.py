@@ -38,6 +38,7 @@ __all__ = [
     'PACTConv1d',
     'PACTLinear',
     'PACTQuantize',
+    'TQTQuantize',
     'PACTIntegerAdd',
     'PACTIntegerConcat',
     'PACTIntegerMatmul',
