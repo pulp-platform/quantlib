@@ -51,9 +51,9 @@ class CustomTracer(fx.Tracer):
 
     def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
         """Extend the base class check to custom ``nn.Module``s."""
-        fxtracer_cond = super(CustomTracer, self).is_leaf_module(m, module_qualified_name)
+        fxtracer_cond = super().is_leaf_module(m, module_qualified_name)
         custom_cond = isinstance(m, self._leaf_types)
-        return fxtracer_cond and custom_cond
+        return fxtracer_cond or custom_cond
 
 
 _QL_modules = {
