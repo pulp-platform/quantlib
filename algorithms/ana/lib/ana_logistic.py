@@ -20,6 +20,7 @@
 #
 
 import torch
+import torch.fx
 from scipy.stats import logistic
 
 from .ana_forward import forward_expectation, forward_mode, forward_random
@@ -27,6 +28,7 @@ from .ana_forward import forward_expectation, forward_mode, forward_random
 # Wikipedia: https://en.wikipedia.org/wiki/Logistic_distribution
 
 
+@torch.fx.wrap
 def forward(x_in, q, t, mi, sigma, strategy, training):
 
     is_cuda = x_in.is_cuda  # if one ``torch.Tensor`` operand is on GPU, all are

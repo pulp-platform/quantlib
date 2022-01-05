@@ -20,12 +20,14 @@
 #
 
 import torch
+import torch.fx
 
 from .ana_forward import forward_expectation, forward_mode, forward_random
 
 # Wikipedia: https://en.wikipedia.org/wiki/Continuous_uniform_distribution
 
 
+@torch.fx.wrap
 def forward(x_in, q, t, mi, sigma, strategy, training):
 
     # shift points with respect to the distribution's mean
