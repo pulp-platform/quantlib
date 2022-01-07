@@ -31,21 +31,29 @@ from torch.overrides import (
 class QTensor(torch.Tensor):
     @staticmethod
     def __new__(cls, x, eps=None, *args, **kwargs):
+        
         if isinstance(x, torch.Tensor):
-            return x.__deepcopy__(memo={}).as_subclass(cls)
+            inst = x.__deepcopy__(memo={}).as_subclass(cls)
         else:
-            return super().__new__(cls, x, *args, **kwargs)
+            inst = super().__new__(cls, x, *args, **kwargs)
+        
+        return inst
 
-    def __init__(self, x, eps=None, **kwargs):
+    def __init__(self, x, eps=None, *args, **kwargs):
         if eps is not None:
             if isinstance(x, torch.Tensor):
                 self._eps = torch.as_tensor(eps).type_as(x)
             else:
                 self._eps = torch.as_tensor(eps)
-            self._eps.requires_grad = False
-        else:
-            self._eps = None
+                self._eps.requires_grad = False
 
+    @property
+    def eps(self):
+        if hasattr(self, '_eps'):
+            return self._eps
+        else:
+            return None
+                
     @classmethod
     def getOverriddenMethods(cls):
         parent_attrs = set()
@@ -60,7 +68,13 @@ class QTensor(torch.Tensor):
         
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
-        return super().__torch_function__(func,types,args,kwargs)
+        #import IPython; IPython.embed()
+        if func.__name__ in cls.getOverriddenMethods():
+            return getattr(cls, func.__name__)(args, kwargs)
+        else:
+            ret = super().__torch_function__(func,types,args,kwargs)
+            c = _convert(ret, cls)
+            return c
         
     def clone(self, *args, **kwargs):
         if hasattr(self, '_eps'):
@@ -73,7 +87,7 @@ class QTensor(torch.Tensor):
             new_obj=QTensor([], self._eps)
         else:
             new_obj=QTensor([], None)
-        tempTensor=super().to(*args, **kwargs)
+        tempTensor = super().to(*args, **kwargs)
         new_obj.data=tempTensor.data
         new_obj.requires_grad=tempTensor.requires_grad
         if hasattr(self, '_eps'):
@@ -82,4 +96,11 @@ class QTensor(torch.Tensor):
             new_obj.__init__(tempTensor, None)
         return(new_obj)            
 
-    
+def _convert(ret, cls):
+    if isinstance(ret, torch.Tensor) and not isinstance(ret, cls):
+        ret = ret.as_subclass(cls)
+    if isinstance(ret, (tuple, list)):
+        # Also handles things like namedtuples
+        ret = type(ret)(_convert(r, cls) for r in ret)
+
+    return ret
