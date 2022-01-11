@@ -28,9 +28,11 @@ import math
 
 from . import lib
 
-from typing import Dict
+from typing import Dict, Union
+
 
 __all__ = [
+    'ANAClasses',
     'ANAActivation',
     'ANALinear',
     'ANAConv1d',
@@ -112,6 +114,9 @@ class ANAModule(nn.Module):
         self.mi.data = torch.Tensor([mi]).to(device=self.mi.device)
         self.sigma.data = torch.Tensor([sigma]).to(device=self.sigma.device)
 
+    def eps_out(self, *args, **kwargs):
+        raise NotImplementedError
+
 
 class ANAActivation(ANAModule):
     """Quantize scores."""
@@ -130,6 +135,9 @@ class ANAActivation(ANAModule):
         x_out = x_out * self.eps
 
         return x_out
+
+    def eps_out(self, *args, **kwargs):
+        return self.eps.data
 
 
 class ANALinear(ANAModule):
@@ -188,6 +196,13 @@ class ANALinear(ANAModule):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.linear(input, self.weight_maybe_quant * self.eps, self.bias)
+
+    def eps_out(self, eps_input: Union[float, torch.Tensor]) -> torch.Tensor:
+        if self.bias is not None:
+            eps_out = torch.Tensor([float('nan')])
+        else:
+            eps_out = eps_input * self.eps.data
+        return eps_out
 
 
 class _ANAConvNd(ANAModule):
@@ -259,6 +274,13 @@ class _ANAConvNd(ANAModule):
         weight = self.ana_op(weight, self.quant_levels, self.thresholds,
                              self.mi, self.sigma, self.strategy, self.training)
         return weight
+
+    def eps_out(self, eps_input: Union[float, torch.Tensor]):
+        if self.bias is not None:
+            eps_out = torch.Tensor([float('nan')])
+        else:
+            eps_out = eps_input * self.eps.data
+        return eps_out
 
 
 class ANAConv1d(_ANAConvNd):
@@ -349,3 +371,6 @@ class ANAConv3d(_ANAConvNd):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.conv3d(input, self.weight_maybe_quant * self.eps, self.bias,
                         self.stride, self.padding, self.dilation, self.groups)
+
+
+ANAClasses = [ANAActivation, ANALinear, ANAConv1d, ANAConv2d, ANAConv3d]

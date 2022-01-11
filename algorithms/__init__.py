@@ -34,3 +34,6 @@ __all__ = [
     'pact'
 ]
 
+QLModules = {
+    'ANA': ana.ANAClasses,
+}
