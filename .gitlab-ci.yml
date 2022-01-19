@@ -1,0 +1,6 @@
+image: python:latest
+
+test-qrange:
+  stage: test
+  script:
+    - python -m unittest newquant/test.py
