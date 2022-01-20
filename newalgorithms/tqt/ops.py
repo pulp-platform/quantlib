@@ -7,7 +7,7 @@ from quantlib.newquant import resolve_quantspec
 from quantlib.newalgorithms.qbase import QATActivation, QATLinear
 
 
-class PACTActivation(QATActivation):
+class TQTActivation(QATActivation):
 
     def __init__(self,
                  quantspec: Union[Tuple[int, ...], Dict[str, int], str],
