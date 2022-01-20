@@ -35,21 +35,36 @@ class QuantSpecResolverTest(unittest.TestCase):
     def test_dictquantspec(self):
         """Test dictionary-based (compact) specifications."""
 
-        # wrong step
-        dict_ = {'n_levels': 16, 'offset': -2, 'step': 0}
+        # number of levels, unsupported key
+        dict_ = {'n_levels': 16, 'offset': -2, 'step': 2}
         self.assertRaises(ValueError, lambda: resolve_quantspec(dict_))
 
-        # number of levels, offset, implicit step
+        # number of levels, offset
         dict_ = {'n_levels': 16, 'offset': -2}
         q = resolve_quantspec(dict_)
         self.assertTrue(set(range(-2, -2 + 1 * 16, 1)) == set(q.range))
 
-        # number of levels, offset, explicit step
-        dict_ = {'n_levels': 16, 'offset': -2, 'step': 4}
+        # even number of levels, signedness (sub-range of signed int)
+        dict_ = {'n_levels': 16, 'signed': True}
         q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(-2, -2 + 4 * 16, 4)) == set(q.range))
+        self.assertTrue(set(range(-8, -8 + 16, 1)) == set(q.range))
 
-        # bitwidth, unsupported step
+        # odd number of levels, signedness (sub-range of signed "limp" int)
+        dict_ = {'n_levels': 15, 'signed': True}
+        q = resolve_quantspec(dict_)
+        self.assertTrue(set(range(-7, -7 + 15, 1)) == set(q.range))
+
+        # even number of levels, signedness (sub-range of unsigned int)
+        dict_ = {'n_levels': 16, 'signed': False}
+        q = resolve_quantspec(dict_)
+        self.assertTrue(set(range(0, 16, 1)) == set(q.range))
+
+        # odd number of levels, signedness (sub-range of unsigned "limp" int)
+        dict_ = {'n_levels': 15, 'signed': False}
+        q = resolve_quantspec(dict_)
+        self.assertTrue(set(range(0, 15, 1)) == set(q.range))
+
+        # bitwidth, unsupported key
         dict_ = {'bitwdith': 4, 'offset': -10, 'step': 4}
         self.assertRaises(ValueError, lambda: resolve_quantspec(dict_))
 
@@ -68,7 +83,7 @@ class QuantSpecResolverTest(unittest.TestCase):
         q = resolve_quantspec(dict_)
         self.assertTrue(set(range(0, 2 ** 4, 1)) == set(q.range))
 
-        # limp bitwidth, unsupported step
+        # limp bitwidth, unsupported key
         dict_ = {'limpbitwidth': 3, 'offset': 5, 'step': 3}
         self.assertRaises(ValueError, lambda: resolve_quantspec(dict_))
 
@@ -77,12 +92,12 @@ class QuantSpecResolverTest(unittest.TestCase):
         q = resolve_quantspec(dict_)
         self.assertTrue(set(range(5, 5 + 2 ** 3 - 1, 1)) == set(q.range))
 
-        # limp bitwidth, signedness (signed)
+        # limp bitwidth, signedness (signed "limp" int)
         dict_ = {'limpbitwidth': 3, 'signed': True}
         q = resolve_quantspec(dict_)
         self.assertTrue(set(range(- 2 ** (3 - 1) + 1, 2 ** (3 - 1), 1)) == set(q.range))
 
-        # limp bitwidth, signedness (unsigned)
+        # limp bitwidth, signedness (unsigned "limp" int)
         dict_ = {'limpbitwidth': 3, 'signed': False}
         q = resolve_quantspec(dict_)
         self.assertTrue(set(range(0, 2 ** 3 - 1, 1)) == set(q.range))

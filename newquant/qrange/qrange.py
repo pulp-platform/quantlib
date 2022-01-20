@@ -82,10 +82,13 @@ def resolve_quantspec(quantspec: Union[Tuple[int, ...], Dict[str, int], str]) ->
 
     * Explicit enumerations in the form of tuples of integers: such tuples can
       be passed not sorted, but once sorted their components must be
-      equally-spaced.
+      equally-spaced. This format must be used to express ranges with
+      spacing steps greater than one.
     * Compact dictionary-based specifications. I allow for several formats:
       * by specifying the number of levels (a positive integer greater than
         one) and an integer offset;
+      * by specifying the number of levels (a positive integer greater than
+        one) and the signedness (a Boolean);
       * by specifying the bitwidth (a positive integer) and and integer
         offset;
       * by specifying the bitwidth (a positive integer) and the signedness (a
@@ -95,10 +98,15 @@ def resolve_quantspec(quantspec: Union[Tuple[int, ...], Dict[str, int], str]) ->
       * by specifying the "limp" bitwidth (a positive integer greater than
         one) and the signedness (a Boolean); this is the suggested way to
         specify "limp" UINTX and "limp" INTX formats.
-      The first format is the most general, and works even when the spacing
-      step specified is greater then one. It is not necessary to specify the
-      step in any of the formats, and if it's omitted it is set to one by
-      default.
+      The first sub-format is a superset of the second; the third is a
+      superset of the fourth; the fifth is a superset of the sixth.
+      The first sub-format is a superset of both the third and the fifth:
+      when the number of levels is an exact power-of-two, the specification is
+      equivalent to the third one; when it is a power-of-two minus one, it is
+      equivalent to the fifth one. The second sub-format is a superset of both
+      the fourth and the sixth: when the number of levels is an exact
+      power-of-two, the specification is equivalent to the fourth one; when it
+      is a power-of-two minus one, it is equivalent to the sixth one.
     * String-based specifications for two particular formats: ``binary``
       (which creates the range :math:`\{ -1, 1 \}`) and ``ternary`` (which
       creates the range :math:`\{ -1, 0, 1 \}`.
@@ -120,43 +128,38 @@ def resolve_quantspec(quantspec: Union[Tuple[int, ...], Dict[str, int], str]) ->
     elif isinstance(quantspec, dict):
 
         # the keys of the dictionary define the dictionary specification format
-        quantspec_keys = set(quantspec.keys()).difference({'step'})
+        quantspec_keys = set(quantspec.keys())
 
-        step = quantspec['step'] if 'step' in quantspec.keys() else 1
-        if step < 1:
-            raise ValueError(f"[QuantLib] Dictionary QuantSpecs should either not specify a step, or specify a positive step.")
-        elif step == 1:
-            # switch depending on supported dictionary specification formats
+        # when using the dictionary specification format, the step is implicitly set to one
+        step = 1
 
-            if quantspec_keys == {'n_levels', 'offset'}:
-                offset = quantspec['offset']
-                n_levels = quantspec['n_levels']
+        # switch depending on supported dictionary specification formats
+        if quantspec_keys == {'n_levels', 'offset'}:
+            offset = quantspec['offset']
+            n_levels = quantspec['n_levels']
 
-            elif quantspec_keys == {'bitwidth', 'offset'}:
-                offset = quantspec['offset']
-                n_levels = 2 ** quantspec['bitwidth']
+        elif quantspec_keys == {'n_levels', 'signed'}:
+            n_levels = quantspec['n_levels']
+            offset = -((n_levels - 1) // 2 if n_levels % 2 == 1 else n_levels // 2) if quantspec['signed'] else 0
 
-            elif quantspec_keys == {'bitwidth', 'signed'}:
-                offset = - 2 ** (quantspec['bitwidth'] - 1) if quantspec['signed'] else 0
-                n_levels = 2 ** quantspec['bitwidth']
+        elif quantspec_keys == {'bitwidth', 'offset'}:
+            offset = quantspec['offset']
+            n_levels = 2 ** quantspec['bitwidth']
 
-            elif quantspec_keys == {'limpbitwidth', 'offset'}:
-                offset = quantspec['offset']
-                n_levels = 2 ** quantspec['limpbitwidth'] - 1
+        elif quantspec_keys == {'bitwidth', 'signed'}:
+            offset = - 2 ** (quantspec['bitwidth'] - 1) if quantspec['signed'] else 0
+            n_levels = 2 ** quantspec['bitwidth']
 
-            elif quantspec_keys == {'limpbitwidth', 'signed'}:
-                offset = (- 2 ** (quantspec['limpbitwidth'] - 1) + 1) if quantspec['signed'] else 0
-                n_levels = 2 ** quantspec['limpbitwidth'] - 1
+        elif quantspec_keys == {'limpbitwidth', 'offset'}:
+            offset = quantspec['offset']
+            n_levels = 2 ** quantspec['limpbitwidth'] - 1
 
-            else:
-                raise ValueError(f"[QuantLib] Dictionary QuantSpec with keys {quantspec_keys} is not supported.")
+        elif quantspec_keys == {'limpbitwidth', 'signed'}:
+            offset = (- 2 ** (quantspec['limpbitwidth'] - 1) + 1) if quantspec['signed'] else 0
+            n_levels = 2 ** quantspec['limpbitwidth'] - 1
 
         else:
-            if quantspec_keys == {'n_levels', 'offset'}:
-                offset = quantspec['offset']
-                n_levels = quantspec['n_levels']
-            else:
-                raise ValueError(f"[QuantLib] Dictionary QuantSpecs specifying a step greater than one can only be expressed in the number-of-levels and offset format.")
+            raise ValueError(f"[QuantLib] Dictionary QuantSpec with keys {quantspec_keys} is not supported.")
 
     # string spec? ('binary' or 'ternary')
     elif isinstance(quantspec, str):
