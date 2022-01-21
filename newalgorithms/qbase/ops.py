@@ -15,16 +15,10 @@ non-linear ones and the identity).
 """
 
 
-import enum
 import dataclasses
 import torch
 import torch.nn as nn
-
-
-@enum.unique
-class QGranularity(enum.Enum):
-    PER_LAYER = 0
-    PER_CHANNEL = 1
+from typing import Union
 
 
 @dataclasses.dataclass
@@ -107,6 +101,27 @@ class QATActivation(nn.Module):
     def stop_tracking(self) -> None:
         self._is_tracking = False
         self._qstatistics = None
+
+    def init_clipping_bounds(self,
+                             statistics_aware: bool = False,
+                             statistics_aware_strategy: Union[None, str] = None):
+
+        if statistics_aware:
+            if self._qstatistics is None:
+                raise ValueError("[QuantLab] QActivation can't initialise clipping bounds from statistics without statistics!")
+            else:
+                if statistics_aware_strategy is None:
+                    raise ValueError("[QuantLab] QActivation can't initialise clipping bounds from statistics without a strategy!")
+                else:
+                    if statistics_aware_strategy == 'max':  # look at the minimum and maximum value observed
+                        clip_lo, clip_hi = self._qstatistics.min, self._qstatistics.max
+                    elif statistics_aware_strategy == 'dist':  # look at the distribution
+                        n_std = 3
+                        clip_lo = self._qstatistics.mean - n_std * torch.sqrt(self._qstatistics.var)
+                        clip_hi = self._qstatistics.mean + n_std * torch.sqrt(self._qstatistics.var)
+        else:
+            clip_lo = torch.Tensor([-1.0])
+            clip_hi = torch.Tensor([1.0])
 
     @property
     def is_quantising(self) -> bool:

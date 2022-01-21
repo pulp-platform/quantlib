@@ -1,1 +1,1 @@
-from qbase import QATActivation, QATLinear
+from . import qbase
