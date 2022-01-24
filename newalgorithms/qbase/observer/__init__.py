@@ -1,2 +1,1 @@
-from .qobserver import QUnquantisedObserver
-from .qobserver import QUnquantisedBounds
+from .qobserver import MinMaxMeanVarObserver
