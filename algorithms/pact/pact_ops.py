@@ -473,11 +473,15 @@ class _PACTLinOp:
         """
         return self.get_eps_w()*eps_in
 
+    @property
+    def pact_repr_str(self):
+        return f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
+
     def extra_repr(self):
         # this might be a little bit dangerous - always inherit from the
         # nn.Module you're extending FIRST and PACTLinOp SECOND
         r = super(self.__class__, self).extra_repr()
-        r += f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
+        r += self.pact_repr_str
         return r
 
     @property

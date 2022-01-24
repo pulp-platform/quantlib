@@ -29,13 +29,44 @@ from torch.nn import functional as F
 from .pass_base import FxPass, SequentialPass, ModifySequentialPatternPass, ModularizePass
 from ..util import module_of_node, get_qualified_prefix
 
+from quantlib.algorithms.pact import PACTConv2d, PACTLinear
+#TODO refactor ops into PACT??
+from quantlib.algorithms.bb import BBConv2d, BBLinear
+
 __all__ = ['MergeConvBNPass',
            'ModularizeActivationsPass',
            'RetracePass',
            'InsertModuleAfterNodePass',
            'InsertModuleBetweenNodesPass',
            'InsertModuleBetweenModulesPass',
-           'ShapePropPass']
+           'ShapePropPass',
+           'CountMACsPass']
+
+
+
+
+def madd_of_conv2d(insize, c):
+    madds_per_pixel = c.kernel_size[0]*c.kernel_size[1]*c.in_channels*c.out_channels//c.groups
+    if isinstance(insize, (torch.Size, tuple, list)):
+        if len(insize) > 2:
+            insize = insize[2:]
+        numel = 1; [numel := numel * el for el in insize]
+        print(numel)
+    elif isinstance(insize, int):
+        numel = insize * insize
+    else:
+        assert False, f"invalid insize argument passed to madd_of_conv2d: {insize}"
+    return madds_per_pixel * numel//(c.stride[0]*c.stride[1])
+def madd_of_lin(_, l):
+    return l.in_features * l.out_features
+
+_MAC_CNT_FNS = {nn.Conv2d : madd_of_conv2d,
+                PACTConv2d : madd_of_conv2d,
+                BBConv2d : madd_of_conv2d,
+                nn.Linear : madd_of_lin,
+                PACTLinear : madd_of_lin,
+                BBLinear : madd_of_lin}
+
 
 def merge_conv_bn_fun(ml : list):
     assert len(ml) == 2, "List passed to merge_conv_bn_fun should have length 2"
@@ -246,4 +277,18 @@ class ShapePropPass(FxPass):
             # you really shouldn't be passing over GraphModules in non-eval
             # state, but you do you!
             gm.train()
+        return gm
+
+class CountMACsPass(FxPass):
+    # annotate each node for which a counting function is defined with the
+    # number of MACs it takes to execute it
+
+    def run_pass(self, gm : fx.GraphModule):
+        for node in gm.graph.nodes:
+            if node.op == 'call_module':
+                m = module_of_node(gm, node)
+                k = type(m)
+                if k in _MAC_CNT_FNS.keys():
+                    shp = node.meta['tensor_meta'].shape
+                    node.meta['macs'] = _MAC_CNT_FNS[k](shp, m)
         return gm

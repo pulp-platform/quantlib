@@ -29,7 +29,7 @@ from quantlib.editing.lightweight import LightweightGraph
 from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat
+from .pact_ops import _PACTActivation, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat
 from .util import assert_param_valid, almost_symm_quant
 
 
@@ -89,7 +89,7 @@ class PACTActController(Controller):
     to `True` and setting the initial clipping values based on the `init_clip` value.
     """
     def __init__(self, modules : list, schedule : dict, verbose : bool = False, init_clip_lo : float = -1., init_clip_hi : float = 1.):
-        assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
+        assert all(isinstance(m, _PACTActivation) for m in modules), "Non-activation modules passed to PACTActController!"
 
         self.modules = modules
         self.schedule = {int(k): v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
