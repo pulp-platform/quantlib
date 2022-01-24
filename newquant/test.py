@@ -1,6 +1,6 @@
 import unittest
 
-from qrange import resolve_quantspec
+from .qrange import resolve_qrangespec
 
 
 class QuantSpecResolverTest(unittest.TestCase):
@@ -8,110 +8,113 @@ class QuantSpecResolverTest(unittest.TestCase):
     def test_tuplequantspec(self):
         """Test tuple-based explicit enumerations."""
 
-        # ordered range with step one
-        range_ = (1, 2, 3, 4)
-        q = resolve_quantspec(range_)
-        self.assertTrue(set(range_) == set(q.range))
-
-        # unordered range with step one
-        range_ = (2, 1, 3, 4)
-        q = resolve_quantspec(range_)
-        self.assertTrue(set(range_) == set(q.range))
+        # ordered, non-equally-spaced range
+        tuple_ = (1, 2, 3, 5)
+        self.assertRaises(ValueError, lambda: resolve_qrangespec(tuple_))  # Why am I using a lambda expression here? See here: https://stackoverflow.com/a/6103930
 
         # ordered range with step greater than one
-        range_ = (-4, -2, 0, 2)
-        q = resolve_quantspec(range_)
-        self.assertTrue(set(range_) == set(q.range))
+        tuple_ = (-4, -2, 0, 2)
+        self.assertRaises(ValueError, lambda: resolve_qrangespec(tuple_))
 
-        # unordered range with step greater than one
-        range_ = (-4, -2, 2, 0)
-        q = resolve_quantspec(range_)
-        self.assertTrue(set(range_) == set(q.range))
+        # ordered special range (-1, 1)
+        reference = (-1, 1)
+        tuple_ = reference
+        qrange = resolve_qrangespec(tuple_)
+        self.assertTrue(reference == qrange.range)
 
-        # non-equally-spaced range
-        range_ = (1, 2, 3, 5)
-        self.assertRaises(ValueError, lambda: resolve_quantspec(range_))  # Why am I using a lambda expression here? See here: https://stackoverflow.com/a/6103930
+        # ordered range with step one
+        reference = (1, 2, 3, 4)
+        tuple_ = reference
+        qrange = resolve_qrangespec(tuple_)
+        self.assertTrue(reference == qrange.range)
+
+        # unordered range with step one
+        reference = (1, 2, 3, 4)
+        tuple_ = (2, 1, 3, 4)
+        qrange = resolve_qrangespec(tuple_)
+        self.assertTrue(reference == qrange.range)
 
     def test_dictquantspec(self):
         """Test dictionary-based (compact) specifications."""
 
-        # number of levels, unsupported key
+        # unsupported key
         dict_ = {'n_levels': 16, 'offset': -2, 'step': 2}
-        self.assertRaises(ValueError, lambda: resolve_quantspec(dict_))
+        self.assertRaises(ValueError, lambda: resolve_qrangespec(dict_))
+
+        # ambiguous number of levels specification
+        dict_ = {'n_levels': 16, 'bitwidth': 3, 'offset': -2}
+        self.assertRaises(ValueError, lambda: resolve_qrangespec(dict_))
+
+        # ambiguous offset specification
+        dict_ = {'n_levels': 4, 'offset': -3, 'signed': True}
+        self.assertRaises(ValueError, lambda: resolve_qrangespec(dict_))
 
         # number of levels, offset
+        reference = tuple(range(-2, -2 + 16 * 1, 1))
         dict_ = {'n_levels': 16, 'offset': -2}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(-2, -2 + 1 * 16, 1)) == set(q.range))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
-        # even number of levels, signedness (sub-range of signed int)
+        # number of levels, signedness (sub-range of signed int)
+        reference = tuple(range(-8, -8 + 16 * 1, 1))
         dict_ = {'n_levels': 16, 'signed': True}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(-8, -8 + 16, 1)) == set(q.range))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
-        # odd number of levels, signedness (sub-range of signed "limp" int)
-        dict_ = {'n_levels': 15, 'signed': True}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(-7, -7 + 15, 1)) == set(q.range))
-
-        # even number of levels, signedness (sub-range of unsigned int)
-        dict_ = {'n_levels': 16, 'signed': False}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(0, 16, 1)) == set(q.range))
-
-        # odd number of levels, signedness (sub-range of unsigned "limp" int)
+        # number of levels, signedness (sub-range of unsigned int)
+        reference = tuple(range(0, 0 + 15 * 1, 1))
         dict_ = {'n_levels': 15, 'signed': False}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(0, 15, 1)) == set(q.range))
-
-        # bitwidth, unsupported key
-        dict_ = {'bitwdith': 4, 'offset': -10, 'step': 4}
-        self.assertRaises(ValueError, lambda: resolve_quantspec(dict_))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
         # bitwidth, offset
+        reference = tuple(range(-10, -10 + (2 ** 4) * 1, 1))
         dict_ = {'bitwidth': 4, 'offset': -10}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(-10, -10 + 1 * 2 ** 4, 1)) == set(q.range))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
         # bitwidth, signedness (signed int)
+        reference = tuple(range(-2 ** (4 - 1), -2 ** (4 - 1) + (2 ** 4) * 1, 1))
         dict_ = {'bitwidth': 4, 'signed': True}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(-2 ** (4 - 1), 2 ** (4 - 1), 1)) == set(q.range))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
         # bitwidth, signedness (unsigned int)
+        reference = tuple(range(0, 0 + (2 ** 4) * 1, 1))
         dict_ = {'bitwidth': 4, 'signed': False}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(0, 2 ** 4, 1)) == set(q.range))
-
-        # limp bitwidth, unsupported key
-        dict_ = {'limpbitwidth': 3, 'offset': 5, 'step': 3}
-        self.assertRaises(ValueError, lambda: resolve_quantspec(dict_))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
         # limp bitwidth, offset
+        reference = tuple(range(5, 5 + ((2 ** 3) - 1) * 1, 1))
         dict_ = {'limpbitwidth': 3, 'offset': 5}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(5, 5 + 2 ** 3 - 1, 1)) == set(q.range))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
         # limp bitwidth, signedness (signed "limp" int)
+        reference = tuple(range(-2 ** (3 - 1) + 1, -2 ** (3 - 1) + 1 + ((2 ** 3) - 1) * 1, 1))
         dict_ = {'limpbitwidth': 3, 'signed': True}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(- 2 ** (3 - 1) + 1, 2 ** (3 - 1), 1)) == set(q.range))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
         # limp bitwidth, signedness (unsigned "limp" int)
         dict_ = {'limpbitwidth': 3, 'signed': False}
-        q = resolve_quantspec(dict_)
-        self.assertTrue(set(range(0, 2 ** 3 - 1, 1)) == set(q.range))
+        reference = tuple(range(0, 0 + ((2 ** 3) - 1) * 1, 1))
+        qrange = resolve_qrangespec(dict_)
+        self.assertTrue(reference == qrange.range)
 
     def test_strquantspec(self):
         """Test the string-based (syntactic sugar) specifications."""
 
         # binary range
-        q = resolve_quantspec('binary')
-        self.assertTrue({-1, 1} == set(q.range))
+        reference = (-1, 1)
+        qrange = resolve_qrangespec('binary')
+        self.assertTrue(reference == qrange.range)
 
         # ternary range
-        q = resolve_quantspec('ternary')
-        self.assertTrue({-1, 0, 1} == set(q.range))
+        reference = (-1, 0, 1)
+        qrange = resolve_qrangespec('ternary')
+        self.assertTrue(reference == qrange.range)
 
         # non-supported string
-        self.assertRaises(ValueError, lambda: resolve_quantspec('quaternary'))
+        self.assertRaises(ValueError, lambda: resolve_qrangespec('quaternary'))
