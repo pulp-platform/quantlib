@@ -216,31 +216,35 @@ class QRangeSpec(enum.Enum):
 
 
 def resolve_qrangespec(qrangespec: Union[Tuple[int, ...], Dict[str, int], str]) -> QRange:
-    """A function to disambiguate user specifications of integer ranges.
+    """A function to canonicalise specifications of integer ranges.
 
     During my experience in research on quantised neural networks I have come
-    across of several ways of describing integer ranges.
+    across several ways of describing integer ranges.
 
-    * The ``UINTX`` integer range represents positive integers, and can be
-      specified via the positive integer bitwidth ``X``.
-    * The ``INTX`` integer range represents integers using the two's
-      complement representation and can be specified via the positive integer
-      bitwidth ``X``.
-    * The "limp" ``INTX`` integer range represents integers using the
-      sign-magnitude representation, and can therefore represent one less
-      value than its two's complement counterpart (zero is signed in this
-      representation). In particular, the ternary range :math:`\{ -1, 0, 1 \}`
+    * The ``UINTB`` integer ranges are ranges of consecutive positive integers
+      starting from zero. They can be specified via the positive integer
+      bitwidth :math:`B`.
+    * The ``INTB`` integer ranges are ranges of consecutive integers starting
+      from some negative number. These ranges can be described using the two's
+      complement representation, and can be specified via the positive integer
+      bitwidth :math:`B`.
+    * The "limp" ``INTB`` integer ranges are ranges of consecutive integers
+      starting from some negative number. These ranges can be described in
+      digital arithmetic using the sign-magnitude representation (therefore
+      they can represent one less value than their two's complement
+      counterparts), and can be specified via a positive integer bitwidth
+      :math:`B`. In particular, the ternary range :math:`\{ -1, 0, 1 \}`
       can be represented as "limp" ``INT2``.
-    * Explicit enumerations of consecutive integers starting from an integer
-      offset :math:`z`.
+    * Explicit enumerations of :math:`K` consecutive integers starting from an
+      integer offset :math:`z`.
     * The special sign range :math:`\{ -1, 1 \}`, which differs from both the
-      UINT1 range (:math:`\{ 0, 1 \}`) and the INT1 range (:math:`\{ -1, 0
-      \}`).
+      ``UINT1`` range (:math:`\{ 0, 1 \}`) and the ``INT1`` range (:math:`\{
+      -1, 0 \}`).
 
-    In particular, the integer ranges specified by ``UINTX``, ``INTX`` and
-    "limp" ``INTX`` are just some of all the possible finite integer ranges
-    whose items are spaced by one. Therefore, specifying an integer range
-    using an explicit number of levels and an offset is more general.
+    In particular, the integer ranges specified by ``UINTB``, ``INTB`` and
+    "limp" ``INTB`` are just some of all the possible finite ranges of
+    consecutive integers. Therefore, specifying an integer range using an
+    explicit number of levels and an explicit offset is more general.
 
     However, note also that spaced-by-one integer ranges can always be
     immersed into some digital integer range; for instance, the range
@@ -255,9 +259,9 @@ def resolve_qrangespec(qrangespec: Union[Tuple[int, ...], Dict[str, int], str]) 
       step of one. The only exception to the step constraint is the special
       sign range :math:`\{ -1, 1 \}`.
     * Compact dictionary-based specifications. We allow for several formats,
-      all of which should express a positive number of levels :math:`K` and an
-      integer offset :math:`z`. There are three mutually exclusive ways to
-      specify :math:`K`:
+      all of which should be resolved to a positive number of levels :math:`K`
+      and an integer offset :math:`z`. There are three mutually exclusive ways
+      to specify :math:`K`:
       * an explicit number of levels :math:`K` (``n_levels``, positive
         integer);
       * a bitwidth :math:`B` (``bitwidth``, positive integer), so that
