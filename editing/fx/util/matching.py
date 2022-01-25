@@ -164,4 +164,5 @@ class SequentialMatcher:
 
 
 def get_ordered_active_nodes(m: Match):
+    # TODO: are we assuming that there is just a single output (position -1) and a single input (position 0)?
     return [v for v in m.nodes_map.values()][-2:0:-1]

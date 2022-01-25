@@ -296,10 +296,10 @@ class IntegerizePACTNetPass(SequentialPass):
                  eps_in: Optional[Union[torch.Tensor, float]] = None,
                  D: float = 2**24):
         passes = []
-        # start by retracing the network to dissolve any integer ops
+        # start by retracing the network to dissolve any integer ops  # TODO: does this have anything to do with the harmonised OpTrees? You mean this by "dissolving"?
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
-        # know what shape a node's output has
+        # know what shape a node's output has  # TODO: I see this, but why is this information important? Is it used by subsequent passes? If yes, how?
         passes.append(ShapePropPass(shape_in))
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))

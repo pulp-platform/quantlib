@@ -74,7 +74,11 @@ class PACTOptimizerFactory(
 
                     other_params = [
                         p for p in net.parameters()
-                        if all(p is not pp for pp in learnable_clipping_params)
+                        if all(p is not pp for pp in learnable_clipping_params)  # TODO: it seems that we are looping on the Cartesian product AxB
+                                                                                 #  where A is the set of (learnable) clipping parameters and B is
+                                                                                 #  the collection of all network parameters. This has cost |A||B|,
+                                                                                 #  whereas a simple intersection A \cap B might have lower cost
+                                                                                 #  (apart from being easier to read and understand).
                     ]
 
                     # Note: when the learnable clipping parameters are not used

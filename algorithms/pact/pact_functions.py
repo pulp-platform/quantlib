@@ -201,7 +201,7 @@ class PACTQuantFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # see Hubara et al., Section 2.3
+        # see Hubara et al., Section 2.3  # TODO: which paper from Hubara?
         where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient, clip_lo = ctx.saved_variables
         zero = torch.zeros(1).to(where_input_nonclipped.device)
         if clip_gradient:
@@ -366,7 +366,7 @@ def TQTQuantize(input,
                               rounding)
 
 
-class AlmostSymmQuantFunc(torch.autograd.Function):
+class AlmostSymmQuantFunc(torch.autograd.Function):  # TODO: maybe a simple clip_hi = clip_lo - eps?
     r"""Helper functional which returns an upper clipping bound which is
     'quasy-symmetrical' to the :math: `clip_{lo}` provided. The quantization levels
     generated from the clipping bounds :math: `(clip_{lo}, clip_{hi})` will map to an

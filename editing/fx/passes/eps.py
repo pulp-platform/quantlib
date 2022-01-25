@@ -81,20 +81,27 @@ class AnnotateEpsPass(FxPass):
 
     def __init__(self, eps_in: Optional[Union[torch.Tensor, float]]):
         super(AnnotateEpsPass, self).__init__()
-        if not isinstance(eps_in, torch.Tensor) and eps_in is not None:
-            self.eps_in = torch.tensor(eps_in).reshape(1)
-            self.noeps = False
-        elif eps_in is None:
+
+        # canonicalise user input; TODO: should we automate the inference of this information?
+        if eps_in is None:
             self.eps_in = torch.tensor(1.0).reshape(1)
             self.noeps = True
-        else:
+        elif isinstance(eps_in, torch.Tensor):
             self.eps_in = eps_in.reshape(1)
             self.noeps = False
+        elif isinstance(eps_in, float):
+            self.eps_in = torch.tensor(eps_in).reshape(1)
+            self.noeps = False
+        else:
+            raise TypeError(f"Input type {type(eps_in)} is not supported.")
 
     def run_pass(self, gm: fx.GraphModule):
         modules = gm_modules(gm)
+        # TODO: it seems that the function is relying on the fact that gm.graph.nodes is topologically sorted; is this guaranteed anywhere?
         for node in gm.graph.nodes:
+
             if node.op == 'placeholder':
+
                 node.meta['quant'] = QuantInfo(eps_in=self.eps_in,
                                                eps_out=self.eps_in)
                 for u in node.users:
@@ -103,8 +110,10 @@ class AnnotateEpsPass(FxPass):
                             module_of_node(gm, u), _ORIGINAL_EPS_MODULES
                         ), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
                     #u.meta['quant'] = QuantInfo(eps_in=torch.tensor(1.0), eps_out=torch.tensor(-1.0))
+
             else:
-                arg_eps_ins = [
+
+                args_eps_ins = [
                     i.meta['quant'].eps_out
                     for i in node.args
                     if isinstance(i, fx.Node)
@@ -112,7 +121,7 @@ class AnnotateEpsPass(FxPass):
                 other_args = [
                     i for i in node.args if not isinstance(i, fx.Node)
                 ]
-                kwarg_eps_ins = {
+                kwargs_eps_ins = {
                     k: v.meta['quant'].eps_out
                     for k, v in node.kwargs.items()
                     if isinstance(v, fx.Node)
@@ -124,16 +133,33 @@ class AnnotateEpsPass(FxPass):
                 }
                 conversion_kwargs = copy.copy(other_kwargs)
                 conversion_kwargs.update(other_kwargs)
-                all_eps = arg_eps_ins + [v for v in kwarg_eps_ins.values()]
-                eps_in = [arg_eps_ins, kwarg_eps_ins]
+
+                all_eps = args_eps_ins + [v for v in kwargs_eps_ins.values()]
+                eps_in = [args_eps_ins, kwargs_eps_ins]
+
                 if node.op == 'call_module':
                     m = module_of_node(gm, node)
                     k = type(m)
-                    conversion_args = [m] + arg_eps_ins + other_args
+                    conversion_args = [m] + args_eps_ins + other_args
                 else:
                     assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
-                    conversion_args = arg_eps_ins
+                    conversion_args = args_eps_ins
                     k = f'_{node.op.upper()}_{node.target}'
+
+
+                # TODO: al momento, le uniche chiavi in `_EPS_CONVERSIONS` sono `nn.Module`s;
+                #   dunque, la `try clause` del costrutto sotto funziona solo per un sottoinsieme
+                #   dell'`if clause` del costrutto sopra.
+                #   Piu' formalmente: sia A l'insieme dei nodi del grafo di tipo `call_module`,
+                #   e sia B l'insieme dei nodi del grafo di tipo non-`call_module`. La `try clause`
+                #   del costrutto sotto agisce solo su nodi S \subseteq A; anzi, in molti casi varra'
+                #   la relazione stretta S \subset A, poiche' l'insieme degli `nn.Module`s che
+                #   appaiono tra le chiavi di `_EPS_CONVERSIONS` non e' una lista esaustiva di
+                #   tutte le classi `nn.Module`.
+                #
+                #   In breve: la `except clause` del costrutto sotto copre TUTTI i casi della
+                #   `else clause` del costrutto sopra, piu' alcuni sottocasi trattati dalla
+                #   `if clause`.
                 try:
                     eps_out = _EPS_CONVERSIONS[k](*conversion_args,
                                                   **conversion_kwargs)
@@ -144,12 +170,19 @@ class AnnotateEpsPass(FxPass):
                         for e1, e2 in zip(all_eps[:-1], all_eps[1:])
                     ]
                     assert all(d < 1e-8 for d in eps_diffs)
+                    # TODO: shouldn't we check that all inputs' quanta are within a given tolerance from each other?
+                    #  This "chained" verification is linear but incurs the risk to propagate when the number of inputs is large.
+                    #  Although it's reasonable to assume that the number of inputs will be sufficiently small to avoid that this
+                    #  hazard turns into a real problem (the maximum difference is bounded by `N x tol`), the algorithmic cost
+                    #  incurred for transitioning from `N - 1` comparisons (linear) to the more exhaustive `N x (N - 1) / 2`
+                    #  pairwise comparisons (quadratic) should also be negligible (and more fomally correct).
                     print(
                         f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!"
                     )
                     eps_out = all_eps[0]
 
                 node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out)
+
         return gm
 
 

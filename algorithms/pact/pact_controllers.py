@@ -101,12 +101,16 @@ class PACTActController(Controller):
             for k, v in schedule.items()
         }
         self.verbose = verbose
+        self.frozen = False
+
+        # TODO: initialisation (manually chosen, which is != constant to (-1.0, 1.0) [default])
         self.init_clip_lo = init_clip_lo
         self.init_clip_hi = init_clip_hi
-        self.frozen = False
 
     def step_pre_training_batch(self, *args, **kwargs):
         for m in self.modules:
+            # TODO: the parameters stored by a module should not be changed by anything but a PyTorch optimizer!
+            #  this is violating the single responsibility principle.
             if m.tqt:
                 max_val = (2**m.log_t.data.clone().detach())
                 if isinstance(m, PACTUnsignedAct):
@@ -129,9 +133,16 @@ class PACTActController(Controller):
 
         if epoch in self.schedule.keys():
             cur_cmds = self.schedule[epoch]
-            if not isinstance(cur_cmds, list):
+            if not isinstance(cur_cmds, list):  # TODO: this kind of input canonicalisation should not be done at each
+                                                #  epoch, but instead just once when the data structure defined by a
+                                                #  human user is read
                 cur_cmds = [cur_cmds]
             for cmd in cur_cmds:
+                #  - verbose [on/off] (2 commands): to print what's happening to the console
+                #  - freeze/thaw (2 commands): to disable/enable learning of the thresholding parameters
+                #  - start/stop (2 commands): transitioning from the "floating-point mode" of the FQ modules to the "fake-quantised mode" of the FQ modules, and viceversa
+                #       QUESTION: why should a user want to stop quantisation and re-enable the "floating-point mode"?
+
                 self.log("Epoch {} - running command {}".format(epoch, cmd))
                 if cmd == 'verbose_on':
                     self.verbose = True
@@ -178,9 +189,12 @@ class PACTActController(Controller):
     def reset_clip_bounds(self,
                           m: Union[PACTUnsignedAct, PACTAsymmetricAct],
                           method: str = None):
+
         if not method:
             method = m.init_clip
+
         if method == 'max':
+            # TODO: m.min and m.max are obseved statistics
             max_val = m.max.data
             try:
                 if m.symm:
@@ -192,14 +206,19 @@ class PACTActController(Controller):
                 # we don't need 'min_val' if m does not have the 'symm' attribute because in that case
                 # it's not an asymmetric activation
                 pass
+
         elif method == 'const':
             for p in m.clipping_params.values():
                 max_val = torch.ones_like(p.data) * self.init_clip_hi
                 min_val = torch.ones_like(p.data) * self.init_clip_lo
                 break
+
         else:  # method == 'std'
+            # TODO: m.running_mean and m.running_var are observed statistics
+            #       m.nb_std is used just in this case
             max_val = m.running_mean.data + m.nb_std * torch.sqrt(
-                m.running_var.data)
+                m.running_var.data)  # TODO: who guarantees that the absolute value of this number is greater than that of
+                                     #  m.running_mean.data - m.nb_std * torch.sqrt(m.running_var.data)?
             try:
                 if m.symm:
                     min_val, max_val = almost_symm_quant(max_val, m.n_levels)
@@ -271,9 +290,13 @@ class PACTLinearController(Controller):
                  init_clip_lo: float = -1.,
                  init_clip_hi: float = 1.,
                  update_every: str = 'batch'):
+
         assert_param_valid(self, update_every, 'update_every',
                            ['batch', 'epoch'])
+        self.update_every = update_every
+
         super(PACTLinearController, self).__init__()
+
         self.modules = modules
         self.schedule = {
             int(k):
@@ -281,10 +304,10 @@ class PACTLinearController(Controller):
             for k, v in schedule.items()
         }
         self.verbose = verbose
+        self.frozen = False
+
         self.init_clip_lo = init_clip_lo
         self.init_clip_hi = init_clip_hi
-        self.frozen = False
-        self.update_every = update_every
 
     def step_pre_training_batch(self, *args, **kwargs):
         if self.update_every == 'batch':
@@ -299,28 +322,35 @@ class PACTLinearController(Controller):
         with torch.no_grad():
             for m in self.modules:
                 if (not m.frozen) and m.started:
-                    if not m.learn_clip or m.tqt:
+                    if m.tqt:
                         self.reset_clip_bounds(m, m.init_clip, init=False)
-                    # if 'learn_clip' is True and 'symm_wts' is also True, we learn the lower clip bound and set the upper
-                    # one automatically with a function equivalent to 'almost_symm_quant'. This is performed in the
-                    # conv/linear module itself to ensure proper gradient propagation (???).
-                    # However, we also update the upper clipping bound for layers where 'symm_wts' and 'learn_clip'
-                    # here so it reflects the value that is used in forward propagation.
-                    elif m.learn_clip and m.symm_wts and not m.tqt:
-                        # if we learn symmetric weight bounds, it can happen
-                        # that the lower bound is pushed past 0. In this step,
-                        # we make sure that the lower bound stays smaller or
-                        # equal to zero.
-                        if torch.any(m.clip_lo.data > 0):
-                            self.log("Found a clip_lo that was >0: {}".format(
-                                m.clip_lo.data))
-                            self.log("Clamping to -0.01!")
-                        m.clip_lo.data = torch.minimum(
-                            torch.zeros_like(m.clip_lo.data) - 0.01,
-                            m.clip_lo.data)
-                        _, max_val = almost_symm_quant(-m.clip_lo.data,
-                                                       m.n_levels)
-                        m.clip_hi.data = max_val
+                    else:
+                        if not m.learn_clip:
+                            self.reset_clip_bounds(m, m.init_clip, init=False)
+                        else:
+                            if m.symm_wts:
+                    # if not m.learn_clip or m.tqt:
+                    #     self.reset_clip_bounds(m, m.init_clip, init=False)
+                    # # if 'learn_clip' is True and 'symm_wts' is also True, we learn the lower clip bound and set the upper
+                    # # one automatically with a function equivalent to 'almost_symm_quant'. This is performed in the
+                    # # conv/linear module itself to ensure proper gradient propagation (???).
+                    # # However, we also update the upper clipping bound for layers where 'symm_wts' and 'learn_clip'
+                    # # here so it reflects the value that is used in forward propagation.
+                    # elif m.learn_clip and m.symm_wts and not m.tqt:
+                    #     # if we learn symmetric weight bounds, it can happen
+                    #     # that the lower bound is pushed past 0. In this step,
+                    #     # we make sure that the lower bound stays smaller or
+                    #     # equal to zero.
+                                if torch.any(m.clip_lo.data > 0):
+                                    self.log("Found a clip_lo that was >0: {}".format(
+                                        m.clip_lo.data))
+                                    self.log("Clamping to -0.01!")
+                                m.clip_lo.data = torch.minimum(
+                                    torch.zeros_like(m.clip_lo.data) - 0.01,
+                                    m.clip_lo.data)
+                                _, max_val = almost_symm_quant(-m.clip_lo.data,
+                                                               m.n_levels)
+                                m.clip_hi.data = max_val
 
     def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
         # keep track of whether we already performed update_clip_params
@@ -350,7 +380,7 @@ class PACTLinearController(Controller):
                     #NOTE: this does not work as intended when using stateful
                     #optimizers such as Adam. The parameters will not stay
                     #frozen because the optimizer still applies momentum...
-                    for m in self.modules:
+                    for m in self.modules:  # TODO: a `freeze` method for each module would increase readability
                         for b in m.clipping_params.values():
                             b.requires_grad = False
                             b.grad = None
@@ -359,13 +389,13 @@ class PACTLinearController(Controller):
                     do_update = False
 
                 elif cmd == 'thaw':
-                    for m in self.modules:
+                    for m in self.modules:  # TODO: a `thaw` method for each module would increase readability
                         for k, b in m.clipping_params.items():
                             # if symm_wts is True, the upper bound is not learned but inferred from the lower bound.
                             b.requires_grad = m.learn_clip and not (
                                 k == 'high' and m.symm_wts) and not (
                                     k in ['low', 'high'] and m.tqt)
-                        m.frozen &= False
+                        m.frozen &= False  # I guess this is to avoid explicitly creating a torch.Tensor([False])
                     self.frozen = False
 
                 else:
@@ -397,7 +427,8 @@ class PACTLinearController(Controller):
         else:
             reduce_dims = tuple(range(len(w.shape)))
 
-        if init or not m.tqt:
+        if (not m.tqt) or (m.tqt and init):
+
             if method == 'max':
                 if m.symm_wts:
                     max_val = torch.amax(w.abs(), dim=reduce_dims)
@@ -406,6 +437,7 @@ class PACTLinearController(Controller):
                 else:
                     max_val = torch.amax(w, dim=reduce_dims)
                     min_val = torch.amin(w, dim=reduce_dims)
+
             elif method == 'std':
                 max_val = w.mean(
                     dim=reduce_dims) + w.std(dim=reduce_dims) * m.nb_std
@@ -445,19 +477,23 @@ class PACTLinearController(Controller):
                                                min_val), torch.where(
                                                    alpha < 0, max_val_mm,
                                                    max_val)
-            else:  # method == 'const'
+
+            else:  # TODO: this is constant, but different from the default initialisation (which is the specific case (-1.0, 1.0))
                 min_val = torch.ones_like(m.clip_lo.data) * self.init_clip_lo
                 max_val = torch.ones_like(m.clip_hi.data) * self.init_clip_hi
-        if m.tqt:
-            if init:
+
+        # TODO: IGNORE this for now (i.e., while implementing PACT)
+        if m.tqt and init:
                 # we already found the initial min_val and max_val, so we just
                 # initialize the log_t parameter
                 m.log_t.data.copy_(m.expand_bounds(torch.log2(-min_val)))
-            else:
+        elif m.tqt and not init:
                 # log_t is being learned, so update clip_lo and clip_hi to
                 # almost_symm_quant(2**log_t)
                 min_val, max_val = almost_symm_quant(
                     2**m.log_t.clone().detach(), m.n_levels)
+        else:
+            pass
 
         m.clip_hi.data = m.expand_bounds(max_val)
         m.clip_lo.data = m.expand_bounds(min_val)
@@ -474,7 +510,7 @@ class PACTLinearController(Controller):
             self.verbose = state_dict['verbose']
 
             if state_dict['frozen']:
-                for m in self.modules:
+                for m in self.modules:  # TODO: again a `freeze` module method would increase readability
                     for p in m.clipping_params.values():
                         p.requires_grad = False
                         p.grad = None

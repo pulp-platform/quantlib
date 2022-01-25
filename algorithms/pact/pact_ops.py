@@ -111,16 +111,25 @@ class _PACTActivation(nn.Module):
         :param signed:    True if this is a signed activation. The classes `PACTUnsignedActivation` and `PACTAsymmetricActivation
         """
         super(_PACTActivation, self).__init__()
+
+        # TODO: inherited module properties
         act_kind = act_kind.lower()
-        init_clip = init_clip.lower()
         assert_param_valid(self, act_kind, 'act_kind',
                            ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
+        self.act_kind = act_kind
+        self.leaky = leaky
+
+        # TODO: automatic initialisation of clipping bounds
+        init_clip = init_clip.lower()
         assert_param_valid(self, init_clip, 'init_clip',
                            ['max', 'std', 'const'])
+        self.init_clip = init_clip
+        self.nb_std = nb_std        # TODO: TensorObserver downstream
 
+        # TODO: IGNORE this for now (i.e., while implementing PACT)
         self.tqt = tqt
-        self.n_levels = n_levels
 
+        # TODO: clipping parameters
         self.clip_hi = torch.nn.Parameter(
             torch.Tensor((1.,)),
             requires_grad=(learn_clip and not symm) and not tqt)
@@ -133,17 +142,16 @@ class _PACTActivation(nn.Module):
             self.clipping_params['low'] = self.clip_lo
         else:
             self.register_buffer('clip_lo', torch.zeros(1))
+        self.learn_clip = learn_clip  # TODO: this should be retrieved as a property, since it's not used again afterwards (`return self.clip_lo.requires_grad`)
 
-        self.learn_clip = learn_clip
-        self.act_kind = act_kind
-        self.leaky = leaky
-        self.init_clip = init_clip
-        self.nb_std = nb_std
-        self.symm = symm
+        self.n_levels = n_levels    # TODO: QRange
+        self.symm = symm            # TODO: QRange
+        self.signed = signed        # TODO: QRange
+
         self.register_buffer('noisy', torch.tensor(noisy))
         self.rounding = rounding
-        self.signed = signed
 
+        # TODO: IGNORE this paragraph for now (i.e., while implementing PACT)
         if tqt:
             assert (
                 not noisy and learn_clip and symm
@@ -164,16 +172,17 @@ class _PACTActivation(nn.Module):
         self.register_buffer('started', torch.tensor(False))
 
         # these are only used to gather statistics
-        self.max = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data),
+        self.max = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data),  # TODO: TensorObserver
                                       requires_grad=False)
-        self.min = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data),
+        self.min = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data),  # TODO: TensorObserver
                                       requires_grad=False)
-        self.running_mean = torch.nn.Parameter(torch.zeros_like(
+        self.running_mean = torch.nn.Parameter(torch.zeros_like(            # TODO: TensorObserver
             self.clip_hi.data),
                                                requires_grad=False)
-        self.running_var = torch.nn.Parameter(torch.ones_like(
+        self.running_var = torch.nn.Parameter(torch.ones_like(              # TODO: TensorObserver
             self.clip_hi.data),
                                               requires_grad=False)
+
         self.register_buffer('clip_gradient', torch.tensor(True))
 
     def get_eps(self, *args):
@@ -235,7 +244,7 @@ class PACTUnsignedAct(_PACTActivation):
     r"""PACT/TQT activation for unsigned outputs - lower clipping bound is fixed to 0.
     This class is intended to replace ReLU(6), etc. activations in quantized networks.
     Before it's 'started', this layer will collect statistics."""
-
+    # TODO: 'symm' makes no senses in this case (it is set to True, to control the logic, though...)
     def __init__(self, *args, **kwargs):
         super(PACTUnsignedAct, self).__init__(*args, **kwargs, signed=False)
 
@@ -438,7 +447,7 @@ class _PACTLinOp:
                            tqt_clip_grad: bool = True):
         """
         :param n_levels: Number of weight quantization levels
-        :param quantize: how to quantize weights - 'per_layer' or 'per_channel'
+                                       :param quantize: how to quantize weights - 'per_layer' or 'per_channel'
         :param init_clip: how weight clipping parameters should be initialized - 'sawb_symm', 'sawb_asymm', 'max' or 'std'
         :param learn_clip: whether clipping bound(s) should be learned
         :param symm_wts: Indicates that the weights should cover a symmetrical range around 0. If n_levels is an odd number,
@@ -504,6 +513,10 @@ class _PACTLinOp:
         # this member indicates that the module's clipping bounds should not be
         # touched. it is set by the controller
         self.register_buffer('frozen', torch.tensor(False))
+
+    # TODO: agreed with Georg on 20.1.2022
+    def expand_bounds(self, c: torch.Tensor):
+        raise NotImplementedError
 
     def get_eps_w(self):
         """
