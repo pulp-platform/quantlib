@@ -84,10 +84,6 @@ class QRange(object):
         return self._step
 
     @property
-    def is_sign_range(self) -> int:
-        return self.range == (-1, 1)
-
-    @property
     def min(self) -> int:
         return self.range[0]
 
@@ -96,11 +92,15 @@ class QRange(object):
         return self.range[-1]
 
     @property
-    def is_unsigned(self):
+    def is_sign_range(self) -> bool:
+        return self.range == (-1, 1)
+
+    @property
+    def is_unsigned(self) -> bool:
         return (not self.is_sign_range) and (self.min == 0)
 
     @property
-    def is_quasisymmetric(self):
+    def is_quasisymmetric(self) -> bool:
         return (not self.is_sign_range) and (abs(self.max) - abs(self.min) == -1)
 
     @property
