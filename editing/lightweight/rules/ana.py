@@ -4,7 +4,7 @@
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
 # 
-# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# Copyright (c) 2020-2022 ETH Zurich. All rights reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,6 +72,17 @@ def replace_conv2d_anaconv2d(module:         nn.Module,
                             bias=module.bias)
 
 
+def replace_bn2d_bn2d_anaact(module:         nn.Module,
+                             quantizer_spec: dict,
+                             noise_type:     str,
+                             strategy:       str) -> nn.Module:
+
+    assert isinstance(module, nn.BatchNorm2d)
+
+    return nn.Sequential(module,
+                         qa.ana.ANAActivation(quantizer_spec=quantizer_spec, noise_type=noise_type, strategy=strategy))
+
+
 class ReplaceReLUANAActivationRule(LightweightRule):
 
     def __init__(self,
@@ -107,3 +118,14 @@ class ReplaceConv2dANAConv2dRule(LightweightRule):
         replacement_fun = partial(replace_conv2d_anaconv2d, quantizer_spec=quantizer_spec, noise_type=noise_type, strategy=strategy)
         super(ReplaceConv2dANAConv2dRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
 
+
+class ReplaceBN2dBN2dANAActivationRule(LightweightRule):
+
+    def __init__(self,
+                 filter_:        Filter,
+                 quantizer_spec: dict,
+                 noise_type:     str,
+                 strategy:       str):
+
+        replacement_fun = partial(replace_bn2d_bn2d_anaact, quantizer_spec=quantizer_spec, noise_type=noise_type, strategy=strategy)
+        super(ReplaceBN2dBN2dANAActivationRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
