@@ -34,15 +34,15 @@ class BBOptimizerFactory(object):
                                            **opt_kwargs)
                     self.adam = Adam(params=gate_parameters, lr=gate_lr)
 
-                def __getstate__(self):
+                def state_dict(self):
                     state = {}
-                    state["base_optimizer"] = base_opt_type.__getstate__(self)
-                    state["adam"] = self.adam.__getstate__()
+                    state['base_optimizer'] =  base_opt_type.state_dict(self)
+                    state['adam'] = self.adam.state_dict()
                     return state
 
-                def __setstate__(self, state):
-                    base_opt_type.__setstate__(self, state["base_optimizer"])
-                    self.adam.__setstate__(state["adam"])
+                def load_state_dict(self, state_dict):
+                    base_opt_type.load_state_dict(self, state_dict['base_optimizer'])
+                    self.adam.load_state_dict(state_dict['adam'])
 
                 def step(self, closure=None):
                     base_opt_type.step(self, closure=closure)

@@ -51,7 +51,7 @@ def madd_of_conv2d(insize, c):
         if len(insize) > 2:
             insize = insize[2:]
         numel = 1; [numel := numel * el for el in insize]
-        print(numel)
+        #print(numel)
     elif isinstance(insize, int):
         numel = insize * insize
     else:
@@ -138,7 +138,7 @@ class ModularizeActivationsPass(ModularizePass):
             module_inst_kwargs['inplace'] = True
         module_call_args = node.args[0:1]
         module_call_kwargs = {k:v for k,v in node.kwargs.items() if k == 'input'}
-        module_class = self.act_function_to_module[node.target]
+        module_class = ModularizeActivationsPass.act_function_to_module[node.target]
         return (module_class(*module_inst_args, **module_inst_kwargs), module_call_args, module_call_kwargs)
 
     def __init__(self):

@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from quantlib.algorithms.bb.bb_functions import BBQuantize, BBQuantizeTestTime, bb_ccdf
+from quantlib.algorithms.bb.bb_functions import BBQuantize, BBQuantizeTestTime, bb_ccdf, bb_cdf
 from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.pact.pact_ops import _PACTActivation
 __all__ = ["_BB_CLASSES",
@@ -67,6 +67,16 @@ class BBConv2d(PACTConv2d):
         r += self.pact_repr_str
         return r
 
+    def get_n_levels(self):
+        gates = torch.cat((torch.tensor([True], device=self.bb_gates.device),  bb_cdf(torch.zeros([], device=self.bb_gates.device), self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T) < 0.34))
+
+        for i, g in enumerate(gates):
+            if g:
+                n_levels = int(2**self.precs[i])
+            else:
+                break
+        return n_levels
+
 
 class BBLinear(PACTLinear):
     def __init__(self,
@@ -122,6 +132,16 @@ class BBLinear(PACTLinear):
         r += self.pact_repr_str
         return r
 
+    def get_n_levels(self):
+        gates = torch.cat((torch.tensor([True], device=self.bb_gates.device),  bb_cdf(torch.zeros([], device=self.bb_gates.device), self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T) < 0.34))
+
+        for i, g in enumerate(gates):
+            if g:
+                n_levels = int(2**self.precs[i])
+            else:
+                break
+        return n_levels
+
 class BBAct(_PACTActivation):
     def __init__(self,
                  precs,
@@ -176,6 +196,16 @@ class BBAct(_PACTActivation):
         r = super(BBAct, self).extra_repr()
         r += f", precs={self.precs}, hc_stretch={self.hc_stretch}, hc_T={self.hc_T}"
         return r
+
+    def get_n_levels(self):
+        gates = torch.cat((torch.tensor([True], device=self.bb_gates.device),  bb_cdf(torch.zeros([], device=self.bb_gates.device), self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T) < 0.34))
+
+        for i, g in enumerate(gates):
+            if g:
+                n_levels = int(2**self.precs[i])
+            else:
+                break
+        return n_levels
 
 
 _BB_CLASSES = [BBAct,

@@ -37,48 +37,7 @@ _ACT_DEF_ARGS.update({"act_kind": "relu",
 
 
 
-class BBAttachControllersPass(SequentialPass):
-    def __init__(self, max_macs : Optional[int] = None, macs_dict : Optional[dict] = None):
-        passes = []
-        for p, n in [((BBAct(**_ACT_DEF_ARGS), BBConv2d(**_CONV_DEF_ARGS)), "ACT_CONV2D "), ((BBConv2d(**_CONV_DEF_ARGS),), "CONV2D"), ((BBAct(**_ACT_DEF_ARGS), BBLinear(**_LIN_DEF_ARGS)), "ACT_LINEAR"), ((BBLinear(**_LIN_DEF_ARGS),), "LINEAR")]:
-            pp = nn.Sequential(*p)
-            passes.append(ModifySequentialPatternPass(pp, BB_symbolic_trace, self.attach_controller, f"_QL_ATTACH_BB_CTRL_{n}", get_max_macs=self.get_max_macs, get_macs_dict=self.get_macs_dict))
-        super(BBAttachControllersPass, self).__init__(*passes, name_prefix="_ATTACH_BB_CTRLS_PASS")
-        self.max_macs = max_macs
-        self.macs_dict = macs_dict
-
-    def set_max_macs(self, macs):
-        self.max_macs = macs
-
-    def get_max_macs(self):
-        return self.max_macs
-
-    def set_macs_dict(self, d):
-        self.macs_dict = d
-
-    def get_macs_dict(self):
-        return self.macs_dict
-
-    @staticmethod
-    def attach_controller(modules, get_max_macs, get_macs_dict):
-        act = None
-        conv = modules[0]
-        if len(modules) == 2:
-            # act + conv modules
-            act = modules[0]
-            conv = modules[1]
-
-        macs_dict = get_macs_dict()
-        if "bb_gates" not in dict(conv.named_parameters()):
-            macs = macs_dict[conv]
-            max_macs = get_max_macs()
-            scale_factor = macs/max_macs
-            ctrl = BBGateController(conv, scale_factor)
-
-        if act is not None and "bb_gates" not in dict(act.named_parameters()):
-            ctrl = BBGateController(act, scale_factor)
-
-class BBAttachControllersPassFixed(FxPass):
+class BBAttachControllersPass(FxPass):
 
     # layers which we want to ignore when searching for an activation preceding
     # a linear operator
@@ -92,9 +51,10 @@ class BBAttachControllersPassFixed(FxPass):
                         nn.MaxPool2d,
                         nn.Flatten)
 
-    def __init__(self, max_macs : Optional[int] = None, macs_dict : Optional[dict] = None):
+    def __init__(self, max_macs : Optional[int] = None, macs_dict : Optional[dict] = None, gate_init : float = 2.):
         self.max_macs = max_macs
         self.macs_dict = macs_dict
+        self.gate_init = gate_init
 
     def set_max_macs(self, macs):
         self.max_macs = macs
@@ -127,9 +87,9 @@ class BBAttachControllersPassFixed(FxPass):
                 module = module_of_node(gm, node)
                 if "bb_gates" not in dict(module.named_parameters()):
                     scale_factor = self.macs_dict[module]/self.max_macs
-                    print(f"Scale factor of conv/linear node {node.name}: {scale_factor}")
-                    print(f"Module repr: {module}")
-                    ctrl = BBGateController(module, scale_factor)
+                    #print(f"Scale factor of conv/linear node {node.name}: {scale_factor}")
+                    #print(f"Module repr: {module}")
+                    ctrl = BBGateController(module, scale_factor, self.gate_init)
                     maybe_act = self.find_prev_act(gm, node.all_input_nodes[0])
                     if maybe_act:
                         am = module_of_node(gm, maybe_act)
@@ -139,22 +99,22 @@ class BBAttachControllersPassFixed(FxPass):
                             # that this can lead to scale factors > 1!
                             # this can happen if one activation's output is
                             # used by multiple linear operators
-                            print(f"Scale factor of act node {node.name}: {scale_factor}")
-                            print(f"Module repr: {am}")
+                            #print(f"Scale factor of act node {node.name}: {scale_factor}")
+                            #print(f"Module repr: {am}")
                             am.gate_ctrl.loss_scale += scale_factor
                         else:
-                            actrl = BBGateController(am, scale_factor)
+                            actrl = BBGateController(am, scale_factor, self.gate_init)
         return gm
 
 class BBControllerInitPass(FxPass):
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size]):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], gate_init : float = 2.):
         super(BBControllerInitPass, self).__init__()
         passes = []
         # to know #MACs for each layer we must first know the input shapes for
         # conv layers
         self.register_subpass("shape_prop", ShapePropPass(shape_in))
         self.register_subpass("count_macs", CountMACsPass())
-        self.register_subpass("attach_controllers", BBAttachControllersPassFixed())
+        self.register_subpass("attach_controllers", BBAttachControllersPass())
 
 
 
