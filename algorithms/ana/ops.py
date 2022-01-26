@@ -152,6 +152,7 @@ class ANALinear(ANAModule):
         self.weight.data.random_(to=len(self.thresholds.data))
         self.weight.data = self.thresholds[self.weight.data.to(torch.long)]
         self.weight.data = torch.add(self.weight.data, torch.zeros_like(self.weight.data).uniform_(-stdv, stdv))
+        self.weight.data = self.weight.data * self.eps
 
         # init biases
         if self.bias is not None:
@@ -226,6 +227,7 @@ class _ANAConvNd(ANAModule):
         self.weight.data.random_(to=len(self.thresholds.data))
         self.weight.data = self.thresholds[self.weight.data.to(torch.long)]
         self.weight.data = torch.add(self.weight.data, torch.zeros_like(self.weight.data).uniform_(-stdv, stdv))
+        self.weight.data = self.weight.data * self.eps
 
         # init biases
         if self.bias is not None:
