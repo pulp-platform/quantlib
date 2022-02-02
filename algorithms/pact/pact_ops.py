@@ -64,19 +64,19 @@ class PACTWrapMHSA(nn.Module):
         
         @staticmethod
         def forward(ctx, q,k,v,
-                     wq_weight, wq_bias,
-                     wk_weight, wk_bias, 
-                     wv_weight, wv_bias,
-                     wo_weight, wo_bias,
+                    wq_weight, wq_bias,
+                    wk_weight, wk_bias, 
+                    wv_weight, wv_bias,
+                    wo_weight, wo_bias,
                     wq_requant_mul, wq_requant_div,
-                     wk_requant_mul, wk_requant_div,
-                     wv_requant_mul, wv_requant_div,
+                    wk_requant_mul, wk_requant_div,
+                    wv_requant_mul, wv_requant_div,
                     preattn_requant_mul, preattn_requant_div,
                     postattn_requant_mul, postattn_requant_div,
-                     wo_requant_mul, wo_requant_div,
-                     dim, heads, dim_head,
-                     isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
-                     n_levels):
+                    wo_requant_mul, wo_requant_div,
+                    dim, heads, dim_head,
+                    isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
+                    n_levels):
             return q
 
         
@@ -337,31 +337,6 @@ class PACTIntegerEmbedding(torch.nn.Module):
             out = self.rq(x)
             
         return out
-
-# class PACTHardSigmoid(torch.nn.Module):
-
-#     def __init__(self, n_levels: int = 256):
-#         super().__init__()
-#         self.n_levels = n_levels
-        
-#     def forward(self, x):
-#         """Approximate Softmax implementation according to the I-BERT paper:
-#         https://arxiv.org/abs/2101.01321
-
-#         :param x: 
-#         :returns: 
-#         :rtype: 
-
-#         """
-
-#         xTilde = (x - torch.max(x))
-#         z = torch.floor(-xTilde / math.log(2))
-#         p = xTilde + z * math.log(2)
-#         y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
-#         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-#         out = y/(ysum)
-#         return out
-
     
 class PACTSoftmax(torch.nn.Module):
 
@@ -369,6 +344,34 @@ class PACTSoftmax(torch.nn.Module):
         super().__init__()
         self.n_levels = n_levels
         self.dim = dim
+        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
+        self.register_buffer('log2',  torch.Tensor((1.,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))
+
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns: 
+        :rtype: 
+
+        """
+
+        p = 0
+        #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+        
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+        
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
         
     def forward(self, x):
         """Approximate Softmax implementation according to the I-BERT paper:
@@ -379,6 +382,11 @@ class PACTSoftmax(torch.nn.Module):
         :rtype: 
 
         """
+
+        clip_lo = -torch.abs(torch.max(x))
+        clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+        eps = (clip_hi-clip_lo)/self.n_levels
+
         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
         z = torch.floor(-xTilde / math.log(2))
         p = xTilde + z * math.log(2)
@@ -386,6 +394,20 @@ class PACTSoftmax(torch.nn.Module):
         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
         out = y/(ysum)
         return out
+
+        
+#         self.updateCoeffs(eps)
+
+#         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
+#         # Quantize coeffs
+#         z = torch.floor(-xTilde / self.log2.type_as(x))
+#         p = xTilde + z * self.log2.type_as(x)
+#         y = (self.coeffA.type_as(x)*(p + self.coeffB.type_as(x))**2 + self.coeffC.type_as(x)) / 2**z
+#         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+#         out = y/(ysum)
+#         out = PACTQuantize(out, 1/self.n_levels, torch.Tensor((0,)).type_as(x), torch.Tensor((1.,)).type_as(x), floor=self.floor, clip_gradient=self.clip_gradient)
+#         return out
+
     
 class PACTIntegerSoftmax(torch.nn.Module):
 
@@ -396,7 +418,7 @@ class PACTIntegerSoftmax(torch.nn.Module):
             xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
             z = torch.floor(-xTilde / log2)
             p = xTilde + z * log2
-            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) / 2**(z-8))
+            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
             ysum = torch.sum(y, -1, keepdim=True)
             norm = torch.floor(y*(n_levels-1)/(ysum))
             out = torch.clip(norm, zero, n_levels-1)
@@ -468,9 +490,43 @@ class PACTGELU(torch.nn.Module):
         super().__init__()
 
         self.n_levels = n_levels
-        
+        self.register_buffer('a',torch.Tensor((-0.288,)))
+        self.register_buffer('b',torch.Tensor((-1.769,)))
+        self.register_buffer('one', torch.Tensor((1.,)))
+        self.register_buffer('sqrttwo', torch.Tensor((4,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))        
         # Maxval is used to gather statistics
         self.register_buffer('maxval', torch.Tensor((0.,)))
+
+    def updateCoeffs(self, eps_in):
+        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
+
+        :param eps_in: Input epsilon
+        :returns: 
+        :rtype: 
+
+        """
+        epsX = eps_in * (math.sqrt(2))
+
+        r = 8
+        p = 0
+        
+        #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
+        with torch.no_grad():
+            epsB = epsX
+            epsA = torch.Tensor(((0.288)/2**p,)).type_as(eps_in)
+            self.epsB = epsB.detach()
+            self.epsA = epsA.detach()
+            epsOne = epsB**2*epsA
+            epsOut = epsOne * eps_in
+
+            #import IPython; IPython.embed()
+
+            self.a.data[0] = torch.round(-0.288/epsA) * epsA
+            self.b.data[0] = torch.round(-1.769/epsB) * epsB
+            self.one.data[0] = torch.round(1./(epsB**2*epsA)) * epsB**2*epsA
+            self.sqrttwo.data[0] = torch.round(math.sqrt(2)/(eps_in/epsB))/(eps_in/epsB)
         
     def forward(self, x):
         """Approximate floating point GELU implementation according to the I-BERT paper:
@@ -481,14 +537,23 @@ class PACTGELU(torch.nn.Module):
         :rtype: 
 
         """
-            
+        #Estimate epsilon
+        with torch.no_grad():
+            if torch.min(x) >= 0:
+                clip_lo = torch.Tensor((0,)).type_as(x)
+                clip_hi = torch.abs(torch.max(x))
+            else:
+                clip_lo = -torch.abs(torch.max(x))
+                clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+
+            eps = (clip_hi-clip_lo)/(self.n_levels-1)
+
         L = torch.sign(x) * (-0.2888*(torch.clip(torch.abs(x/math.sqrt(2)), min=0, max=1.769) - 1.769)**2 + 1)
         y = x*((1+L)/2)
 
         self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-
+        
         return y
-
 
 class PACTIntegerGELU(torch.nn.Module):
 
@@ -516,7 +581,7 @@ class PACTIntegerGELU(torch.nn.Module):
             
             return g.op("PACTOps::iGELU", x, b_t=b, one_t=one, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
     
-    def __init__(self, n_levels: int = 256, eps_in = 1.):
+    def __init__(self, n_levels: int = 256, eps_in = 1., maxval = 1.):
         super().__init__()
 
         self.n_levels = torch.Tensor((n_levels,)).detach()
@@ -526,9 +591,9 @@ class PACTIntegerGELU(torch.nn.Module):
         self.one = torch.Tensor((1.,)).detach()
         self.sqrttwo = torch.Tensor((4,)).detach()
 
-        self.D = torch.Tensor((2.**24,)).detach()
+        self.D = torch.Tensor((2.**16,)).detach()
         self.totScaler = torch.Tensor((255.,)).detach()
-        self.maxval = torch.Tensor((0.,)).detach()
+        self.maxval = maxval.detach()
 
         self.zero = torch.Tensor((0.,)).detach()
 
@@ -542,8 +607,6 @@ class PACTIntegerGELU(torch.nn.Module):
         :rtype: 
 
         """
-
-
         epsX = eps_in * (math.sqrt(2))
 
         r = 8
@@ -555,14 +618,14 @@ class PACTIntegerGELU(torch.nn.Module):
         epsOne = epsB**2*epsA
         epsOut = epsOne * eps_in
         
-        self.eps_out = epsOut
+        self.eps_out = self.maxval/(self.n_levels//2-1) #epsOut
 
         self.a.data[0] = torch.round(-0.288/epsA)
         self.b.data[0] = torch.round(-1.769/epsB)
         self.one.data[0] = torch.round(1./(epsB**2*epsA))
         self.sqrttwo.data[0] = torch.round(torch.Tensor((2.,)))
 
-        self.totScaler.data[0] = torch.round((self.D * self.eps_out) / eps_in)
+        self.totScaler.data[0] = torch.round((self.D * epsOut) / self.eps_out)
         
     def forward(self, x):
 
@@ -661,6 +724,8 @@ class PACTLayerNorm(torch.nn.Module):
         self.register_buffer('D', torch.Tensor((D,)))
         self.register_buffer('maxval', torch.Tensor((1.,)))
         self.register_buffer('maxval_tot', torch.Tensor((1.,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))       
 
         self.register_buffer('dummyOne', torch.Tensor((1.,)))
         self.register_buffer('dummyZero', torch.Tensor((0.,)))
@@ -680,10 +745,8 @@ class PACTLayerNorm(torch.nn.Module):
         scaler = (self.n_levels)/self.maxval
         self.totScaler.data[0] = math.floor(self.D * scaler)
         
-        if not torch.equal(self.weight, self.dummyOne):
-            y = y * self.weight
-        if not torch.equal(self.weight, self.dummyZero):
-            y = y + self.bias
+        y = y * self.weight
+        y = y + self.bias
             
         self.maxval_tot.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
         
