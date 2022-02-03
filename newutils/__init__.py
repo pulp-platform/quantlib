@@ -1,1 +1,1 @@
-from .errors import quantlib_err_msg
+from .messages import quantlib_log_header, quantlib_wng_header, quantlib_err_header
