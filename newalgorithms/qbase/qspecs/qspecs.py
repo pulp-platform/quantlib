@@ -7,7 +7,7 @@ from typing import NewType
 from typing import Tuple
 from typing import Union, Optional
 
-from ..qrange import QRange, UNSPECIFIED_OFFSET, ImplicitStep, IMPLICIT_STEP
+from ..qrange import QRange, UNKNOWN, ImplicitStep, IMPLICIT_STEP
 from quantlib.newutils import quantlib_err_header
 
 
@@ -56,7 +56,7 @@ def init_qhparams(qrange: QRange,
                   t: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, Union[torch.Tensor, ImplicitStep], Union[torch.Tensor, UnspecifiedScale]]:
     """Initialise the hyper-parameters describing a quantiser."""
 
-    zero     = torch.tensor(qrange.offset).reshape(1) if qrange.offset is not UNSPECIFIED_OFFSET else UNSPECIFIED_ZEROPOINT
+    zero     = torch.tensor(qrange.offset).reshape(1) if qrange.offset is not UNKNOWN else UNSPECIFIED_ZEROPOINT
     n_levels = torch.tensor(qrange.n_levels).reshape(1)
     step     = torch.tensor(qrange.step).reshape(1) if qrange.step is not IMPLICIT_STEP else IMPLICIT_STEP
     scale    = UNSPECIFIED_SCALE
