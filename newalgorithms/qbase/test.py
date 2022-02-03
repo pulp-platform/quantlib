@@ -1,6 +1,6 @@
 import unittest
 
-from .qrange import resolve_qrangespec
+from quantlib.newalgorithms.qbase.qrange import resolve_qrangespec
 
 
 class QuantSpecResolverTest(unittest.TestCase):

@@ -1,8 +1,17 @@
-import enum
+from enum import Enum, unique
+from typing import NewType
 from typing import Tuple, Dict
 from typing import Union
 
-from quantlib.newutils import quantlib_err_msg
+from quantlib.newutils import quantlib_err_header
+
+
+UnspecifiedOffset = NewType('UnspecifiedOffset', type(None))
+UNSPECIFIED_OFFSET = UnspecifiedOffset(None)
+
+
+ImplicitStep = NewType('ImplicitStep', int)
+IMPLICIT_STEP = ImplicitStep(1)
 
 
 class QRange(object):
@@ -61,10 +70,10 @@ class QRange(object):
     We also allow for the special "sign" indexing range :math:`(-1, 1)`.
 
     """
-    def __init__(self, n_levels: int, offset: int, step: int):
+    def __init__(self, offset: Union[int, UnspecifiedOffset], n_levels: int, step: Union[int, ImplicitStep]):
 
-        self._n_levels = n_levels
         self._offset = offset
+        self._n_levels = n_levels
         self._step = step
 
     @property
@@ -72,12 +81,12 @@ class QRange(object):
         return tuple(range(self._offset, self._offset + self._n_levels * self._step, self._step))
 
     @property
-    def n_levels(self) -> int:
-        return self._n_levels
-
-    @property
     def offset(self) -> int:
         return self._offset
+
+    @property
+    def n_levels(self) -> int:
+        return self._n_levels
 
     @property
     def step(self) -> int:
@@ -97,15 +106,15 @@ class QRange(object):
 
     @property
     def is_unsigned(self) -> bool:
-        return (not self.is_sign_range) and (self.min == 0)
+        return (self.min == 0) and (self.step == 1)
 
     @property
     def is_quasisymmetric(self) -> bool:
-        return (not self.is_sign_range) and (abs(self.max) - abs(self.min) == -1)
+        return (abs(self.min) == abs(self.max) + 1) and (self.step == 1)
 
     @property
     def is_symmetric(self):
-        return (not self.is_sign_range) and (abs(self.min) == abs(self.max))
+        return (abs(self.min) == abs(self.max)) and (self.step == 1)
 
 
 # I define a QRangeSpec as the union data type `QuantSpec := Union[Tuple[int, ...], Dict[str, int], str]`.
@@ -126,11 +135,11 @@ def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
         # check spacing step
         steps = set([j - i for i, j in zip(qrangespec[:-1], qrangespec[1:])])
         if len(steps) > 1:
-            raise ValueError(quantlib_err_msg() + f"QRange tuple specifications should be composed of equally-spaced integers, but multiple steps were specified ({steps}).")
+            raise ValueError(quantlib_err_header() + f"QRange tuple specifications should be composed of equally-spaced integers, but multiple steps were specified ({steps}).")
         else:
             step = steps.pop()
-            if step != 1:
-                raise ValueError(quantlib_err_msg() + f"QRange tuple specifications which are not (-1, 1) must have a step of one (step {step} was specified).")
+            if step != IMPLICIT_STEP:
+                raise ValueError(quantlib_err_header() + f"QRange tuple specifications which are not (-1, 1) must have a step of one (step {step} was specified).")
 
         n_levels = len(qrangespec)
         offset = min(qrangespec)
@@ -140,7 +149,7 @@ def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
 
 def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
 
-    step = 1
+    step = IMPLICIT_STEP
 
     n_levels_keys = {'n_levels', 'bitwidth', 'limpbitwidth'}
     offset_keys = {'offset', 'signed'}
@@ -149,13 +158,13 @@ def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
     qrangespec_keys = set(qrangespec.keys())
     unknown_keys = qrangespec_keys.difference(n_levels_keys | offset_keys)
     if len(unknown_keys) != 0:
-        raise ValueError(quantlib_err_msg() + f"QRange dictionariy specification does not support the following keys: {unknown_keys}.")
+        raise ValueError(quantlib_err_header() + f"QRange dictionariy specification does not support the following keys: {unknown_keys}.")
 
     # canonicalise number of levels
     qrangespec_n_levels_keys = qrangespec_keys.intersection(n_levels_keys)
 
     if len(qrangespec_n_levels_keys) == 0:
-        raise ValueError(quantlib_err_msg() + f"QRange dictionary specification must specify at least one of the following keys: {n_levels_keys}.")
+        raise ValueError(quantlib_err_header() + f"QRange dictionary specification must specify at least one of the following keys: {n_levels_keys}.")
 
     elif len(qrangespec_n_levels_keys) == 1:
         if qrangespec_n_levels_keys == {'bitwidth'}:
@@ -168,13 +177,13 @@ def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
             n_levels = qrangespec['n_levels']
 
     else:
-        raise ValueError(quantlib_err_msg() + f"QRange dictionary specification specified the number of levels ambiguously: {qrangespec_n_levels_keys}.")
+        raise ValueError(quantlib_err_header() + f"QRange dictionary specification specified the number of levels ambiguously: {qrangespec_n_levels_keys}.")
 
     # canonicalise offset
     qrangespec_offset_keys = qrangespec_keys.intersection(offset_keys)
 
     if len(qrangespec_offset_keys) == 0:
-        raise ValueError(quantlib_err_msg() + f"QRange dictionary specification must specify at least one of the following keys: {offset_keys}.")
+        offset = UNSPECIFIED_OFFSET
 
     elif len(qrangespec_offset_keys) == 1:
 
@@ -185,9 +194,9 @@ def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
             offset = qrangespec['offset']
 
     else:
-        raise ValueError(quantlib_err_msg() + f"QRange dictionary specification specified the offset ambiguously: {qrangespec}.")
+        raise ValueError(quantlib_err_header() + f"QRange dictionary specification specified the offset ambiguously: {qrangespec}.")
 
-    return QRange(n_levels, offset, step)
+    return QRange(offset, n_levels, step)
 
 
 def resolve_str_qrangespec(qrangespec: str) -> QRange:
@@ -198,21 +207,21 @@ def resolve_str_qrangespec(qrangespec: str) -> QRange:
         n_levels = 2
 
     elif qrangespec == 'ternary':
-        step = 1
+        step = IMPLICIT_STEP
         offset = -1
         n_levels = 3
 
     else:
-        raise ValueError(quantlib_err_msg() + f"QRange string specification does not support the following key: {qrangespec}.")
+        raise ValueError(quantlib_err_header() + f"QRange string specification does not support the following key: {qrangespec}.")
 
     return QRange(n_levels, offset, step)
 
 
-@enum.unique
-class QRangeSpec(enum.Enum):
+@unique
+class QRangeSpec(Enum):
     TUPLE = resolve_tuple_qrangespec
-    DICT = resolve_dict_qrangespec
-    STR = resolve_str_qrangespec
+    DICT  = resolve_dict_qrangespec
+    STR   = resolve_str_qrangespec
 
 
 def resolve_qrangespec(qrangespec: Union[Tuple[int, ...], Dict[str, int], str]) -> QRange:
@@ -286,7 +295,7 @@ def resolve_qrangespec(qrangespec: Union[Tuple[int, ...], Dict[str, int], str]) 
     try:
         solver = getattr(QRangeSpec, qrangespec_class.upper())  # when the values of an enumerated are functions, I can not access them in dictionary-style: https://stackoverflow.com/a/50211710
     except KeyError:
-        raise KeyError(quantlib_err_msg() + f"Unsupported QRange specification type: {qrangespec_class}.")
+        raise KeyError(quantlib_err_header() + f"Unsupported QRange specification type: {qrangespec_class}.")
 
     qrange = solver(qrangespec)
     return qrange
