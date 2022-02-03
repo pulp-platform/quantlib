@@ -33,11 +33,16 @@ This module implements the functions to initialise and change quantisers.
 import torch
 import inspect  # use introspection to print function names into error messages
 from typing import Tuple
+from typing import Union
 
+from ..qrange import ImplicitStep, IMPLICIT_STEP
 from quantlib.newutils.messages import quantlib_wng_header
 
 
-def get_zero_scale(a: torch.Tensor, b: torch.Tensor, n_levels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def get_zero_scale(a: torch.Tensor,
+                   b: torch.Tensor,
+                   n_levels: torch.Tensor,
+                   step: Union[torch.Tensor, ImplicitStep]) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute the offset and quantum to cover an interval with given bounds.
 
     To ensure fake-to-true convertibility, it is crucial that fake-quantised
@@ -69,7 +74,11 @@ def get_zero_scale(a: torch.Tensor, b: torch.Tensor, n_levels: torch.Tensor) -> 
     return zero, scale
 
 
-def get_scale(a: torch.Tensor, b: torch.Tensor, zero: torch.Tensor, n_levels: torch.Tensor) -> torch.Tensor:
+def get_scale(a: torch.Tensor,
+              b: torch.Tensor,
+              zero: torch.Tensor,
+              n_levels: torch.Tensor,
+              step: Union[torch.Tensor, ImplicitStep]) -> torch.Tensor:
     """Compute the quantum of a quantisation range with fixed offset."""
 
     where_a_negative = a < 0.0
@@ -86,7 +95,7 @@ def get_scale(a: torch.Tensor, b: torch.Tensor, zero: torch.Tensor, n_levels: to
     case_ab_5 = where_a_positive & where_b_positive
 
     min_ = zero
-    max_ = zero + n_levels - 1
+    max_ = zero + (n_levels - 1) * step
     where_min_negative = min_ < 0.0
     where_min_zero     = min_ == 0.0
     where_min_positive = min_ > 0.0
@@ -96,7 +105,7 @@ def get_scale(a: torch.Tensor, b: torch.Tensor, zero: torch.Tensor, n_levels: to
 
     case_mm_1 = where_min_negative & where_max_negative
     case_mm_2 = where_min_negative & where_max_zero
-    case_mm_3 = where_min_negative & where_max_positive
+    case_mm_3 = where_min_negative & where_max_positive  # this is the case of sign ranges
     case_mm_4 = where_min_zero     & where_max_positive
     case_mm_5 = where_min_positive & where_max_positive
 
@@ -146,8 +155,8 @@ def get_scale(a: torch.Tensor, b: torch.Tensor, zero: torch.Tensor, n_levels: to
     return eps
 
 
-def get_clipping_bounds(zero: torch.Tensor, n_levels: torch.Tensor, scale: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def get_clipping_bounds(zero: torch.Tensor, n_levels: torch.Tensor, step: Union[torch.Tensor, ImplicitStep], scale: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute the clipping bounds of a given fake-quantised range."""
     clip_lo = zero * scale
-    clip_hi = (zero + n_levels - 1) * scale
+    clip_hi = (zero + (n_levels - 1) * step) * scale
     return clip_lo, clip_hi

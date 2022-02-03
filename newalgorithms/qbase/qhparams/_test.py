@@ -1,7 +1,7 @@
 import time
 import torch
 
-from quantlib.newalgorithms.qbase.qclipper.qclipper import get_scale
+from quantlib.newalgorithms.qbase.qhparams.qclipper import get_scale
 
 
 def main(n_channels: int = 512, n_levels: int = 256):
