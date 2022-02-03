@@ -155,11 +155,11 @@ def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
         # check spacing step
         steps = set([j - i for i, j in zip(qrangespec[:-1], qrangespec[1:])])
         if len(steps) > 1:
-            raise ValueError(quantlib_err_header() + f"QRange tuple specifications should be composed of equally-spaced integers, but multiple steps were specified ({steps}).")
+            raise ValueError(quantlib_err_header() + f"QRange tuple specifications should be composed of equally-spaced integers, but multiple steps were specified: {steps}.")
         else:
             step = steps.pop()
             if step != IMPLICIT_STEP:
-                raise ValueError(quantlib_err_header() + f"QRange tuple specifications which are not (-1, 1) must have a step of one (step {step} was specified).")
+                raise ValueError(quantlib_err_header() + f"QRange tuple specifications which are not (-1, 1) must have a step of {IMPLICIT_STEP}, but {step} was specified.")
 
         n_levels = len(qrangespec)
         offset = min(qrangespec)
@@ -232,7 +232,7 @@ def resolve_str_qrangespec(qrangespec: str) -> QRange:
         n_levels = 3
 
     else:
-        raise ValueError(quantlib_err_header() + f"QRange string specification does not support the following value: {qrangespec}.")
+        raise ValueError(quantlib_err_header() + f"QRange string specification does not support this value: {qrangespec}.")
 
     return QRange(offset, n_levels, step)
 
@@ -316,7 +316,7 @@ def resolve_qrangespec(qrangespec: QRangeSpecType) -> QRange:
     try:
         solver = getattr(QRangeSpec, qrangespec_class.upper())  # when the values of an enumerated are functions, I can not access them in dictionary-style: https://stackoverflow.com/a/50211710
     except KeyError:
-        raise KeyError(quantlib_err_header() + f"Unsupported QRange specification type: {qrangespec_class}.")
+        raise TypeError(quantlib_err_header() + f"Unsupported QRange specification type: {qrangespec_class}.")
 
     qrange = solver(qrangespec)
     return qrange
