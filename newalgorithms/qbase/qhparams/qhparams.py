@@ -29,7 +29,7 @@ def make_broadcastable(x: torch.Tensor,
         if x.numel() == up_numel:
             x = x.reshape(up_shape)
         else:
-            raise RuntimeError(quantlib_err_header(inspect.currentframe().f_code.co_name) + f"can not reshape `torch.Tensor` {x} with {x.numel()} elements to shape {up_shape}.")
+            raise RuntimeError(quantlib_err_header(obj_name=inspect.currentframe().f_code.co_name) + f"can not reshape `torch.Tensor` {x} with {x.numel()} elements to shape {up_shape}.")
 
     # fill the broadcasting dimensions with ones
     broadcast_shape = tuple(d if i in non_broadcast_dims else 1 for i, d in enumerate(t.shape))
@@ -61,6 +61,6 @@ def init_qhparams(qrange: QRange,
             step     = make_broadcastable(step,     t, NON_BROADCAST_DIM) #if step is not IMPLICIT_STEP else IMPLICIT_STEP
             scale    = make_broadcastable(scale,    t, NON_BROADCAST_DIM)
         else:
-            raise ValueError(quantlib_err_header(inspect.currentframe().f_code.co_name) + f"initialising per-channel quantisers requires an example `torch.Tensor` to resolve broadcasting, but received {type(t)}.")
+            raise ValueError(quantlib_err_header(obj_name=inspect.currentframe().f_code.co_name) + f"initialising per-channel quantisers requires an example `torch.Tensor` to resolve broadcasting, but received {type(t)}.")
 
     return zero, n_levels, step, scale

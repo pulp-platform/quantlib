@@ -151,7 +151,7 @@ def get_scale(a: torch.Tensor,
     eps[case_ii]  = torch.max(a[case_ii] / min_[case_ii], b[case_ii] / max_[case_ii])
     eps[case_iii] = b[case_iii] / max_[case_iii]
     if torch.any(case_iv):
-        print(quantlib_wng_header(inspect.currentframe().f_code.co_name) + "can not cover some range [a, b] with a scalar multiple of the provided integer range.")
+        print(quantlib_wng_header(obj_name=inspect.currentframe().f_code.co_name) + "can not cover some range [a, b] with a scalar multiple of the provided integer range.")
         eps[case_iv] = torch.max(a[case_iv].abs(), b[case_iv].abs()) / torch.max(min_[case_iv].abs(), max_[case_iv].abs())
 
     return eps
