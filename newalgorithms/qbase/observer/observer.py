@@ -279,7 +279,7 @@ Arguments:
 
 # import enum
 #
-# from ..qspecs import QGranularity
+# from ..qhparams import QGranularity
 #
 #
 # @enum.unique

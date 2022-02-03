@@ -3,12 +3,16 @@ from enum import Enum, auto, unique
 from functools import reduce
 from operator import mul
 import inspect
-from typing import NewType
 from typing import Tuple
-from typing import Union, Optional
+from typing import Optional
 
-from ..qrange import QRange, UNKNOWN, ImplicitStep, IMPLICIT_STEP
+from ..qrange import UNKNOWN, QRange #, IMPLICIT_STEP, QRange
 from quantlib.newutils import quantlib_err_header
+
+
+# aliases (for readability)
+UNSPECIFIED = torch.tensor(float('nan')).reshape(1)
+NON_BROADCAST_DIM = (0,)
 
 
 def make_broadcastable(x: torch.Tensor,
@@ -34,38 +38,27 @@ def make_broadcastable(x: torch.Tensor,
     return x
 
 
-UnspecifiedZeroPoint = NewType('UnspecifiedZeroPoint', torch.Tensor)
-UNSPECIFIED_ZEROPOINT = UnspecifiedZeroPoint(torch.Tensor(float('nan')).reshape(1))
-
-
-UnspecifiedScale = NewType('UnspecifiedScale', torch.Tensor)
-UNSPECIFIED_SCALE = UnspecifiedScale(torch.tensor(float('nan')).reshape(1))
-
-
 @unique
 class QGranularity(Enum):
     PER_LAYER = auto()
     PER_CHANNEL = auto()
 
 
-NON_BROADCAST_DIM = (0,)
-
-
 def init_qhparams(qrange: QRange,
                   granularity: QGranularity,
-                  t: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, Union[torch.Tensor, ImplicitStep], Union[torch.Tensor, UnspecifiedScale]]:
+                  t: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Initialise the hyper-parameters describing a quantiser."""
 
-    zero     = torch.tensor(qrange.offset).reshape(1) if qrange.offset is not UNKNOWN else UNSPECIFIED_ZEROPOINT
+    zero     = torch.tensor(qrange.offset).reshape(1) if qrange.offset is not UNKNOWN else UNSPECIFIED
     n_levels = torch.tensor(qrange.n_levels).reshape(1)
-    step     = torch.tensor(qrange.step).reshape(1) if qrange.step is not IMPLICIT_STEP else IMPLICIT_STEP
-    scale    = UNSPECIFIED_SCALE
+    step     = torch.tensor(qrange.step).reshape(1) #if qrange.step is not IMPLICIT_STEP else IMPLICIT_STEP
+    scale    = UNSPECIFIED
 
     if granularity == QGranularity.PER_CHANNEL:
         if t:  # use template tensor to resolve broadcasting
             zero     = make_broadcastable(zero,     t, NON_BROADCAST_DIM)
             n_levels = make_broadcastable(n_levels, t, NON_BROADCAST_DIM)
-            step     = make_broadcastable(step,     t, NON_BROADCAST_DIM) if step is not IMPLICIT_STEP else IMPLICIT_STEP
+            step     = make_broadcastable(step,     t, NON_BROADCAST_DIM) #if step is not IMPLICIT_STEP else IMPLICIT_STEP
             scale    = make_broadcastable(scale,    t, NON_BROADCAST_DIM)
         else:
             raise ValueError(quantlib_err_header(inspect.currentframe().f_code.co_name) + f"initialising per-channel quantisers requires an example `torch.Tensor` to resolve broadcasting, but received {type(t)}.")

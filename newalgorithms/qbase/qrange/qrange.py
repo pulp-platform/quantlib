@@ -1,17 +1,15 @@
 from enum import Enum, unique
-from typing import NewType
 from typing import Tuple, Dict
 from typing import Union
+from typing import NewType
 
 from quantlib.newutils import quantlib_err_header
 
 
-Unknown = NewType('Unknown', type(None))
-UNKNOWN = Unknown(None)
-
-
-ImplicitStep = NewType('ImplicitStep', int)
-IMPLICIT_STEP = ImplicitStep(1)
+# aliases (for readability)
+UnknownType = NewType('UnknownType', type(None))
+UNKNOWN = None
+IMPLICIT_STEP = 1
 
 
 class QRange(object):
@@ -70,14 +68,14 @@ class QRange(object):
     We also allow for the special "sign" indexing range :math:`(-1, 1)`.
 
     """
-    def __init__(self, offset: Union[int, Unknown], n_levels: int, step: Union[int, ImplicitStep]):
+    def __init__(self, offset: Union[int, UnknownType], n_levels: int, step: int):
 
         self._offset = offset
         self._n_levels = n_levels
         self._step = step
 
     @property
-    def offset(self) -> Union[int, Unknown]:
+    def offset(self) -> Union[int, UnknownType]:
         return self._offset
 
     @property
@@ -89,21 +87,21 @@ class QRange(object):
         return self._step
 
     @property
-    def range(self) -> Tuple[int, ...]:
+    def range(self) -> Union[Tuple[int, ...], UnknownType]:
         try:
             return tuple(range(self._offset, self._offset + self._n_levels * self._step, self._step))
         except TypeError:  # `self._offset == UNKNOWN`
             return UNKNOWN
 
     @property
-    def min(self) -> int:
+    def min(self) -> Union[int, UnknownType]:
         try:
             return self.range[0]
         except TypeError:
             return UNKNOWN
 
     @property
-    def max(self) -> int:
+    def max(self) -> Union[int, UnknownType]:
         try:
             return self.range[-1]
         except TypeError:
@@ -138,7 +136,7 @@ class QRange(object):
             return False  # signed ranges always specify their offset, so they do not raise an exception
 
 
-QRangeSpec = NewType('QRangeSpec', Union[Tuple[int, ...], Dict[str, int], str])
+QRangeSpecType = Union[Tuple[int, ...], Dict[str, int], str]
 
 
 def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
@@ -166,7 +164,7 @@ def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
         n_levels = len(qrangespec)
         offset = min(qrangespec)
 
-    return QRange(n_levels, offset, step)
+    return QRange(offset, n_levels, step)
 
 
 def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
@@ -236,17 +234,18 @@ def resolve_str_qrangespec(qrangespec: str) -> QRange:
     else:
         raise ValueError(quantlib_err_header() + f"QRange string specification does not support the following value: {qrangespec}.")
 
-    return QRange(n_levels, offset, step)
+    return QRange(offset, n_levels, step)
 
 
 @unique
 class QRangeSpec(Enum):
+    """Update this in synch with ``QRangeSpec``."""
     TUPLE = resolve_tuple_qrangespec
     DICT  = resolve_dict_qrangespec
     STR   = resolve_str_qrangespec
 
 
-def resolve_qrangespec(qrangespec: QRangeSpec) -> QRange:
+def resolve_qrangespec(qrangespec: QRangeSpecType) -> QRange:
     """A function to canonicalise specifications of integer ranges.
 
     During my experience in research on quantised neural networks I have come

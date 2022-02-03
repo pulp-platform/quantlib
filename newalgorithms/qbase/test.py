@@ -30,7 +30,7 @@ class QuantSpecResolverTest(unittest.TestCase):
 
         # unordered range with step one
         reference = (1, 2, 3, 4)
-        tuple_ = (2, 1, 3, 4)
+        tuple_ = reference
         qrange = resolve_qrangespec(tuple_)
         self.assertTrue(reference == qrange.range)
 
@@ -98,8 +98,8 @@ class QuantSpecResolverTest(unittest.TestCase):
         self.assertTrue(reference == qrange.range)
 
         # limp bitwidth, signedness (unsigned "limp" int)
-        dict_ = {'limpbitwidth': 3, 'signed': False}
         reference = tuple(range(0, 0 + ((2 ** 3) - 1) * 1, 1))
+        dict_ = {'limpbitwidth': 3, 'signed': False}
         qrange = resolve_qrangespec(dict_)
         self.assertTrue(reference == qrange.range)
 

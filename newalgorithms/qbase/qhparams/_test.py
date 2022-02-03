@@ -1,6 +1,7 @@
 import time
 import torch
 
+from ..qrange import IMPLICIT_STEP
 from quantlib.newalgorithms.qbase.qhparams.qclipper import get_scale
 
 
@@ -18,7 +19,7 @@ def main(n_channels: int = 512, n_levels: int = 256):
 
         # compute scale (i.e., quantum) while profiling
         s = time.time()
-        eps = get_scale(a, b, z, n_levels)
+        eps = get_scale(a, b, z, n_levels, IMPLICIT_STEP)
         e = time.time()
 
         times.append(e - s)

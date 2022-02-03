@@ -33,16 +33,15 @@ This module implements the functions to initialise and change quantisers.
 import torch
 import inspect  # use introspection to print function names into error messages
 from typing import Tuple
-from typing import Union
 
-from ..qrange import ImplicitStep, IMPLICIT_STEP
+from ..qrange import IMPLICIT_STEP
 from quantlib.newutils.messages import quantlib_wng_header
 
 
 def get_zero_scale(a: torch.Tensor,
                    b: torch.Tensor,
                    n_levels: torch.Tensor,
-                   step: Union[torch.Tensor, ImplicitStep]) -> Tuple[torch.Tensor, torch.Tensor]:
+                   step: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute the offset and quantum to cover an interval with given bounds.
 
     To ensure fake-to-true convertibility, it is crucial that fake-quantised
@@ -69,6 +68,9 @@ def get_zero_scale(a: torch.Tensor,
     (sign/magnitude notation).
 
     """
+    if not torch.all(step == IMPLICIT_STEP):
+        raise NotImplementedError
+
     scale = (b - a) / (n_levels / torch.pow(n_levels - 1, 2))
     zero = torch.floor(a / scale)
     return zero, scale
@@ -78,7 +80,7 @@ def get_scale(a: torch.Tensor,
               b: torch.Tensor,
               zero: torch.Tensor,
               n_levels: torch.Tensor,
-              step: Union[torch.Tensor, ImplicitStep]) -> torch.Tensor:
+              step: torch.Tensor) -> torch.Tensor:
     """Compute the quantum of a quantisation range with fixed offset."""
 
     where_a_negative = a < 0.0
@@ -155,7 +157,7 @@ def get_scale(a: torch.Tensor,
     return eps
 
 
-def get_clipping_bounds(zero: torch.Tensor, n_levels: torch.Tensor, step: Union[torch.Tensor, ImplicitStep], scale: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def get_clipping_bounds(zero: torch.Tensor, n_levels: torch.Tensor, step: torch.Tensor, scale: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute the clipping bounds of a given fake-quantised range."""
     clip_lo = zero * scale
     clip_hi = (zero + (n_levels - 1) * step) * scale
