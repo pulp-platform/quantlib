@@ -6,8 +6,8 @@ from typing import Union
 from quantlib.newutils import quantlib_err_header
 
 
-UnspecifiedOffset = NewType('UnspecifiedOffset', type(None))
-UNSPECIFIED_OFFSET = UnspecifiedOffset(None)
+Unknown = NewType('Unknown', type(None))
+UNKNOWN = Unknown(None)
 
 
 ImplicitStep = NewType('ImplicitStep', int)
@@ -70,18 +70,14 @@ class QRange(object):
     We also allow for the special "sign" indexing range :math:`(-1, 1)`.
 
     """
-    def __init__(self, offset: Union[int, UnspecifiedOffset], n_levels: int, step: Union[int, ImplicitStep]):
+    def __init__(self, offset: Union[int, Unknown], n_levels: int, step: Union[int, ImplicitStep]):
 
         self._offset = offset
         self._n_levels = n_levels
         self._step = step
 
     @property
-    def range(self) -> Tuple[int, ...]:
-        return tuple(range(self._offset, self._offset + self._n_levels * self._step, self._step))
-
-    @property
-    def offset(self) -> int:
+    def offset(self) -> Union[int, Unknown]:
         return self._offset
 
     @property
@@ -93,31 +89,57 @@ class QRange(object):
         return self._step
 
     @property
+    def range(self) -> Tuple[int, ...]:
+        try:
+            return tuple(range(self._offset, self._offset + self._n_levels * self._step, self._step))
+        except TypeError:  # `self._offset == UNKNOWN`
+            return UNKNOWN
+
+    @property
     def min(self) -> int:
-        return self.range[0]
+        try:
+            return self.range[0]
+        except TypeError:
+            return UNKNOWN
 
     @property
     def max(self) -> int:
-        return self.range[-1]
+        try:
+            return self.range[-1]
+        except TypeError:
+            return UNKNOWN
 
     @property
     def is_sign_range(self) -> bool:
-        return self.range == (-1, 1)
+        try:
+            return self.range == (-1, 1)
+        except TypeError:
+            return False  # the sign range always specifies the offset, so it does not raises an exception
 
     @property
     def is_unsigned(self) -> bool:
-        return (self.min == 0) and (self.step == 1)
+        try:
+            return (self.min == 0) and (self.step == 1)
+        except TypeError:
+            return False  # unsigned ranges always specify their offset, so they do not raise an exception
 
     @property
     def is_quasisymmetric(self) -> bool:
-        return (abs(self.min) == abs(self.max) + 1) and (self.step == 1)
+        try:
+            return (abs(self.min) == abs(self.max) + 1) and (self.step == 1)
+        except TypeError:
+            return False  # signed ranges always specify their offset, so they do not raise an exception
 
     @property
     def is_symmetric(self):
-        return (abs(self.min) == abs(self.max)) and (self.step == 1)
+        try:
+            return (abs(self.min) == abs(self.max)) and (self.step == 1)
+        except TypeError:
+            return False  # signed ranges always specify their offset, so they do not raise an exception
 
 
-# I define a QRangeSpec as the union data type `QuantSpec := Union[Tuple[int, ...], Dict[str, int], str]`.
+QRangeSpec = NewType('QRangeSpec', Union[Tuple[int, ...], Dict[str, int], str])
+
 
 def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
 
@@ -183,7 +205,7 @@ def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
     qrangespec_offset_keys = qrangespec_keys.intersection(offset_keys)
 
     if len(qrangespec_offset_keys) == 0:
-        offset = UNSPECIFIED_OFFSET
+        offset = UNKNOWN
 
     elif len(qrangespec_offset_keys) == 1:
 
@@ -212,7 +234,7 @@ def resolve_str_qrangespec(qrangespec: str) -> QRange:
         n_levels = 3
 
     else:
-        raise ValueError(quantlib_err_header() + f"QRange string specification does not support the following key: {qrangespec}.")
+        raise ValueError(quantlib_err_header() + f"QRange string specification does not support the following value: {qrangespec}.")
 
     return QRange(n_levels, offset, step)
 
@@ -224,7 +246,7 @@ class QRangeSpec(Enum):
     STR   = resolve_str_qrangespec
 
 
-def resolve_qrangespec(qrangespec: Union[Tuple[int, ...], Dict[str, int], str]) -> QRange:
+def resolve_qrangespec(qrangespec: QRangeSpec) -> QRange:
     """A function to canonicalise specifications of integer ranges.
 
     During my experience in research on quantised neural networks I have come
