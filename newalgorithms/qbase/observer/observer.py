@@ -60,12 +60,12 @@ class TensorStatistic(object):
     def _check_t(self, t: torch.Tensor) -> None:
 
         if t.ndim != 2:
-            raise ValueError(quantlib_err_header(self.__class__.__name__) + f"expects two-dimensional arrays, but received an array of dimension {t.ndim}.")
+            raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"expects two-dimensional arrays, but received an array of dimension {t.ndim}.")
 
         if self.is_tracking:
             n0 = t.shape[0]
             if n0 != self._payload.n0:
-                raise ValueError(quantlib_err_header(self.__class__.__name__) + f"was tracking {self._payload.n0} sub-populations, but received {n0} samples.")
+                raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"was tracking {self._payload.n0} sub-populations, but received {n0} samples.")
 
     def _update(self, t: torch.Tensor) -> None:
         """Update the running value of the statistic."""
@@ -84,7 +84,7 @@ class NStatistic(TensorStatistic):
     def _check_n_overflow(self, n: int):
         """Check that the sample counter is not overflowing!"""
         if (self._payload.values + n) - self._payload.values != n:
-            raise RuntimeError(quantlib_err_header(self.__class__.__name__) + "counter is overflowing!")
+            raise RuntimeError(quantlib_err_header(obj_name=self.__class__.__name__) + "counter is overflowing!")
 
     def _update(self, t: torch.Tensor):
 
@@ -179,7 +179,7 @@ class TensorObserver(object):
     def _check_t(self, t: torch.Tensor) -> None:
         if self._subpopulation_dims is not None:
             if not set(set(self._subpopulation_dims)).issubset(range(0, t.ndim)):
-                raise ValueError(quantlib_err_header(self.__class__.__name__) + f"expected an array with at least {max(self._subpopulation_dims)} dimensions, but got an array with dimension {t.ndim}.")
+                raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"expected an array with at least {max(self._subpopulation_dims)} dimensions, but got an array with dimension {t.ndim}.")
 
     def _rearrange_tensor(self, t: torch.Tensor) -> torch.Tensor:
 
@@ -195,7 +195,7 @@ class TensorObserver(object):
             if t.ndim == 0:
                 t = t.reshape(1, 1)
             elif t.ndim == 1:
-                raise ValueError(quantlib_err_header(self.__class__.__name__) + f"can not disambiguate `torch.Tensor` {t}: does it represent {t.numel()} one-samples from {t.numel()} populations or one {t.numel()}-sample from one population?")
+                raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"can not disambiguate `torch.Tensor` {t}: does it represent {t.numel()} one-samples from {t.numel()} populations or one {t.numel()}-sample from one population?")
             else:
                 # bring sub-population dimensions in front
                 dims_permutation = (*self._subpopulation_dims, *tuple(i for i in range(0, t.ndim) if i not in self._subpopulation_dims))
