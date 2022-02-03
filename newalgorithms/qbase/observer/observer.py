@@ -2,10 +2,9 @@ import dataclasses
 from functools import reduce
 from operator import mul
 import torch
-from typing import Tuple, Union
-from typing import Any
+from typing import Any, List, Tuple, Optional
 
-from quantlib.newutils import quantlib_err_msg
+from quantlib.newutils import quantlib_err_header
 
 # initialised from statistics
 #                                  * pinned     * int offset     * float offset
@@ -25,13 +24,13 @@ from quantlib.newutils import quantlib_err_msg
 
 
 @dataclasses.dataclass
-class Statistic:
-    n0: int
-    value: Any
+class StatisticPayload:
+    n0: int      # number of sub-populations
+    values: Any  # running values of the observed statistic for all the sub-populations
 
 
 class TensorStatistic(object):
-    """A class to track running statistics of different subpopulations.
+    """A class to track running statistics of different sub-populations.
 
     Arrays can be interpreted as samples from unknown probability
     distributions. In particular, two-dimensional arrays with shape
@@ -48,28 +47,25 @@ class TensorStatistic(object):
     """
 
     def __init__(self):
-        self._statistic = None
+        self._payload = None
 
     @property
-    def statistic(self) -> Statistic:
-        return self._statistic
+    def payload(self) -> StatisticPayload:
+        return self._payload
 
     @property
     def is_tracking(self) -> bool:
-        return self._statistic is not None
-
-    def reset(self) -> None:
-        self._statistic = None
+        return self._payload is not None
 
     def _check_t(self, t: torch.Tensor) -> None:
 
         if t.ndim != 2:
-            raise ValueError(quantlib_err_msg(self.__class__.__name__) + f"expects two-dimensional arrays, but received an array of dimension {t.ndim}.")
+            raise ValueError(quantlib_err_header(self.__class__.__name__) + f"expects two-dimensional arrays, but received an array of dimension {t.ndim}.")
 
         if self.is_tracking:
             n0 = t.shape[0]
-            if n0 != self._statistic.n0:
-                raise ValueError(quantlib_err_msg(self.__class__.__name__) + f"was tracking {self._statistic.n0} populations, but received {n0} samples.")
+            if n0 != self._payload.n0:
+                raise ValueError(quantlib_err_header(self.__class__.__name__) + f"was tracking {self._payload.n0} sub-populations, but received {n0} samples.")
 
     def _update(self, t: torch.Tensor) -> None:
         """Update the running value of the statistic."""
@@ -87,8 +83,8 @@ class NStatistic(TensorStatistic):
 
     def _check_n_overflow(self, n: int):
         """Check that the sample counter is not overflowing!"""
-        if (self._statistic.value + n) - self._statistic.value != n:
-            raise RuntimeError(quantlib_err_msg(self.__class__.__name__) + "counter is overflowing!")
+        if (self._payload.values + n) - self._payload.values != n:
+            raise RuntimeError(quantlib_err_header(self.__class__.__name__) + "counter is overflowing!")
 
     def _update(self, t: torch.Tensor):
 
@@ -96,10 +92,10 @@ class NStatistic(TensorStatistic):
 
         if not self.is_tracking:
             n0 = t.shape[0]
-            self._statistic = Statistic(n0, n)
+            self._payload = StatisticPayload(n0, n)
         else:
             self._check_n_overflow(n)
-            self._statistic.value = self._statistic.value + n
+            self._payload.values = self._payload.values + n
 
 
 class MinStatistic(TensorStatistic):
@@ -113,9 +109,9 @@ class MinStatistic(TensorStatistic):
 
         if not self.is_tracking:
             n0 = t.shape[0]
-            self._statistic = Statistic(n0, min_)
+            self._payload = StatisticPayload(n0, min_)
         else:
-            self._statistic.value = torch.min(self._statistic.value, min_)
+            self._payload.values = torch.min(self._payload.values, min_)
 
 
 class MaxStatistic(TensorStatistic):
@@ -129,9 +125,9 @@ class MaxStatistic(TensorStatistic):
 
         if not self.is_tracking:
             n0 = t.shape[0]
-            self._statistic = Statistic(n0, max_)
+            self._payload = StatisticPayload(n0, max_)
         else:
-            self._statistic.value = torch.max(self._statistic.value, max_)
+            self._payload.values = torch.max(self._payload.values, max_)
 
 
 class SumStatistic(TensorStatistic):
@@ -145,9 +141,9 @@ class SumStatistic(TensorStatistic):
 
         if not self.is_tracking:
             n0 = t.shape[0]
-            self._statistic = Statistic(n0, sum_)
+            self._payload = StatisticPayload(n0, sum_)
         else:
-            self._statistic.value = self._statistic.value + sum_
+            self._payload.values = self._payload.values + sum_
 
 
 class Sum2Statistic(TensorStatistic):
@@ -161,16 +157,16 @@ class Sum2Statistic(TensorStatistic):
 
         if not self.is_tracking:
             n0 = t.shape[0]
-            self._statistic = Statistic(n0, sum2)
+            self._payload = StatisticPayload(n0, sum2)
         else:
-            self._statistic.value = self._statistic.value + sum2
+            self._payload.values = self._payload.values + sum2
 
 
 class TensorObserver(object):
 
     def __init__(self,
-                 statistics: Tuple[TensorStatistic, ...],
-                 subpopulation_dims: Union[Tuple[int, ...], None]):
+                 statistics: List[TensorStatistic],
+                 subpopulation_dims: Optional[Tuple[int, ...]] = None):
 
         self._statistics = statistics
         self._subpopulation_dims = subpopulation_dims
@@ -178,26 +174,12 @@ class TensorObserver(object):
 
     @property
     def is_tracking(self) -> bool:
-        state = all(s.is_tracking for s in self._statistics)
-        if self._subpopulation_dims is not None:
-            state = state and (self._ndim is not None)
-        return state
-
-    def reset(self) -> None:
-        for s in self._statistics:
-            s.reset()
-        self._ndim = None
+        return all(s.is_tracking for s in self._statistics)
 
     def _check_t(self, t: torch.Tensor) -> None:
-
         if self._subpopulation_dims is not None:
-
-            ndim = t.ndim
-            if set(set(self._subpopulation_dims)).issubset(range(0, ndim)):
-                self._ndim = ndim
-
-            else:
-                raise ValueError(quantlib_err_msg(self.__class__.__name__) + f"expected an array with at least {max(self._subpopulation_dims)} dimensions, but got an array with dimension {ndim}.")
+            if not set(set(self._subpopulation_dims)).issubset(range(0, t.ndim)):
+                raise ValueError(quantlib_err_header(self.__class__.__name__) + f"expected an array with at least {max(self._subpopulation_dims)} dimensions, but got an array with dimension {t.ndim}.")
 
     def _rearrange_tensor(self, t: torch.Tensor) -> torch.Tensor:
 
@@ -205,6 +187,7 @@ class TensorObserver(object):
         # t.ndim == 0  t.reshape(1, -1)       t.reshape(1, 1)
         # t.ndim == 1  t.reshape(1, -1)       ambiguous...
         # t.ndim > 1   t.reshape(1, -1)       sub_dims \subset range(0, t.ndim), then rearrange
+
         if self._subpopulation_dims is None:
             t = t.reshape(1, -1)
 
@@ -212,7 +195,7 @@ class TensorObserver(object):
             if t.ndim == 0:
                 t = t.reshape(1, 1)
             elif t.ndim == 1:
-                raise ValueError
+                raise ValueError(quantlib_err_header(self.__class__.__name__) + f"can not disambiguate `torch.Tensor` {t}: does it represent {t.numel()} one-samples from {t.numel()} populations or one {t.numel()}-sample from one population?")
             else:
                 # bring sub-population dimensions in front
                 dims_permutation = (*self._subpopulation_dims, *tuple(i for i in range(0, t.ndim) if i not in self._subpopulation_dims))
@@ -234,7 +217,7 @@ class TensorObserver(object):
 
 class MinMaxMeanVarObserver(TensorObserver):
 
-    def __init__(self, subpopulation_dims: Union[Tuple[int, ...], None]):
+    def __init__(self, subpopulation_dims: Optional[Tuple[int, ...]] = None):
         super().__init__(
             [NStatistic(),
              MinStatistic(),
@@ -246,26 +229,26 @@ class MinMaxMeanVarObserver(TensorObserver):
 
     @property
     def n(self) -> int:
-        return self._statistics[0].statistic.value
+        return self._statistics[0].payload.values
 
     @property
     def min(self) -> torch.Tensor:
-        return self._statistics[1].statistic.value
+        return self._statistics[1].payload.values
 
     @property
     def max(self) -> torch.Tensor:
-        return self._statistics[2].statistic.value
+        return self._statistics[2].payload.values
 
     @property
     def mean(self) -> torch.Tensor:
-        return self._statistics[3].statistic.value / self.n
+        return self._statistics[3].payload.values / self.n
 
     @property
     def var(self) -> torch.Tensor:
-        return self._statistics[4].statistic.value / self.n - self.mean.pow(2)
+        return self._statistics[4].payload.values / self.n - self.mean.pow(2)
 
 
-"""An object to track the statistics of a collection of arrays.
+"""Track the statistics of a collection of arrays.
 
 Quantisation-aware training (QAT) algorithms can yield better
 performance if the quantisation parameters of the target networks are
@@ -275,33 +258,6 @@ that passes through the unquantised version.
 This object tracks elementary statistics that can be used downstream
 to initialise the quantisation parameters of fake-quantised
 ``nn.Module``s:
-
-* the maximum component value encountered;
-* the minimum component value encountered;
-* a smoothed average of the components' mean, with interpolation
-  factor 0.1;
-* a smoothed average of the components' variance, with interpolation
-  factor 0.1.
-
-Arguments:
-    granularity: an enumerated describing whether to track statistics
-        about the whole :math:`N`-dimensional arrays or about the
-        individual :math:`N-1`-dimensional slices identified along the
-        first dimension when :math:`N \geq 2`. The first case is
-        equivalent to supposing that the array components are IID
-        samples from a single distribution; the second case is
-        the second case amounts to considering :math:`N_{0}` different
-        distributions, each of which is associated with a slice of the
-        input array.
-    t: a ``Tensor`` which carries information about the data type and
-        the device of the ``Tensor``s that are to be tracked (i.e.,
-        the target ``Tensor``s. This information ensures that the
-        statistics-tracking ``Tensor``s are homogeneous to the target
-        ``Tensor``s, and therefore no issue should be raised due to
-        runtime incompatibilites. Since the target ``Tensor``s are
-        usually combined with ``nn.Parameter``s of the hosting
-        ``nn.Module``, ``nn.Parameter``s should be compatible, and I
-        suggest to pass such an object.
 
 """
 
@@ -323,7 +279,7 @@ Arguments:
 
 # import enum
 #
-# from ..granularity import QGranularity
+# from ..qspecs import QGranularity
 #
 #
 # @enum.unique

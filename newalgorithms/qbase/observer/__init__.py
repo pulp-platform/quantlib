@@ -1,1 +1,1 @@
-from .qobserver import MinMaxMeanVarObserver
+from .observer import MinMaxMeanVarObserver
