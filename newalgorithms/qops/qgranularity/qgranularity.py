@@ -5,7 +5,7 @@ from enum import Enum, auto, unique
 import inspect
 from typing import Tuple
 
-from quantlib.newalgorithms.qbase.observers import MinMaxMeanVarObserver
+from quantlib.newalgorithms.qbase.observer import MinMaxMeanVarObserver
 from quantlib.newutils import quantlib_err_header
 
 
