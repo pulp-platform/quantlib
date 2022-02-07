@@ -5,10 +5,12 @@ from .qgranularity import resolve_qgranularityspec
 from .observer import MinMaxMeanVarObserver
 
 
-_TARGET_SHAPE       = (4, 16, 8, 8)
-_INCONSISTENT_NDIM  = (4, 16, 8)
-_INCONSISTENT_SHAPE = (4, 32, 4, 4)
-_CONSISTENT_SHAPE   = (4, 16, 4, 4)
+_TARGET_SHAPE                = (4, 16, 8, 8)
+_BROADCASTING_SHAPE_TRIVIAL  = (1,)
+_BROADCASTING_SHAPE_GRANULAR = (1, 16, 1, 1)
+_INCONSISTENT_NDIM           = (4, 16, 8)
+_INCONSISTENT_SHAPE          = (4, 32, 4, 4)
+_CONSISTENT_SHAPE            = (4, 16, 4, 4)
 
 _LOOP_LENGTH = 100
 
@@ -37,6 +39,7 @@ class ObserverTest(unittest.TestCase):
             for _ in range(0, _LOOP_LENGTH):
                 t = torch.randn(_TARGET_SHAPE)
                 observer.update(t)
+            self.assertTrue(observer.broadcasting_shape == _BROADCASTING_SHAPE_TRIVIAL)
             self.assertTrue(observer.n.shape    == observer.broadcasting_shape)
             self.assertTrue(observer.min.shape  == observer.broadcasting_shape)
             self.assertTrue(observer.max.shape  == observer.broadcasting_shape)
@@ -59,6 +62,7 @@ class ObserverTest(unittest.TestCase):
             t = torch.randn(_TARGET_SHAPE)
             observer.update(t)
             t = torch.randn(_CONSISTENT_SHAPE)
+            self.assertTrue(observer.broadcasting_shape == _BROADCASTING_SHAPE_GRANULAR)
             self.assertTrue(observer.n.shape    == observer.broadcasting_shape)
             self.assertTrue(observer.min.shape  == observer.broadcasting_shape)
             self.assertTrue(observer.max.shape  == observer.broadcasting_shape)
