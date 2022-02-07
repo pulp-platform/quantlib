@@ -1,14 +1,12 @@
-from enum import Enum, unique
+from enum import Enum
 from typing import Tuple, Dict
 from typing import Union
-from typing import NewType
 
+from quantlib.newutils import UnknownType, UNKNOWN
 from quantlib.newutils import quantlib_err_header
 
 
 # aliases (for readability)
-UnknownType = NewType('UnknownType', type(None))
-UNKNOWN = None
 IMPLICIT_STEP = 1
 
 
@@ -167,7 +165,7 @@ def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
     return QRange(offset, n_levels, step)
 
 
-def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
+def resolve_dict_qrangespec(qrangespec: Dict[str, int]) -> QRange:
 
     step = IMPLICIT_STEP
 
@@ -219,30 +217,31 @@ def resolve_dict_qrangespec(qrangespec: Dict[str, int]):
     return QRange(offset, n_levels, step)
 
 
+# String shortcuts must belong to the following list. We assume the NCHW
+# ordering of PyTorch.
+QRangeStrSpecOptions = Enum('QRangeStrSpecOptions',
+                            [
+                                ('BINARY',  QRange(offset=-1, n_levels=2, step=2)),
+                                ('TERNARY', QRange(offset=-1, n_levels=3, step=IMPLICIT_STEP)),
+                            ])
+
+
 def resolve_str_qrangespec(qrangespec: str) -> QRange:
-
-    if qrangespec == 'binary':
-        step = 2
-        offset = -1
-        n_levels = 2
-
-    elif qrangespec == 'ternary':
-        step = IMPLICIT_STEP
-        offset = -1
-        n_levels = 3
-
-    else:
-        raise ValueError(quantlib_err_header() + f"QRange string specification does not support this value: {qrangespec}.")
-
-    return QRange(offset, n_levels, step)
+    """Map a (supported) string shortcut to a ``QGranularity`` object."""
+    qrangespec = qrangespec.upper()
+    try:
+        qrange = getattr(QRangeStrSpecOptions, qrangespec).value
+        return qrange
+    except AttributeError:
+        raise ValueError(f"unsupported QGranularity string specification: {qrangespec}.")
 
 
-@unique
-class QRangeSpec(Enum):
-    """Update this in synch with ``QRangeSpec``."""
-    TUPLE = resolve_tuple_qrangespec
-    DICT  = resolve_dict_qrangespec
-    STR   = resolve_str_qrangespec
+QRangeSpecSolvers = Enum('QRangeSpecSolvers',
+                         [
+                             ('TUPLE', resolve_tuple_qrangespec),
+                             ('DICT',  resolve_dict_qrangespec),
+                             ('STR',   resolve_str_qrangespec),
+                         ])
 
 
 def resolve_qrangespec(qrangespec: QRangeSpecType) -> QRange:
@@ -312,11 +311,10 @@ def resolve_qrangespec(qrangespec: QRangeSpecType) -> QRange:
     """
 
     # I apply a strategy pattern to retrieve the correct solver method based on the QRange specification type
-    qrangespec_class = qrangespec.__class__.__name__
+    qrangespec_class = qrangespec.__class__.__name__.upper()
     try:
-        solver = getattr(QRangeSpec, qrangespec_class.upper())  # when the values of an enumerated are functions, I can not access them in dictionary-style: https://stackoverflow.com/a/50211710
-    except KeyError:
+        solver = getattr(QRangeSpecSolvers, qrangespec_class)  # when the values of an enumerated are functions, I can not access them in dictionary-style: https://stackoverflow.com/a/50211710
+        qrange = solver(qrangespec)
+        return qrange
+    except AttributeError:
         raise TypeError(quantlib_err_header() + f"Unsupported QRange specification type: {qrangespec_class}.")
-
-    qrange = solver(qrangespec)
-    return qrange
