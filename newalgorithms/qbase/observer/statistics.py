@@ -7,8 +7,8 @@ from quantlib.newutils import quantlib_err_header
 
 @dataclass
 class StatisticPayload:
-    n0: int      # number of sub-populations
-    values: Any  # running values of the observed statistic for all the sub-populations
+    n_subpopulations: int  # number of sub-populations
+    values: Any            # running values of the observed statistic for all the sub-populations
 
 
 class TensorStatistic(object):
@@ -45,9 +45,9 @@ class TensorStatistic(object):
             raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"expects two-dimensional arrays, but received an array of dimension {t.ndim}.")
 
         if self.is_tracking:
-            n0 = t.shape[0]
-            if n0 != self._payload.n0:
-                raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"was tracking {self._payload.n0} sub-populations, but received {n0} samples.")
+            n_subpopulations = t.shape[0]
+            if n_subpopulations != self._payload.n_subpopulations:
+                raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"was tracking {self._payload.n_subpopulations} sub-populations, but received {n_subpopulations} samples.")
 
     def _update(self, t: torch.Tensor) -> None:
         """Update the running value of the statistic."""
@@ -63,7 +63,7 @@ class NStatistic(TensorStatistic):
     def __init__(self):
         super().__init__()
 
-    def _check_n_overflow(self, n: int):
+    def _check_n_overflow(self, n: torch.Tensor):
         """Check that the sample counter is not overflowing!"""
         if (self._payload.values + n) - self._payload.values != n:
             raise RuntimeError(quantlib_err_header(obj_name=self.__class__.__name__) + "counter is overflowing!")
@@ -73,9 +73,11 @@ class NStatistic(TensorStatistic):
         n = t.shape[-1]
 
         if not self.is_tracking:
-            n0 = t.shape[0]
-            self._payload = StatisticPayload(n0, n)
+            n_subpopulations = t.shape[0]
+            n = torch.ones(n_subpopulations) * n
+            self._payload = StatisticPayload(n_subpopulations, n)
         else:
+            n = torch.ones(self._payload.n_subpopulations) * n
             self._check_n_overflow(n)
             self._payload.values = self._payload.values + n
 
@@ -90,8 +92,8 @@ class MinStatistic(TensorStatistic):
         min_ = torch.amin(t, dim=-1)
 
         if not self.is_tracking:
-            n0 = t.shape[0]
-            self._payload = StatisticPayload(n0, min_)
+            n_subpopulations = t.shape[0]
+            self._payload = StatisticPayload(n_subpopulations, min_)
         else:
             self._payload.values = torch.min(self._payload.values, min_)
 
@@ -106,8 +108,8 @@ class MaxStatistic(TensorStatistic):
         max_ = torch.amax(t, dim=-1)
 
         if not self.is_tracking:
-            n0 = t.shape[0]
-            self._payload = StatisticPayload(n0, max_)
+            n_subpopulations = t.shape[0]
+            self._payload = StatisticPayload(n_subpopulations, max_)
         else:
             self._payload.values = torch.max(self._payload.values, max_)
 
@@ -122,8 +124,8 @@ class SumStatistic(TensorStatistic):
         sum_ = torch.sum(t, dim=-1)
 
         if not self.is_tracking:
-            n0 = t.shape[0]
-            self._payload = StatisticPayload(n0, sum_)
+            n_subpopulations = t.shape[0]
+            self._payload = StatisticPayload(n_subpopulations, sum_)
         else:
             self._payload.values = self._payload.values + sum_
 
@@ -138,7 +140,7 @@ class Sum2Statistic(TensorStatistic):
         sum2 = torch.sum(t.pow(2), dim=-1)
 
         if not self.is_tracking:
-            n0 = t.shape[0]
-            self._payload = StatisticPayload(n0, sum2)
+            n_subpopulations = t.shape[0]
+            self._payload = StatisticPayload(n_subpopulations, sum2)
         else:
             self._payload.values = self._payload.values + sum2
