@@ -36,7 +36,6 @@ def resolve_tuple_qgranularityspec(qgranularityspec: Tuple[int, ...]) -> QGranul
 QGranularityStrSpecOptions = Enum('QGranularityStrSpecOptions',
                                   [
                                       ('PER-ARRAY',              QGranularity(tuple())),
-                                      ('PER-CHANNEL_FEATURES',   QGranularity((1,))),
                                       ('PER-OUTCHANNEL_WEIGHTS', QGranularity((0,))),
                                   ])
 

@@ -7,9 +7,9 @@ from .observer import MinMaxMeanVarObserver
 
 _TARGET_SHAPE                = (4, 16, 8, 8)
 _BROADCASTING_SHAPE_TRIVIAL  = (1,)
-_BROADCASTING_SHAPE_GRANULAR = (1, 16, 1, 1)
+_BROADCASTING_SHAPE_GRANULAR = (4, 1, 1, 1)
 _INCONSISTENT_NDIM           = (4, 16, 8)
-_INCONSISTENT_SHAPE          = (4, 32, 4, 4)
+_INCONSISTENT_SHAPE          = (8, 16, 4, 4)
 _CONSISTENT_SHAPE            = (4, 16, 4, 4)
 
 _LOOP_LENGTH = 100
@@ -49,7 +49,7 @@ class ObserverTest(unittest.TestCase):
         def test_loop_per_channel_features(self):
 
             # inconsistent shapes across updates
-            qgranularity = resolve_qgranularityspec('per-channel_features')
+            qgranularity = resolve_qgranularityspec('per-outchannel_weights')
             observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
             t = torch.randn(_TARGET_SHAPE)
             observer.update(t)
@@ -57,7 +57,7 @@ class ObserverTest(unittest.TestCase):
             self.assertRaises(ValueError, lambda: observer.update(t))
 
             # consistent shapes across updates (broadcastability is preserved)
-            qgranularity = resolve_qgranularityspec('per-channel_features')
+            qgranularity = resolve_qgranularityspec('per-outchannel_weights')
             observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
             t = torch.randn(_TARGET_SHAPE)
             observer.update(t)

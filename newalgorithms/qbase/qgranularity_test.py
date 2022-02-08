@@ -27,11 +27,6 @@ class QGranularitySolverTest(unittest.TestCase):
         qgranularity = resolve_qgranularityspec('per-array')
         self.assertTrue(reference == qgranularity)
 
-        # per-channel (for feature maps)
-        reference = (1,)
-        qgranularity = resolve_qgranularityspec('per-channel_features')
-        self.assertTrue(reference == qgranularity)
-
         # per-channel (for weights)
         reference = (0,)
         qgranularity = resolve_qgranularityspec('per-outchannel_weights')

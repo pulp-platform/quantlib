@@ -8,8 +8,11 @@ from .qinitstrategy import resolve_qhparamsinitstrategyspec
 
 _TARGET_SHAPE = (4, 16, 8, 8)
 
-_ARRAY_GRANULARITY            = resolve_qgranularityspec('per-array')
-_CHANNEL_FEATURES_GRANULARITY = resolve_qgranularityspec('per-channel_features')
+_ARRAY_GRANULARITY              = resolve_qgranularityspec('per-array')
+_OUTCHANNEL_WEIGHTS_GRANULARITY = resolve_qgranularityspec('per-outchannel_weights')
+
+_BROADCASTING_SHAPE_TRIVIAL  = (1,)
+_BROADCASTING_SHAPE_GRANULAR = (4, 1, 1, 1)
 
 
 class QHparamsInitStrategyTest(unittest.TestCase):
@@ -33,49 +36,49 @@ class QHparamsInitStrategyTest(unittest.TestCase):
         spec = 'const'
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
         observer = MinMaxMeanVarObserver(_ARRAY_GRANULARITY)
-        reference_a = torch.ones(1) * qhparamsinitstrategy.default_kwargs['a']
-        reference_b = torch.ones(1) * qhparamsinitstrategy.default_kwargs['b']
+        reference_a = torch.ones(_BROADCASTING_SHAPE_TRIVIAL) * qhparamsinitstrategy.default_kwargs['a']
+        reference_b = torch.ones(_BROADCASTING_SHAPE_TRIVIAL) * qhparamsinitstrategy.default_kwargs['b']
         a, b = qhparamsinitstrategy.get_a_b(observer)
-        self.assertTrue(torch.all(a < b))
         self.assertTrue(condition(reference_a, a))
         self.assertTrue(condition(reference_b, b))
+        self.assertTrue(torch.all(a < b))
 
         # custom keys ("cold" observer)
         kwargs = {'a': -2.0, 'b': 2.0}
         spec = ('const', kwargs)
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
         observer = MinMaxMeanVarObserver(_ARRAY_GRANULARITY)
-        reference_a = torch.ones(1) * kwargs['a']
-        reference_b = torch.ones(1) * kwargs['b']
+        reference_a = torch.ones(_BROADCASTING_SHAPE_TRIVIAL) * kwargs['a']
+        reference_b = torch.ones(_BROADCASTING_SHAPE_TRIVIAL) * kwargs['b']
         a, b = qhparamsinitstrategy.get_a_b(observer)
-        self.assertTrue(torch.all(a < b))
         self.assertTrue(condition(reference_a, a))
         self.assertTrue(condition(reference_b, b))
+        self.assertTrue(torch.all(a < b))
 
         # default keys ("warmed-up" observer)
         spec = 'const'
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_CHANNEL_FEATURES_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         observer.update(torch.randn(_TARGET_SHAPE))
-        reference_a = torch.ones(observer.broadcasting_shape) * qhparamsinitstrategy.default_kwargs['a']
-        reference_b = torch.ones(observer.broadcasting_shape) * qhparamsinitstrategy.default_kwargs['b']
+        reference_a = torch.ones(_BROADCASTING_SHAPE_GRANULAR) * qhparamsinitstrategy.default_kwargs['a']
+        reference_b = torch.ones(_BROADCASTING_SHAPE_GRANULAR) * qhparamsinitstrategy.default_kwargs['b']
         a, b = qhparamsinitstrategy.get_a_b(observer)
-        self.assertTrue(torch.all(a < b))
         self.assertTrue(condition(reference_a, a))
         self.assertTrue(condition(reference_b, b))
+        self.assertTrue(torch.all(a < b))
 
         # custom keys ("warmed-up" observer)
         kwargs = {'a': -2.0, 'b': 2.0}
         spec = ('const', kwargs)
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_ARRAY_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         observer.update(torch.randn(_TARGET_SHAPE))
-        reference_a = torch.ones(observer.broadcasting_shape) * kwargs['a']
-        reference_b = torch.ones(observer.broadcasting_shape) * kwargs['b']
+        reference_a = torch.ones(_BROADCASTING_SHAPE_GRANULAR) * kwargs['a']
+        reference_b = torch.ones(_BROADCASTING_SHAPE_GRANULAR) * kwargs['b']
         a, b = qhparamsinitstrategy.get_a_b(observer)
-        self.assertTrue(torch.all(a < b))
         self.assertTrue(condition(reference_a, a))
         self.assertTrue(condition(reference_b, b))
+        self.assertTrue(torch.all(a < b))
 
     def test_minmax_init_strategy(self):
 
@@ -86,16 +89,18 @@ class QHparamsInitStrategyTest(unittest.TestCase):
         # "cold" observer
         spec = 'minmax'
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_CHANNEL_FEATURES_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         self.assertRaises(RuntimeError, lambda: qhparamsinitstrategy.get_a_b(observer))
 
         # "warmed-up" observer
         spec = 'minmax'
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_CHANNEL_FEATURES_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         t = torch.randn(_TARGET_SHAPE)
         observer.update(t)
         a, b = qhparamsinitstrategy.get_a_b(observer)
+        self.assertTrue(a.shape == _BROADCASTING_SHAPE_GRANULAR)
+        self.assertTrue(b.shape == _BROADCASTING_SHAPE_GRANULAR)
         self.assertTrue(torch.all(a < b))
 
     def test_meanstd_init_strategy(self):
@@ -111,29 +116,33 @@ class QHparamsInitStrategyTest(unittest.TestCase):
         # default keys ("cold" observer)
         spec = 'meanstd'
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_CHANNEL_FEATURES_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         self.assertRaises(RuntimeError, lambda: qhparamsinitstrategy.get_a_b(observer))
 
         # custom keys ("cold" observer)
         spec = ('meanstd', {'n_std': 2})
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_CHANNEL_FEATURES_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         self.assertRaises(RuntimeError, lambda: qhparamsinitstrategy.get_a_b(observer))
 
         # default keys ("warmed-up" observer)
         spec = 'meanstd'
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_CHANNEL_FEATURES_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         observer.update(torch.randn(_TARGET_SHAPE))
         a, b = qhparamsinitstrategy.get_a_b(observer)
+        self.assertTrue(a.shape == _BROADCASTING_SHAPE_GRANULAR)
+        self.assertTrue(b.shape == _BROADCASTING_SHAPE_GRANULAR)
         self.assertTrue(torch.all(a < b))
 
         # custom keys ("warmed-up" observer)
         spec = ('meanstd', {'n_std': 2})
         qhparamsinitstrategy = resolve_qhparamsinitstrategyspec(spec)
-        observer = MinMaxMeanVarObserver(_ARRAY_GRANULARITY)
+        observer = MinMaxMeanVarObserver(_OUTCHANNEL_WEIGHTS_GRANULARITY)
         observer.update(torch.randn(_TARGET_SHAPE))
         a, b = qhparamsinitstrategy.get_a_b(observer)
+        self.assertTrue(a.shape == _BROADCASTING_SHAPE_GRANULAR)
+        self.assertTrue(b.shape == _BROADCASTING_SHAPE_GRANULAR)
         self.assertTrue(torch.all(a < b))
 
     def test_unsupported_init_strategy(self):
