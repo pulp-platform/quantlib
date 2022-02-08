@@ -43,7 +43,7 @@ from quantlib.newutils.messages import quantlib_wng_header, quantlib_err_header
 UNSPECIFIED = torch.Tensor([float('nan')])
 
 
-def init_qhparams(qrange: QRange) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def create_qhparams(qrange: QRange) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Initialise the hyper-parameters describing a quantiser.
 
     Note that all the output ``torch.Tensor``s will have ``ndim == 1`` and

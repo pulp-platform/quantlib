@@ -5,7 +5,7 @@ from typing import Tuple, Dict, Any
 from typing import Union, Type
 from typing import ClassVar
 
-from quantlib.newalgorithms.qbase import TensorObserver, MinMaxMeanVarObserver
+from ..observer import TensorObserver, MinMaxMeanVarObserver
 from quantlib.newutils import quantlib_err_header
 
 
