@@ -4,17 +4,18 @@ import torch.nn.functional as F
 from typing import Tuple
 
 from .qmodules import _QModule, _QLinear
+from ...qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 
 
 class QLinear(_QLinear, nn.Linear):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 in_features: int,
-                 out_features: int,
-                 bias: bool = True):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 in_features:              int,
+                 out_features:             int,
+                 bias:                     bool = True):
 
         super(_QModule, self).__init__(in_features=in_features,
                                        out_features=out_features,
@@ -24,7 +25,7 @@ class QLinear(_QLinear, nn.Linear):
                           qgranularityspec,
                           qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -43,17 +44,17 @@ class QLinear(_QLinear, nn.Linear):
 class QConv1d(_QLinear, nn.Conv1d):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 in_channels: int,
-                 out_channels: int,
-                 kernel_size: Tuple[int, ...],
-                 stride: Tuple[int, ...] = 1,
-                 padding: str = 0,
-                 dilation: Tuple[int, ...] = 1,
-                 groups: int = 1,
-                 bias: bool = True):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 in_channels:              int,
+                 out_channels:             int,
+                 kernel_size:              Tuple[int, ...],
+                 stride:                   Tuple[int, ...] = 1,
+                 padding:                  str = 0,
+                 dilation:                 Tuple[int, ...] = 1,
+                 groups:                   int = 1,
+                 bias:                     bool = True):
 
         super(_QModule, self).__init__(in_channels=in_channels,
                                        out_channels=out_channels,
@@ -69,7 +70,7 @@ class QConv1d(_QLinear, nn.Conv1d):
                           qgranularityspec,
                           qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -88,17 +89,17 @@ class QConv1d(_QLinear, nn.Conv1d):
 class QConv2d(_QLinear, nn.Conv2d):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 in_channels: int,
-                 out_channels: int,
-                 kernel_size: Tuple[int, ...],
-                 stride: Tuple[int, ...] = 1,
-                 padding: str = 0,
-                 dilation: Tuple[int, ...] = 1,
-                 groups: int = 1,
-                 bias: bool = True):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 in_channels:              int,
+                 out_channels:             int,
+                 kernel_size:              Tuple[int, ...],
+                 stride:                   Tuple[int, ...] = 1,
+                 padding:                  str = 0,
+                 dilation:                 Tuple[int, ...] = 1,
+                 groups:                   int = 1,
+                 bias:                     bool = True):
 
         super(_QModule, self).__init__(in_channels=in_channels,
                                        out_channels=out_channels,
@@ -114,7 +115,7 @@ class QConv2d(_QLinear, nn.Conv2d):
                           qgranularityspec,
                           qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -133,17 +134,17 @@ class QConv2d(_QLinear, nn.Conv2d):
 class QConv3d(_QLinear, nn.Conv3d):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 in_channels: int,
-                 out_channels: int,
-                 kernel_size: Tuple[int, ...],
-                 stride: Tuple[int, ...] = 1,
-                 padding: str = 0,
-                 dilation: Tuple[int, ...] = 1,
-                 groups: int = 1,
-                 bias: bool = True):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 in_channels:              int,
+                 out_channels:             int,
+                 kernel_size:              Tuple[int, ...],
+                 stride:                   Tuple[int, ...] = 1,
+                 padding:                  str = 0,
+                 dilation:                 Tuple[int, ...] = 1,
+                 groups:                   int = 1,
+                 bias:                     bool = True):
 
         super(_QModule, self).__init__(in_channels=in_channels,
                                        out_channels=out_channels,
@@ -159,7 +160,7 @@ class QConv3d(_QLinear, nn.Conv3d):
                           qgranularityspec,
                           qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:

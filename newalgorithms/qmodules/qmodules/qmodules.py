@@ -56,6 +56,7 @@ class _QModule(nn.Module):
         self.create_qhparams()
 
         self._qop: Union[torch.autograd.Function, None] = None  # child classes should register an algorithm-specific `torch.autograd.Function`
+        self._register_qop()
 
     def _create_qhparams(self):
         """Create quantiser hyper-parameters.
@@ -119,7 +120,8 @@ class _QModule(nn.Module):
     def stop_observing(self):
         raise NotImplementedError
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
+        # self._qop = [torch.autograd.Function_sub-class].apply
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -158,7 +160,7 @@ class _QActivation(_QModule):
         self.init_qhparams()
         self._observer = MinMaxMeanVarObserver(self._qgranularity)  # reset observer by creating a new one
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -210,7 +212,7 @@ class _QLinear(_QModule):
         self._is_observing &= False
         self.init_qhparams()
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:

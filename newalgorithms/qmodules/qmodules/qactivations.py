@@ -2,14 +2,15 @@ import torch
 import torch.nn as nn
 
 from .qmodules import _QModule, _QActivation
+from ...qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 
 
 class QIdentity(_QActivation, nn.Identity):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType):
 
         super(_QModule, self).__init__()
 
@@ -18,7 +19,7 @@ class QIdentity(_QActivation, nn.Identity):
                               qgranularityspec,
                               qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -28,10 +29,10 @@ class QIdentity(_QActivation, nn.Identity):
 class QReLU(_QActivation, nn.ReLU):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 inplace: bool = False):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 inplace:                  bool = False):
 
         super(_QModule, self).__init__(inplace=inplace)
 
@@ -40,7 +41,7 @@ class QReLU(_QActivation, nn.ReLU):
                               qgranularityspec,
                               qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -50,10 +51,10 @@ class QReLU(_QActivation, nn.ReLU):
 class QReLU6(_QActivation, nn.ReLU6):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 inplace: bool = False):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 inplace:                  bool = False):
 
         super(_QModule, self).__init__(inplace=inplace)
 
@@ -62,7 +63,7 @@ class QReLU6(_QActivation, nn.ReLU6):
                               qgranularityspec,
                               qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
@@ -72,11 +73,11 @@ class QReLU6(_QActivation, nn.ReLU6):
 class QLeakyReLU(_QActivation, nn.LeakyReLU):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 negative_slope: float = 1e-2,
-                 inplace: bool = False):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 negative_slope:           float = 1e-2,
+                 inplace:                  bool = False):
 
         super(_QModule, self).__init__(negative_slope=negative_slope,
                                        inplace=inplace)
@@ -86,7 +87,7 @@ class QLeakyReLU(_QActivation, nn.LeakyReLU):
                               qgranularityspec,
                               qhparamsinitstrategyspec)
 
-    def _register_qop(self, *args, **kwargs):
+    def _register_qop(self):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
