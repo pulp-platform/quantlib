@@ -109,15 +109,22 @@ class _QModule(nn.Module):
         self.register_parameter('clip_hi', nn.Parameter(clip_hi, requires_grad=False))
 
     def create_qhparams(self):
+        """Create ``nn.Module`` buffers hosting quantiser hyper-parameters."""
         raise NotImplementedError
 
     def init_qhparams(self):
+        """Finalise ``nn.Module`` buffers hosting quantiser hyper-parameters."""
         raise NotImplementedError
 
     def start_observing(self):
+        """Start collecting statistics about the unquantised array that the
+        ``nn.Module`` is responsible for."""
         raise NotImplementedError
 
     def stop_observing(self):
+        """Stop collecting statistics about the unquantised array that the
+        ``nn.Module`` is responsible for; then, finalise buffers (i.e., fully
+        specify the zero-point and scale parameters)."""
         raise NotImplementedError
 
     def _register_qop(self):
@@ -135,9 +142,34 @@ class _QActivation(_QModule):
                  qgranularityspec: QGranularitySpecType,
                  qhparamsinitstrategyspec: QHParamsInitStrategySpecType):
 
+        # TODO: ==============================================================
+        # PyTorch is built around dynamic computational graphs. This design
+        # choice implies that an activation `Module` does not have access to
+        # shape information about the arrays it processes until a first
+        # forward pass is run. Consequently, we can not know the broadcasting
+        # shape for buffers storing quantiser hyper-parameters until the first
+        # forward pass is run. We could create "placeholder" buffers to host
+        # quantiser hyper-parameters such as `UninitalisedBuffer` (https://pytorch.org/docs/stable/generated/torch.nn.parameter.UninitializedBuffer.html),
+        # buffers storing the `None` value, or buffers with shape `(1,)`.
+        # However, in the general granularity case we would have to replace
+        # the object they refer with a properly-shaped `torch.Tensor` when
+        # the broadcasting shape information becomes available. However, if an
+        # experiment crashes, we will have to build a new `_QActivation`
+        # object from scratch when resuming the experiment, and this object
+        # will again have an unknown shape. When `load_state_dict` notices a
+        # mismatch between the shape of the new instantiated buffer object and
+        # the shape of the buffer stored in memory, it will raise an error.
+        # It seems that the PyTorch team does not intend to allow for this
+        # behaviour:
+        # * issue#16675 (https://github.com/pytorch/pytorch/issues/16675#issuecomment-496113069);
+        # * issue#24139 (https://github.com/pytorch/pytorch/issues/24139#issue-479210410).
+        # Therefore, we just support per-array granularity when it comes to
+        # activation `Module`s (luckily, this is also the most useful
+        # practical use case).
         qgranularity = resolve_qgranularityspec(qgranularityspec)
         if qgranularity != QGranularity(tuple()):
             raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"does not support granularity other than per-array, but {qgranularity} was specified.")
+        # TODO: ==============================================================
 
         _QModule.__init__(self,
                           qrangespec,
