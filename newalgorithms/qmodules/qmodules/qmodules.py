@@ -161,6 +161,7 @@ class _QActivation(_QModule):
         # the shape of the buffer stored in memory, it will raise an error.
         # It seems that the PyTorch team does not intend to allow for this
         # behaviour:
+        # * issue#8104 (https://github.com/pytorch/pytorch/issues/8104#issuecomment-395381167);
         # * issue#16675 (https://github.com/pytorch/pytorch/issues/16675#issuecomment-496113069);
         # * issue#24139 (https://github.com/pytorch/pytorch/issues/24139#issue-479210410).
         # Therefore, we just support per-array granularity when it comes to
