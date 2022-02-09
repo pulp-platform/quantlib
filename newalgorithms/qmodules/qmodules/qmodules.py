@@ -20,23 +20,42 @@ class _QModule(nn.Module):
     def __init__(self,
                  qrangespec:               QRangeSpecType,
                  qgranularityspec:         QGranularitySpecType,
-                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                 *args,
-                 **kwargs):
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType):
+        """Register quantisation parameters into a target ``torch.nn.Module``.
 
-        super().__init__()
+        This class is meant to extend the functionalities of PyTorch
+        ``Module``s with quantisation-related parameters. This constructor
+        method is meant to be called after the constructor methods of the
+        extended ``Module``s. In this way, several assumptions will hold:
+
+        * ``self`` is an object of a class inheriting from ``nn.Module``,
+          exposing methods such as ``register_buffer``;
+        * if ``self`` is an object inheriting from linear ``nn.Module``s
+          (e.g., ``nn.Linear`` or ``nn.Conv2d``), the ``weight`` attribute
+          will be available.
+
+        See the constructor methods of classes based on ``_QActivation`` and
+        ``_QLinear`` to see how we tweak the MRO for the ``__init__`` methods
+        to achieve this effect.
+
+        As a consequence, we always assume that the constructor method of
+        ``_QModule`` does not need to call the constructor methods of any
+         class which preceeds it in the MRO of derived classes (i.e., derived
+         from ``_QModule``).
+        """
 
         self._qrange: QRange                      = resolve_qrangespec(qrangespec)
         self._qgranularity: QGranularity          = resolve_qgranularityspec(qgranularityspec)
         self._qinitstrategy: QHParamsInitStrategy = resolve_qhparamsinitstrategyspec(qhparamsinitstrategyspec)
-        self.register_buffer('_pin_offset', torch.Tensor([self._qrange.offset is not UNKNOWN]))
-        self.register_buffer('_is_quantised', torch.Tensor([False]))
+        self.register_buffer('_pin_offset',   torch.tensor(self._qrange.offset is not UNKNOWN))
+        self.register_buffer('_is_quantised', torch.tensor(False))
 
         self._observer: MinMaxMeanVarObserver = MinMaxMeanVarObserver(self._qgranularity)
-        self.register_buffer('_is_observing', torch.Tensor([False]))
+        self.register_buffer('_is_observing', torch.tensor(False))
 
-        self._qop: Union[torch.autograd.Function, None] = None
-        self._register_qop(*args, **kwargs)  # this step is specific to the chosen PTQ/QAT algorithm
+        self.create_qhparams()
+
+        self._qop: Union[torch.autograd.Function, None] = None  # child classes should register an algorithm-specific `torch.autograd.Function`
 
     def _create_qhparams(self):
         """Create quantiser hyper-parameters.
@@ -103,7 +122,7 @@ class _QModule(nn.Module):
     def _register_qop(self, *args, **kwargs):
         raise NotImplementedError
 
-    def _call_qop(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
 
@@ -112,18 +131,16 @@ class _QActivation(_QModule):
     def __init__(self,
                  qrangespec: QRangeSpecType,
                  qgranularityspec: QGranularitySpecType,
-                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                 *args,
-                 **kwargs):
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType):
 
-        super().__init__(qrangespec,
-                         qgranularityspec,
-                         qhparamsinitstrategyspec,
-                         *args,
-                         **kwargs)
+        qgranularity = resolve_qgranularityspec(qgranularityspec)
+        if qgranularity != QGranularity(tuple()):
+            raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"does not support granularity other than per-array, but {qgranularity} was specified.")
 
-        if self._qgranularity != QGranularity(tuple()):
-            raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + f"does not support granularity other than per-array, but {self._qgranularity} was specified.")
+        _QModule.__init__(self,
+                          qrangespec,
+                          qgranularityspec,
+                          qhparamsinitstrategyspec)
 
     def create_qhparams(self):
         self._create_qhparams()
@@ -144,11 +161,21 @@ class _QActivation(_QModule):
     def _register_qop(self, *args, **kwargs):
         raise NotImplementedError
 
-    def _call_qop(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+
+        if self._is_observing:
+            with torch.no_grad():
+                self._observer.update(x)
+
+        if self._is_quantised:
+            x = self._call_qop(x)
+        else:
+            x = super(_QModule, self).forward(x)
+
+        return x
 
 
 class _QLinear(_QModule):
@@ -156,15 +183,12 @@ class _QLinear(_QModule):
     def __init__(self,
                  qrangespec:               QRangeSpecType,
                  qgranularityspec:         QGranularitySpecType,
-                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                 *args,
-                 **kwargs):
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType):
 
-        super().__init__(qrangespec,
-                         qgranularityspec,
-                         qhparamsinitstrategyspec,
-                         *args,
-                         **kwargs)
+        _QModule.__init__(self,
+                          qrangespec,
+                          qgranularityspec,
+                          qhparamsinitstrategyspec)
 
     def create_qhparams(self):
         self._observer = MinMaxMeanVarObserver(self._qgranularity)
@@ -189,12 +213,12 @@ class _QLinear(_QModule):
     def _register_qop(self, *args, **kwargs):
         raise NotImplementedError
 
-    def _call_qop(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
     @property
     def qweight(self):
-        raise NotImplementedError
+        return self._call_qop(self.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+        raise NotImplementedError  # different linear `Module`s will call different functionals, to which weights should be explicitly passed

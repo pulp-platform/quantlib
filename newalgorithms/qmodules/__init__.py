@@ -1,1 +1,2 @@
-from .qmodules import _QActivation, _QLinear
+from .qmodules import QIdentity, QReLU, QReLU6, QLeakyReLU
+from .qmodules import QLinear, QConv1d, QConv2d, QConv3d
