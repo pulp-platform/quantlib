@@ -13,7 +13,7 @@ def _fake_quantise(x: torch.Tensor,
                    step: torch.Tensor,
                    scale: torch.Tensor) -> torch.Tensor:
 
-    x = torch.clip(x, clip_lo, clip_hi + scale / 2)
+    x = torch.clip(x, clip_lo, clip_hi + scale / 4)
     x = x - clip_lo
     x = x / (step * scale)
     x = torch.floor(x)
