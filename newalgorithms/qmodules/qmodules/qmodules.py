@@ -108,6 +108,11 @@ class _QModule(nn.Module):
         self.register_parameter('clip_lo', nn.Parameter(clip_lo, requires_grad=False))
         self.register_parameter('clip_hi', nn.Parameter(clip_hi, requires_grad=False))
 
+    def _set_clipping_bounds(self):
+        clip_lo, clip_hi = get_clipping_bounds(self.zero, self.n_levels, self.step, self.scale)
+        self.clip_lo.data = clip_lo
+        self.clip_hi.data = clip_hi
+
     def create_qhparams(self):
         """Create ``nn.Module`` buffers hosting quantiser hyper-parameters."""
         raise NotImplementedError
@@ -179,10 +184,11 @@ class _QActivation(_QModule):
 
     def create_qhparams(self):
         self._create_qhparams()
+        self._create_clipping_bounds()
 
     def init_qhparams(self):
         self._init_qhparams()
-        self._create_clipping_bounds()
+        self._set_clipping_bounds()
 
     def start_observing(self):
         self._observer = MinMaxMeanVarObserver(self._qgranularity)  # reset observer by creating a new one
@@ -229,13 +235,14 @@ class _QLinear(_QModule):
         self._observer = MinMaxMeanVarObserver(self._qgranularity)
         self._observer.update(self.weight)  # resolve broadcasting shape
         self._create_qhparams()
+        self._create_clipping_bounds()
         self._observer = MinMaxMeanVarObserver(self._qgranularity)
 
     def init_qhparams(self):
         self._observer = MinMaxMeanVarObserver(self._qgranularity)
         self._observer.update(self.weight)  # resolve broadcasting shape
         self._init_qhparams()
-        self._create_clipping_bounds()
+        self._set_clipping_bounds()
         self._observer = MinMaxMeanVarObserver(self._qgranularity)
 
     def start_observing(self):
