@@ -228,7 +228,7 @@ class QModulesTest(unittest.TestCase):
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
         # warm-up observer and finalise quantiser parametrisation
         muqr.start_observing()
-        for _ in range(0, _LOOP_LENGTH):
+        for i in range(0, _LOOP_LENGTH):
             self.assertTrue(muqr._is_observing)
             x = torch.randn(_FEATURES_SHAPE)
             _ = muqr(x)
@@ -256,7 +256,7 @@ class QModulesTest(unittest.TestCase):
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
         # warm-up observer and finalise quantiser parametrisation
         muqr.start_observing()
-        for _ in range(0, _LOOP_LENGTH):
+        for i in range(0, _LOOP_LENGTH):
             self.assertTrue(muqr._is_observing)
             x = torch.randn(_FEATURES_SHAPE)
             _ = muqr(x)
@@ -284,7 +284,7 @@ class QModulesTest(unittest.TestCase):
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
         # warm-up observer and finalise quantiser parametrisation
         muqr.start_observing()
-        for _ in range(0, _LOOP_LENGTH):
+        for i in range(0, _LOOP_LENGTH):
             self.assertTrue(muqr._is_observing)
             x = torch.randn(_FEATURES_SHAPE)
             _ = muqr(x)
@@ -361,7 +361,7 @@ class QModulesTest(unittest.TestCase):
         self.assertTrue(torch.all(muqc2d(x) == _CONV2D_MODULE(x)))
         # warm-up observer and finalise quantiser parametrisation
         muqc2d.start_observing()
-        for _ in range(0, _LOOP_LENGTH):
+        for i in range(0, _LOOP_LENGTH):
             self.assertTrue(muqc2d._is_observing)
             x = torch.randn(_FEATURES_SHAPE)
             _ = muqc2d(x)

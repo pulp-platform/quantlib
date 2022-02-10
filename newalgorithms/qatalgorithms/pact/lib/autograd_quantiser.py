@@ -2,7 +2,7 @@ import torch
 from typing import Tuple
 
 
-class PACTQuantiser(torch.autograd.Function):
+class _PACTQuantiser(torch.autograd.Function):
     """PACT (PArametrized Clipping acTivation) quantisation function.
 
     This function acts component-wise on the input array. In the forward pass,
