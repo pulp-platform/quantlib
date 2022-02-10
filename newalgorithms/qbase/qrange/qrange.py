@@ -67,6 +67,15 @@ class QRange(object):
 
     """
     def __init__(self, offset: Union[int, UnknownType], n_levels: int, step: int):
+        """Create a QRange object.
+
+        ``QRange``s are the abstraction by which QuantLib users describe
+        quantisers to ``QModule``s. Note that this information should not
+        change after being specified. We make this choice since we assume that
+        users know how they would like to quantise their neural network before
+        running a single training iteration.
+
+        """
 
         self._offset = offset
         self._n_levels = n_levels
@@ -107,6 +116,7 @@ class QRange(object):
 
     @property
     def is_sign_range(self) -> bool:
+        """Signal the intention of the user to specify the binary sign range."""
         try:
             return self.range == (-1, 1)
         except TypeError:
@@ -114,6 +124,7 @@ class QRange(object):
 
     @property
     def is_unsigned(self) -> bool:
+        """Signal the intention of the user to specify a UINT sub-range."""
         try:
             return (self.min == 0) and (self.step == 1)
         except TypeError:
@@ -121,6 +132,8 @@ class QRange(object):
 
     @property
     def is_quasisymmetric(self) -> bool:
+        """Signal the intention of the user to specify a two's complement INT
+        sub-range."""
         try:
             return (abs(self.min) == abs(self.max) + 1) and (self.step == 1)
         except TypeError:
@@ -128,8 +141,10 @@ class QRange(object):
 
     @property
     def is_symmetric(self):
+        """Signal the intention of the user to specify a sign-magnitude INT
+        sub-range."""
         try:
-            return (abs(self.min) == abs(self.max)) and (self.step == 1)
+            return self.is_sign_range or ((abs(self.min) == abs(self.max)) and (self.step == 1))
         except TypeError:
             return False  # signed ranges always specify their offset, so they do not raise an exception
 
