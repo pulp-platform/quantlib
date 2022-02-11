@@ -21,7 +21,7 @@ class _PACTModule(nn.Module):
         self._pact_learnable_bounds: Union[None, PACTLearnableClippingBounds] = None
         self._get_learnable_clipping_bounds()
 
-        self.register_buffer('_is_frozen', torch.tensor(False))
+        self.register_buffer('_clipping_bounds_are_frozen', torch.tensor(False))
         self._flag_bounds_as_learnable()
     
     def _check_clipping_bounds(self, a: torch.Tensor, b: torch.Tensor):
@@ -53,11 +53,11 @@ class _PACTModule(nn.Module):
         self._update_qhparams_and_clipping_bounds()
         self.clip_lo.requires_grad = False
         self.clip_hi.requires_grad = False
-        self._is_frozen |= True
+        self._clipping_bounds_are_frozen |= True
 
     def thaw(self):
         self._flag_bounds_as_learnable()
-        self._is_frozen &= False
+        self._clipping_bounds_are_frozen &= False
 
     def register_qop(self):
         self._qop = _PACTQuantiser.apply
@@ -87,7 +87,7 @@ class _PACTActivation(_PACTModule):
 
     def _update_qhparams_and_clipping_bounds(self):
 
-        if self._is_frozen:
+        if self._clipping_bounds_are_frozen:
             pass
 
         else:
@@ -150,7 +150,7 @@ class _PACTLinear(_PACTModule):
 
     def _update_qhparams_and_clipping_bounds(self):
 
-        if self._is_frozen:
+        if self._clipping_bounds_are_frozen:
             pass
         else:
             self.init_qhparams()

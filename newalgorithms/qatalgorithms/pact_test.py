@@ -10,6 +10,15 @@ _FEATURES_ONES     = torch.ones(_FEATURES_SHAPE)
 _FEATURES_INTEGERS = torch.arange(-2, 6).to(dtype=torch.float32).reshape(1, 8, 1, 1) * _FEATURES_ONES
 _RELU_MODULE       = nn.ReLU()
 
+_IN_CHANNELS  = 8
+_OUT_CHANNELS = 16
+_KERNEL_SIZE  = 3
+_PADDING      = 1
+_HAS_BIAS     = False
+_GRAD_SHAPE   = (1, 16, 200, 200)
+_GRAD_ONES    = torch.ones(_GRAD_SHAPE)
+_CONV2D_MODULE = nn.Conv2d(in_channels=_IN_CHANNELS, out_channels=_OUT_CHANNELS, kernel_size=_KERNEL_SIZE, padding=_PADDING, bias=_HAS_BIAS)
+
 _LEARNING_RATE_LOW  = 1e-6
 _LEARNING_RATE_HIGH = 1e-3
 
@@ -24,7 +33,7 @@ class PACTModulesTest(unittest.TestCase):
         cond = bool(torch.all((0.0 <= absdiff) & (absdiff <= 1.0)))  # I know that the absolute value has non-negative codomain, but I state the condition explicitly for readability
         return cond
 
-    def test_pactrelu(self):
+    def test__pactactivation(self):
 
         # clip_lo-only
         # create object
@@ -195,6 +204,61 @@ class PACTModulesTest(unittest.TestCase):
         pactrelu.clip_lo.grad = None
         pactrelu.clip_hi.grad = None
 
-    def test_pactconv2d(self):
-        # TODO: implement tests for PACTConv2d
-        pass
+    def test__pactlinear(self):
+
+        # create object
+        qrangespec = {'bitwidth': 8, 'signed': True}
+        qgranularityspec = 'per-outchannel_weights'
+        qhparamsinitstrategyspec = 'meanstd'  # using a statistics-dependent strategy is fundamental, otherwise the quantisers might not be re-computed
+        pactc2d = PACTConv2d(qrangespec, qgranularityspec, qhparamsinitstrategyspec,
+                             in_channels=_IN_CHANNELS, out_channels=_OUT_CHANNELS, kernel_size=_KERNEL_SIZE, padding=_PADDING, bias=_HAS_BIAS)
+        self.assertFalse(pactc2d.clip_lo.requires_grad)
+        self.assertFalse(pactc2d.clip_hi.requires_grad)
+        # does it have Conv2d behaviour when unquantised?
+        pactc2d.weight.data.copy_(_CONV2D_MODULE.weight.data)
+        x = torch.randn(_FEATURES_SHAPE)
+        self.assertTrue(torch.all(pactc2d(x) == _CONV2D_MODULE(x)))
+        # finalise quantiser parametrisation
+        pactc2d.init_qhparams()
+        # fake-quantise weights
+        fqw = pactc2d.qweight
+        tqw = fqw / (pactc2d.step * pactc2d.scale)
+        self.assertTrue(PACTModulesTest._check_integerisation(tqw, torch.floor(tqw)))
+        # forward/backward iteration (clipping bounds should change)
+        clip_lo_old = pactc2d.clip_lo.data
+        clip_hi_old = pactc2d.clip_hi.data
+        x = torch.randn(_FEATURES_SHAPE)
+        y = pactc2d(x)
+        y.backward(_GRAD_ONES)
+        pactc2d.weight.data -= _LEARNING_RATE_LOW * pactc2d.weight.grad  # update weights, and therefore also their statistics
+        _ = pactc2d.qweight  # trigger quantiser re-computation
+        clip_lo_new = pactc2d.clip_lo.data
+        clip_hi_new = pactc2d.clip_hi.data
+        self.assertFalse(torch.all(clip_lo_new == clip_lo_old))
+        self.assertFalse(torch.all(clip_hi_new == clip_hi_old))
+        # freeze clipping bounds
+        pactc2d.freeze()
+        clip_lo_old = pactc2d.clip_lo.data
+        clip_hi_old = pactc2d.clip_hi.data
+        x = torch.randn(_FEATURES_SHAPE)
+        y = pactc2d(x)
+        y.backward(_GRAD_ONES)
+        pactc2d.weight.data -= _LEARNING_RATE_LOW * pactc2d.weight.grad  # update weights, and therefore also their statistics
+        _ = pactc2d.qweight  # trigger quantiser re-computation
+        clip_lo_new = pactc2d.clip_lo.data
+        clip_hi_new = pactc2d.clip_hi.data
+        self.assertTrue(torch.all(clip_lo_new == clip_lo_old))
+        self.assertTrue(torch.all(clip_hi_new == clip_hi_old))
+        # thaw clipping bounds
+        pactc2d.thaw()
+        clip_lo_old = pactc2d.clip_lo.data
+        clip_hi_old = pactc2d.clip_hi.data
+        x = torch.randn(_FEATURES_SHAPE)
+        y = pactc2d(x)
+        y.backward(_GRAD_ONES)
+        pactc2d.weight.data -= _LEARNING_RATE_LOW * pactc2d.weight.grad  # update weights, and therefore also their statistics
+        _ = pactc2d.qweight  # trigger quantiser re-computation
+        clip_lo_new = pactc2d.clip_lo.data
+        clip_hi_new = pactc2d.clip_hi.data
+        self.assertFalse(torch.all(clip_lo_new == clip_lo_old))
+        self.assertFalse(torch.all(clip_hi_new == clip_hi_old))
