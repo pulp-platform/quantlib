@@ -40,7 +40,8 @@ __all__ = ['MergeConvBNPass',
            'InsertModuleBetweenNodesPass',
            'InsertModuleBetweenModulesPass',
            'ShapePropPass',
-           'CountMACsPass']
+           'CountMACsPass',
+           '_MAC_CNT_FNS']
 
 
 
@@ -51,12 +52,12 @@ def madd_of_conv2d(insize, c):
         if len(insize) > 2:
             insize = insize[2:]
         numel = 1; [numel := numel * el for el in insize]
-        #print(numel)
     elif isinstance(insize, int):
         numel = insize * insize
     else:
         assert False, f"invalid insize argument passed to madd_of_conv2d: {insize}"
     return madds_per_pixel * numel//(c.stride[0]*c.stride[1])
+
 def madd_of_lin(_, l):
     return l.in_features * l.out_features
 
@@ -290,5 +291,5 @@ class CountMACsPass(FxPass):
                 k = type(m)
                 if k in _MAC_CNT_FNS.keys():
                     shp = node.meta['tensor_meta'].shape
-                    node.meta['macs'] = _MAC_CNT_FNS[k](shp, m)
+                    node.meta['macs'] = int(_MAC_CNT_FNS[k](shp, m))
         return gm
