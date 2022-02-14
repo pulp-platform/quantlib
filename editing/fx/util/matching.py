@@ -135,9 +135,7 @@ class SequentialMatcher:
 
         for node in self.searched_gm.graph.nodes:
             matches = self.matches_subgraph_from_anchor(node)
-            #print("matches:  ", matches)
             for m in matches:
-                #print("m:  ", m)
                 if not match_overlaps_with_previous(m):
                     all_matches.append(m)
                     for k, n in m.nodes_map.items():

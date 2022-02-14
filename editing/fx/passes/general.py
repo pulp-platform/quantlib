@@ -143,7 +143,7 @@ class ModularizeActivationsPass(ModularizePass):
         return (module_class(*module_inst_args, **module_inst_kwargs), module_call_args, module_call_kwargs)
 
     def __init__(self):
-        super(ModularizeActivationsPass, self).__init__(op='call_function', target=tuple(k for k in act_function_to_module.keys()), name="MODULARIZE_ACTIVATIONS_PASS")
+        super(ModularizeActivationsPass, self).__init__(op='call_function', target=tuple(k for k in self.act_function_to_module.keys()), replacement_fn=self.act_node_to_module, name="MODULARIZE_ACTIVATIONS_PASS")
 
 class RetracePass(FxPass):
     def __init__(self, trace : callable):
@@ -263,9 +263,17 @@ class InsertModuleBetweenModulesPass(SequentialPass):
 
 class ShapePropPass(FxPass):
     # a wrapper for the shape propagation pass of torch.fx
-    def __init__(self, *shapes_in : Union[Tuple[int], List[int], torch.Size], dtype_in : torch.dtype = torch.float32):
+    def __init__(self, *shapes_in, dtype_in : torch.dtype = torch.float32):
         super(ShapePropPass, self).__init__()
-        self.shapes_in = [torch.Size(s) for s in shapes_in]
+
+        # SCHEREMO: Workaround for unpacking multi input shapes
+        try:
+            self.shapes_in = [torch.Size(s) for s in shapes_in]
+        except:
+            # This case should ONLY be called if the input is a tuple of a list
+            shapes_in = shapes_in[0]
+            self.shapes_in = [torch.Size(s) for s in shapes_in]
+
         self.dtype_in = dtype_in
 
     def run_pass(self, gm : fx.GraphModule):

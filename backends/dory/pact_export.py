@@ -31,7 +31,7 @@ import onnx
 import numpy as np
 
 import quantlib.editing.fx as qlfx
-from quantlib.editing.fx.passes.pact import RequantShift
+from quantlib.algorithms.pact import RequantShift
 
 # annotate:
 #   conv, FC nodes:
@@ -48,7 +48,10 @@ from quantlib.editing.fx.passes.pact import RequantShift
 
 
 def get_attr_by_name(node, name):
-    a = [attr for attr in node.attribute if attr.name == name][0]
+    try:
+        a = [attr for attr in node.attribute if attr.name == name][0]
+    except IndexError:
+        a = "asdf"
     return a
 
 
@@ -58,10 +61,11 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
 # bits; in a properly exported model this would be done based on
 # meta-information contained in the pytorch graph.
     clip_nodes = [n for n in m.graph.node if n.op_type == "Clip"]
-    for n in clip_nodes:
+    for i, n in enumerate(clip_nodes):
         lower = get_attr_by_name(n, "min").f
         #assert lower == 0.0, "clip node {} has lower clip bound {} not equal to zero!".format(n.name, lower)
         upper = get_attr_by_name(n, "max").f
+
         assert np.log2(upper+1.0) % 1.0 < 1e-6
         n_bits = int(np.round(np.log2(upper-lower+1.0)))
         precision_attr = onnx.helper.make_attribute(key='out_bits', value=n_bits)
@@ -99,6 +103,8 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
 
 def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10):
     net = net.eval()
+
+
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     onnx_file = f"{name}_ql_integerized.onnx"

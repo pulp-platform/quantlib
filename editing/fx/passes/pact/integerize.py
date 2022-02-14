@@ -1,24 +1,24 @@
 #
 # general.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from typing import Union, Optional, Tuple, List
 from dataclasses import dataclass
@@ -35,8 +35,11 @@ from quantlib.algorithms.pact.pact_ops import *
 from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
+from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
+
+from quantlib.algorithms.pact.pact_ops import RequantShift
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
@@ -44,32 +47,98 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizePACTLinearPass',
            'IntegerizeBNActPass',
            'IntegerizePACTNetPass',
+           'IntegerizeSoftmaxPass',
+           'IntegerizeGELUPass',
+           'IntegerizeLayerNormPass',
+           'IntegerizeEmbeddingsPass',
            'PACTTracer',
-           'PACT_symbolic_trace',
-           'RequantShift']
+           'PACT_symbolic_trace',]
 
-class RequantShift(nn.Module):
-    def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
-        super(RequantShift, self).__init__()
-        self.register_buffer('mul', mul)
-        self.register_buffer('add', add)
-        self.register_buffer('div', D)
-        self.signed = signed
-        self.n_levels_out = n_levels
+def integerize_softmax_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    lin_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(lin_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTSoftmax), f"integerize_softmax_fun got bad match - expected PACTSoftmax, got {type(module)}"
 
-    def forward(self, x):
-        x = x * self.mul
-        x = x + self.add
-        x = (x/self.div).floor()
-        if not self.signed:
-            x = torch.clip(x, 0., float(self.n_levels_out-1))
-        else:
-            c = np.floor(self.n_levels_out/2+0.001)
-            if self.n_levels_out % 2:
-                x = torch.clip(x, -c, c)
-            else:
-                x = torch.clip(x, -c, c-1)
-        return x
+    new_softmax = PACTIntegerSoftmax(n_levels=module.n_levels, eps_in=eps_in)
+
+    return new_softmax
+
+def integerize_gelu_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    lin_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(lin_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTGELU), f"integerize_gelu_fun got bad match - expected PACTGELU, got {type(lin)}"
+
+    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in)
+
+    return new_gelu
+
+def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    layernorm_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(layernorm_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTLayerNorm), f"integerize_layernorm_fun got bad match - expected PACTLayerNorm, got {type(module)}"
+
+    if affine:
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, weight=module.weight, bias=module.bias)
+    else:
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)
+
+    return new_layernorm
+
+class IntegerizeLayerNormPass(SequentialPass):
+    def __init__(self, affine = True, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTLayerNorm(256))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine), f'_INTEGER_LAYERNORM_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
+
+class IntegerizeSoftmaxPass(SequentialPass):
+    def __init__(self, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTSoftmax(256))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_softmax_fun, f'_INTEGER_SOFTMAX_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
+
+class IntegerizeGELUPass(SequentialPass):
+    def __init__(self, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTGELU(256))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_gelu_fun, f'_INTEGER_GELU_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
+
+# class RequantShift(nn.Module):
+#     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
+#         super(RequantShift, self).__init__()
+#         self.register_buffer('mul', mul)
+#         self.register_buffer('add', add)
+#         self.register_buffer('div', D)
+#         self.signed = signed
+#         self.n_levels_out = n_levels
+
+#     def forward(self, x):
+#         x = x * self.mul
+#         x = x + self.add
+#         x = (x/self.div).floor()
+#         if not self.signed:
+#             x = torch.clip(x, 0., float(self.n_levels_out-1))
+#         else:
+#             c = np.floor(self.n_levels_out/2+0.001)
+#             if self.n_levels_out % 2:
+#                 x = torch.clip(x, -c, c)
+#             else:
+#                 x = torch.clip(x, -c, c-1)
+#         return x
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -86,7 +155,7 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          padding=conv.padding,
                          dilation=conv.dilation,
                          groups=conv.groups,
-                         bias=False,
+                         bias=None,
                          padding_mode=conv.padding_mode)
     new_conv.weight.data.copy_(conv.weight_int)
 
@@ -116,8 +185,9 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     # note the new node's intended integer precision in the precision dict
     #if prec_dict is not None:
         #nbits = int(np.log2(lin.n_levels) + 0.2)
-#        prec_dict[name] = nbits
+        #        prec_dict[name] = nbits
 
+    #import IPython; IPython.embed()
     new_lin = nn.Linear(in_features=lin.in_features,
                         out_features=lin.out_features,
                         bias=(lin.bias is not None))
@@ -135,8 +205,7 @@ class IntegerizePACTLinearPass(ReplaceSequentialPatternPass):
         name = "_INTEGERIZE_PACT_LIN_PASS"
         super(IntegerizePACTLinearPass, self).__init__(pattern, PACT_symbolic_trace, integerize_pact_linear_fun, name)
 
-
-def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
+def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_requant=False, requant_node=False):
     modules = dict(gm.named_modules())
     if not isinstance(D, torch.Tensor):
         D = torch.tensor(D)
@@ -200,31 +269,59 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24):
             gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1, 1))
             beta_h = beta_h.reshape((beta_h.numel(), 1, 1, 1))
 
-    requant = RequantShift(gamma_h, beta_h, act.n_levels, signed_act, D)
+    requant = RequantShift(gamma_h, beta_h, act.n_levels, signed_act, D, cmsis_requant=cmsis_requant, requant_node=requant_node)
     return requant
 
 class IntegerizeBNActPass(SequentialPass):
-    def __init__(self, D : float = 2**24):
+    def __init__(self, D : float = 2**24, cmsis_requant=False, requant_node=False):
         passes = []
         # replace all combinations of BN + PACT activation with RequantShift layers
         for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
             for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
                 pattern = nn.Sequential(bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D))
+                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node))
+
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
             pattern = nn.Sequential(act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D))
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node))
 
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
+def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    n_levels = modules[matched_nodes[0].target].adder.n_levels
+    eps_adder = modules[matched_nodes[0].target].adder.acts[0].get_eps()
+    bias = modules[matched_nodes[0].target]._parameters['weights']
+    maxval = modules[matched_nodes[0].target].maxval
+    eps_in = extract_eps(matched_nodes[0].meta['quant'].eps_in)
+
+    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval, twoStage=True)
+
+    return new_embedding
+
+# This can be made much more general -- Current workaround
+class IntegerizeEmbeddingsPass(SequentialPass):
+    def __init__(self, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTEmbedding(torch.Tensor((1.,)), init_clip='max', learn_clip=False, act_kind='identity'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(embedding_integerize_fun), f'_INTEGERIZE_EMBEDDINGS_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGERIZE_EMBEDDING_PASS')
+
+
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
+        # IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
+        # ShapePropPass will contaminate the batchnorm parameters!
         passes.append(ShapePropPass(shape_in))
+        # make use of the annotated shapes to disassemble layernorms
+        # passes.append(LayerNormDisassemblePass())
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
         # second step: annotate epsilons
@@ -233,7 +330,9 @@ class IntegerizePACTNetPass(SequentialPass):
         # functions (conv and FC)
         passes.append(IntegerizePACTConvPass())
         passes.append(IntegerizePACTLinearPass())
-        # now, PACT Activations (combined with BN layers) can be converted to
-        # RequantShift layers
-        passes.append(IntegerizeBNActPass(D))
+        passes.append(IntegerizeSoftmaxPass())
+        passes.append(IntegerizeLayerNormPass())
+        passes.append(IntegerizeGELUPass())
+        passes.append(IntegerizeBNActPass(D, enable_add_first))
+        passes.append(IntegerizeEmbeddingsPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")
