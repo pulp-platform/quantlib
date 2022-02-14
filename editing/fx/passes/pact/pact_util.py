@@ -24,15 +24,17 @@ from functools import partial
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 from quantlib.algorithms.pact import *
+from quantlib.algorithms.pact.pact_ops import _PACTActivation
 
 
 
 #PACT operations which should not be traced through
-PACT_OPS = set([PACTUnsignedAct,
-            PACTAsymmetricAct,
-            PACTConv2d,
-            PACTConv1d,
-            PACTLinear])
+PACT_OPS = set([_PACTActivation,
+                PACTUnsignedAct,
+                PACTAsymmetricAct,
+                PACTConv2d,
+                PACTConv1d,
+                PACTLinear])
 
 PACT_OPS_INT = set([PACTIntegerAdd,
                     PACTIntegerConcat,
