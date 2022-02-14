@@ -5,6 +5,7 @@ from torch import nn, fx
 
 from quantlib.editing.fx.util import module_of_node
 from quantlib.editing.fx.passes import FxPass, ModifySequentialPatternPass, ShapePropPass, CountMACsPass, SequentialPass
+from quantlib.algorithms.pact import PACTIntegerAdd
 from .bb_util import BB_symbolic_trace
 
 from quantlib.algorithms.bb import BBAct, BBConv2d, BBLinear, BBGateController
@@ -49,7 +50,8 @@ class BBAttachControllersPass(FxPass):
                         nn.AdaptiveMaxPool2d,
                         nn.MaxPool1d,
                         nn.MaxPool2d,
-                        nn.Flatten)
+                        nn.Flatten,
+                        nn.Dropout)
 
     def __init__(self, max_macs : Optional[int] = None, macs_dict : Optional[dict] = None, gate_init : float = 2.):
         self.max_macs = max_macs
@@ -74,6 +76,7 @@ class BBAttachControllersPass(FxPass):
             return self.find_prev_act(gm, node.all_input_nodes[0])
         elif node.op == "call_module":
             m = module_of_node(gm, node)
+            #if isinstance(m, (BBAct, PACTIntegerAdd)):
             if isinstance(m, BBAct):
                 return node
             elif isinstance(m, self._PASSTHRU_LAYERS):
@@ -89,21 +92,29 @@ class BBAttachControllersPass(FxPass):
                     scale_factor = self.macs_dict[module]/self.max_macs
                     #print(f"Scale factor of conv/linear node {node.name}: {scale_factor}")
                     #print(f"Module repr: {module}")
+
                     ctrl = BBGateController(module, scale_factor, self.gate_init)
                     maybe_act = self.find_prev_act(gm, node.all_input_nodes[0])
                     if maybe_act:
                         am = module_of_node(gm, maybe_act)
-                        if am.gate_ctrl:
-                            # if there is already a gate_controller registered,
-                            # we add the scale factor to the existing one. Note
-                            # that this can lead to scale factors > 1!
-                            # this can happen if one activation's output is
-                            # used by multiple linear operators
-                            #print(f"Scale factor of act node {node.name}: {scale_factor}")
-                            #print(f"Module repr: {am}")
-                            am.gate_ctrl.loss_scale += scale_factor
-                        else:
-                            actrl = BBGateController(am, scale_factor, self.gate_init)
+                        # label the conv layer with the associated activation
+                        module.gate_ctrl.linked_layer = maybe_act.target
+                        # if we have an integerAdd node, the activation we are
+                        # looking for is its output activation
+                        if isinstance(am, PACTIntegerAdd):
+                            am = am.act_out
+                            module.gate_ctrl.linked_layer += ".act_out"
+
+                        if isinstance(am, BBAct): #`am` may be a regular PACTAct...
+                            if am.gate_ctrl:
+                                # if there is already a gate_controller registered,
+                                # we add the scale factor to the existing one. Note
+                                # that this can lead to scale factors > 1!
+                                # this can happen if one activation's output is
+                                # used by multiple linear operators
+                                am.gate_ctrl.loss_scale += scale_factor
+                            else:
+                                actrl = BBGateController(am, scale_factor, self.gate_init)
         return gm
 
 class BBControllerInitPass(FxPass):

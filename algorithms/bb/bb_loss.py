@@ -22,6 +22,7 @@ class BBLossFactory(object):
                     net_nodes   = LightweightGraph.build_nodes_list(net)
                     bb_filter = VariadicOrFilter(*[TypeFilter(t) for t in _BB_CLASSES])
                     bb_modules = [n.module for n in bb_filter(net_nodes)]
+                    # each controller only contributes to loss term once!
                     self.controllers = list(set([m.gate_ctrl for m in bb_modules if m.gate_ctrl is not None]))
                     self.mu0 = mu0
                     base_loss_type.__init__(self, *args, **kwargs)
@@ -31,7 +32,6 @@ class BBLossFactory(object):
                     bb_loss = 0.
                     for c in self.controllers:
                         bb_loss = bb_loss + self.mu0 * c.loss_term()
-                    print(f"bb_loss: {bb_loss}")
                     return loss + bb_loss
 
             BBLoss.__name__ = rep

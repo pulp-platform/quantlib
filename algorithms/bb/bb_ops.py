@@ -4,6 +4,7 @@ from quantlib.algorithms.bb.bb_functions import BBQuantize, BBQuantizeTestTime, 
 from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.pact.pact_ops import _PACTActivation
 __all__ = ["_BB_CLASSES",
+           "_BB_LINOPS",
            "BBAct",
            "BBConv2d",
            "BBLinear"]
@@ -178,8 +179,6 @@ class BBAct(_PACTActivation):
         if not self.started:
             return super(BBAct, self).forward(x)
         elif self.training:
-            eps = self.get_eps()
-            xp = PACTQuantize(x, eps, self.clip_lo, self.clip_hi, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
             # expand in batch dimension (!!!) Does it make sense? who knows...
             xb = BBQuantize(x, self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T, self.clip_lo, self.clip_hi, self.precs, self.signed, expand=True)
             #print(f"diff to pact: {(xb-xp).abs().mean()}")
@@ -207,7 +206,9 @@ class BBAct(_PACTActivation):
                 break
         return n_levels
 
-
 _BB_CLASSES = [BBAct,
                BBConv2d,
                BBLinear]
+
+_BB_LINOPS = [BBConv2d,
+              BBLinear]
