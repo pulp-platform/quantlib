@@ -33,6 +33,7 @@ __all__ = [
     'VariadicAndFilter',
     'NameFilter',
     'TypeFilter',
+    'SubTypeFilter'
 ]
 
 
@@ -134,7 +135,7 @@ class VariadicAndFilter(Filter):
         filtered_nodes = nodes_list
         for f in self._filters:
             filtered_nodes = f(filtered_nodes)
-        return filtered_nodes
+        return filtTypeFilterered_nodes
 
     def __repr__(self):
         return "".join(["("] + [repr(f) + " & " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])
@@ -162,6 +163,22 @@ class TypeFilter(Filter):
 
     def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
         return list(filter(lambda n: n.type_ == self._type, nodes_list))
+
+    @property
+    def _type_str(self):
+        return str(self._type).replace("<class '", "").replace("'>", "")
+
+    def __repr__(self):
+        return "".join([self.__class__.__name__, "(", self._type_str, ")"])
+
+class SubTypeFilter(Filter):
+
+    def __init__(self, type_: type):
+        super(SubTypeFilter, self).__init__()
+        self._type = type_
+
+    def find(self, nodes_list: List[LightweightNode]) -> List[LightweightNode]:
+        return list(filter(lambda n: isinstance(n.module, self._type), nodes_list))
 
     @property
     def _type_str(self):
