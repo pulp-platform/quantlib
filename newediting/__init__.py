@@ -53,3 +53,6 @@ Such nuances include:
 * the fact that not all kernel nodes compute semantical features (e.g., the results of linear, batch-normalisation, and activation operations), but also helper values (e.g., the shape of an array).
 
 """
+
+from .tracing import Tracer, symbolic_trace
+from .tracing import QModuleTracer, qmodule_symbolic_trace
