@@ -32,6 +32,7 @@ import copy
 
 
 __all__ = [
+    '_PACTActivation',
     'PACTUnsignedAct',
     'PACTAsymmetricAct',
     'PACTConv2d',

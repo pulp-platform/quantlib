@@ -26,10 +26,10 @@ from torch import nn
 import numpy as np
 
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, TypeFilter
+from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, SubTypeFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import _PACTActivation, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat
+from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat
 from .util import assert_param_valid, almost_symm_quant
 
 
@@ -238,7 +238,7 @@ class PACTActController(Controller):
     @staticmethod
     def get_modules(net : nn.Module):
         net_nodes = LightweightGraph.build_nodes_list(net)
-        filter_act = TypeFilter(PACTUnsignedAct) | TypeFilter(PACTAsymmetricAct)
+        filter_act = SubTypeFilter(_PACTActivation)
         return [n.module for n in filter_act(net_nodes)]
 
 
@@ -450,12 +450,9 @@ class PACTLinearController(Controller):
 
     @staticmethod
     def get_modules(net : nn.Module):
-        filter_fc = TypeFilter(PACTLinear)
-        filter_conv1 = TypeFilter(PACTConv1d)
-        filter_conv2 = TypeFilter(PACTConv2d)
-        filter_lin = filter_fc | filter_conv1 | filter_conv2
+        filter_all_linops = SubTypeFilter(_PACTLinOp)
         net_nodes = LightweightGraph.build_nodes_list(net)
-        return [n.module for n in filter_lin(net_nodes)]
+        return [n.module for n in filter_all_linops(net_nodes)]
 
 
 class PACTIntegerModulesController(Controller):
