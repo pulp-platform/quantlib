@@ -190,7 +190,7 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
 
 
     def add_replacement_fn(self, tree):
-        return PACTIntegerAdd(num_args=len(tree.args), act_kind='identity', **self.kwargs)
+        return PACTIntegerAdd(num_args=len(tree.args), act_kind='identity', init_clip='max',learn_clip=True,  **self.kwargs)
 
 
 class ConcatTreeReplacementPass(SequentialPass):
@@ -338,7 +338,7 @@ def insert_final_activation(fx_model, n_levels):
         if type(target_prefix) == str and target_prefix != '':
             new_node_target = '.'.join([target_prefix, new_node_target])
 
-        fx_model.add_submodule(new_node_target, PACTAsymmetricAct(n_levels, leaky=0, act_kind='identity', symm=True))
+        fx_model.add_submodule(new_node_target, PACTAsymmetricAct(n_levels, leaky=0, act_kind='identity', symm=True, init_clip='max', learn_clip=True))
         #fx_model.add_submodule(new_node_target, qa.pact.PACTUnsignedAct(n_levels, leaky=0, act_kind='relu'))
         new_node = fx_model.graph.call_module(new_node_target, args=tuple([node]))
         totidx = totidx + 1

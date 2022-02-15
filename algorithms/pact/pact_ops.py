@@ -221,7 +221,7 @@ class PACTWrapModule(nn.Module):
         super().__init__()
         self.module = copy.deepcopy(module)
         self.n_levels = n_levels
-        self.statTracker = PACTAsymmetricAct(n_levels=n_levels, act_kind='identity', leaky=0., symm=True)
+        self.statTracker = PACTAsymmetricAct(n_levels=n_levels, act_kind='identity', leaky=0., symm=True, init_clip='max', learn_clip=True)
         self._dict = _dict
 
     def forward(self, *x, **kwargs):
@@ -256,7 +256,7 @@ class RequantShift(nn.Module):
                 return torch.clip(y, min=0., max=float(n_levels_out-1))
             else:
             # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
-                c = torch.round(n_levels_out/2. + 0.001).type_as(x)
+                c = torch.round(torch.Tensor((n_levels_out,))/2. + 0.001).type_as(x)
                 return torch.clip(y, min=-c, max=(c - 1)).type_as(x)
 
         @staticmethod
@@ -612,7 +612,7 @@ class PACTIntegerGELU(torch.nn.Module):
 
         self.D = torch.Tensor((2.**16,)).detach()
         self.totScaler = torch.Tensor((255.,)).detach()
-        self.maxval = maxval.detach()
+        self.maxval = torch.Tensor((maxval,)).detach()
 
         self.zero = torch.Tensor((0.,)).detach()
 
@@ -1473,68 +1473,68 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 # ARE STILL IN BETA STADIUM - DO NOT USE FOR IMPORTANT THINGS!
 #############################################################
 
-class PACTIntegerLayerNorm(torch.nn.Module):
+# class PACTIntegerLayerNorm(torch.nn.Module):
 
-    def __init__(self, module, n_levels: int = 256):
-        super().__init__()
+#     def __init__(self, module, n_levels: int = 256):
+#         super().__init__()
 
-        self.n_levels = n_levels
-        self.frozen = False
-        self.eps_in = 1.
-        self.eps = 1.
-        self.module = copy.deepcopy(module)
+#         self.n_levels = n_levels
+#         self.frozen = False
+#         self.eps_in = 1.
+#         self.eps = 1.
+#         self.module = copy.deepcopy(module)
 
-        self.register_buffer('totScaler', torch.Tensor((255.,)))
-        self.register_buffer('D', torch.Tensor((2**16,)))
-        self.register_buffer('maxval', torch.Tensor((1.,)))
+#         self.register_buffer('totScaler', torch.Tensor((255.,)))
+#         self.register_buffer('D', torch.Tensor((2**16,)))
+#         self.register_buffer('maxval', torch.Tensor((1.,)))
 
-    def forward(self, x):
-        if self.frozen:
-            nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
-            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
-            y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
-            y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
-        else:
-            y = self.module(x)
+#     def forward(self, x):
+#         if self.frozen:
+#             nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
+#             denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
+#             y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
+#             y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
+#         else:
+#             y = self.module(x)
 
-            self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-            scaler = (self.n_levels)/self.maxval
-            self.totScaler.data[0] = math.floor(self.D * scaler)
+#             self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
+#             scaler = (self.n_levels)/self.maxval
+#             self.totScaler.data[0] = math.floor(self.D * scaler)
 
-        return y
+#         return y
 
-class PACTIntegerSoftmax(torch.nn.Module):
+# class PACTIntegerSoftmax(torch.nn.Module):
 
-    def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
-        super().__init__()
-        self.n_levels = n_levels
-        self.module = copy.deepcopy(module)
-        self.frozen = False
-        self.eps_in = eps_in
+#     def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
+#         super().__init__()
+#         self.n_levels = n_levels
+#         self.module = copy.deepcopy(module)
+#         self.frozen = False
+#         self.eps_in = eps_in
 
-        self.register_buffer('coeffA', torch.Tensor((0.3585,)))
-        self.register_buffer('coeffB', torch.Tensor((1.353,)))
-        self.register_buffer('coeffC', torch.Tensor((0.344,)))
-        self.register_buffer('log2', torch.Tensor((4.,)))
+#         self.register_buffer('coeffA', torch.Tensor((0.3585,)))
+#         self.register_buffer('coeffB', torch.Tensor((1.353,)))
+#         self.register_buffer('coeffC', torch.Tensor((0.344,)))
+#         self.register_buffer('log2', torch.Tensor((4.,)))
 
-    def updateCoeffs(self, eps):
-        eps2 = (1./(2**8))/(eps**2)
+#     def updateCoeffs(self, eps):
+#         eps2 = (1./(2**8))/(eps**2)
 
-        self.coeffA.data[0] = math.floor(0.3585/eps2)
-        self.coeffB.data[0] = math.floor(1.353/eps)
-        self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
-        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
+#         self.coeffA.data[0] = math.floor(0.3585/eps2)
+#         self.coeffB.data[0] = math.floor(1.353/eps)
+#         self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
+#         self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
 
-    def forward(self, x):
-        if self.frozen:
-            xTilde = (x - torch.max(x))
-            z = torch.floor(-xTilde / self.log2)
-            p = xTilde + z * self.log2
-            y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
-            ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-            out = torch.floor(y*(self.n_levels-1)/ysum)
-            return out
-        else:
-            y = self.module(x)
+#     def forward(self, x):
+#         if self.frozen:
+#             xTilde = (x - torch.max(x))
+#             z = torch.floor(-xTilde / self.log2)
+#             p = xTilde + z * self.log2
+#             y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
+#             ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+#             out = torch.floor(y*(self.n_levels-1)/ysum)
+#             return out
+#         else:
+#             y = self.module(x)
 
-        return y
+#         return y

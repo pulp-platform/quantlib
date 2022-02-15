@@ -35,7 +35,7 @@ from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
 
-from .. import FxPass, ReplaceSingleInputPatternPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
+from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
 from ...util import gm_modules, module_of_node
@@ -104,7 +104,7 @@ class ProtoPACTEmbedding(torch.nn.Module):
     def __init__(self, weights : torch.Tensor = torch.Tensor((1.,))):
         super().__init__()
         self.weights = nn.Parameter(weights)
-        self.adder = PACTIntegerAdd(n_levels=256, num_args=2)
+        self.adder = PACTIntegerAdd(n_levels=256, num_args=2, act_kind='identity', init_clip='max', learn_clip=True)
         
     def forward(self, x):
         out = self.adder(x, self.weights)

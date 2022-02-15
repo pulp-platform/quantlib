@@ -26,7 +26,7 @@ from typing import Optional, Union
 from torch import fx, nn
 from torch.fx.subgraph_rewriter import Match
 
-from ..util import get_ordered_active_nodes, get_qualified_prefix, module_of_node, SequentialMatcher, NonUniqueGeneralMatcher
+from ..util import get_ordered_active_nodes, get_qualified_prefix, module_of_node, SequentialMatcher#, NonUniqueGeneralMatcher
 
 __all__ = ['FxPass',
            'SequentialPass',

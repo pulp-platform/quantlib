@@ -51,7 +51,10 @@ def madd_of_conv2d(insize, c):
     if isinstance(insize, (torch.Size, tuple, list)):
         if len(insize) > 2:
             insize = insize[2:]
-        numel = 1; [numel := numel * el for el in insize]
+        numel = 1
+        for el in insize:
+            numel *= el
+        #numel = 1; [numel := numel * el for el in insize]
     elif isinstance(insize, int):
         numel = insize * insize
     else:
