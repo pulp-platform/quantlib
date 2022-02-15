@@ -1,1 +1,1 @@
-from .gebase import GraphEditor, GraphAnnotator, GraphRewriter
+from .canonicalisation import ActivationCanonicaliser

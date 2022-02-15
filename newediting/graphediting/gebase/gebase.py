@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch.fx as fx
 from collections import OrderedDict
-from typing import Union, List, Any, Callable
+from typing import Union, Optional, List, Any, NewType
 
 from quantlib.newutils import quantlib_err_header
 
@@ -16,7 +16,7 @@ class GraphEditor(object):
         self._parent_editor: Union[None, GraphEditor] = None
         self._children_editors: OrderedDict[str, GraphEditor] = OrderedDict()
 
-    def _set_parent_editor(self, editor: GraphEditor) -> None:
+    def set_parent_editor(self, editor: GraphEditor) -> None:
         self._parent_editor = editor
 
     @property
@@ -54,12 +54,9 @@ class GraphEditor(object):
             raise RuntimeError(quantlib_err_header(obj_name=self.__class__.__name__) + "can not register a candidate children GraphEditor when the candidate already has a parent GraphEditor.")
 
         self._children_editors[name] = editor
-        editor._set_parent_editor(self)
+        editor.set_parent_editor(self)
 
-    def _apply(self, gm: fx.GraphModule) -> fx.GraphModule:
-        raise NotImplementedError
-
-    def apply(self, gm: fx.GraphModule) -> fx.GraphModule:
+    def apply(self, data_gm: fx.GraphModule):
         raise NotImplementedError
 
 
@@ -71,35 +68,58 @@ class GraphAnnotator(GraphEditor):
     def register_child_editor(self, name: str, editor: GraphEditor) -> None:
         raise RuntimeError(quantlib_err_header(obj_name=self.__class__.__name__) + "can not register children GraphEditor objects.")
 
-    def _apply(self, gm: fx.GraphModule) -> fx.GraphModule:
+    def apply(self, gm: fx.GraphModule):
         raise NotImplementedError
 
-    def apply(self, gm: fx.GraphModule) -> fx.GraphModule:
-        raise NotImplementedError
+
+ApplicationPoint = NewType('ApplicationPoint', Any)
 
 
 class GraphRewriter(GraphEditor):
 
-    def __init__(self, symbolic_trace_fun: Callable):
+    def __init__(self, name: str):
+
         super(GraphRewriter, self).__init__()
-        self._symbolic_trace_fun = symbolic_trace_fun
 
-    def _search_application_points(self, gm: fx.GraphModule) -> List[Any]:
-        raise NotImplementedError
+        # we use the following two parameters to annotate all the transformations made by the `GraphRewriter`
+        self._name: str = '_QL_' + name
+        self._counter: int = 0
 
-    def _retrace(self, gm: fx.GraphModule) -> fx.GraphModule:
-        return self._symbolic_trace_fun(gm)
+    def register_child_editor(self, name: str, editor: GraphEditor) -> None:
+        raise RuntimeError(quantlib_err_header(obj_name=self.__class__.__name__) + "can not register children GraphEditor objects.")
 
-    def _polish(self, gm: fx.GraphModule) -> None:
+    def _polish_graphmodule(self, data_gm: fx.GraphModule) -> None:
         """Finalise the modifications applied by the ``GraphRewriter``."""
-        gm.recompile()   # https://pytorch.org/docs/stable/fx.html#torch.fx.GraphModule.recompile
-        gm.graph.lint()  # https://pytorch.org/docs/stable/fx.html#torch.fx.Graph.lint; this also enforces that the nodes appear in topological order
+        data_gm.recompile()   # https://pytorch.org/docs/stable/fx.html#torch.fx.GraphModule.recompile
+        data_gm.graph.lint()  # https://pytorch.org/docs/stable/fx.html#torch.fx.Graph.lint; this also enforces that the nodes appear in topological order
 
-    def _apply(self, gm: fx.GraphModule) -> fx.GraphModule:
+    def find_application_points(self, data_gm: fx.GraphModule) -> List[Any]:
         raise NotImplementedError
 
-    def apply(self, gm: fx.GraphModule) -> fx.GraphModule:
-        # gm = self._apply(gm)
-        # self._polish(gm)
-        # gm = self._retrace(gm)
+    def _select_ap(self, data_gm: fx.GraphModule) -> ApplicationPoint:
+
+        all_application_points = self.find_application_points(data_gm)
+        try:
+            ap = next(iter(all_application_points))
+        except StopIteration:
+            raise RuntimeError(quantlib_err_header(obj_name=self.__class__.__name__) + "the GraphRewriter could not detect any application point.")
+
+        return ap
+
+    def _apply(self, data_gm: fx.GraphModule, ap: ApplicationPoint):
+        """Apply the rewriting to the target ``fx.GraphModule`` on the
+        provided application point.
+
+        Note that this function operates by side-effect, i.e., by modifying
+        the provided ``fx.GraphModule``.
+        """
+        # [...]
+        # self._polish_graphmodule(data_gm)
+        raise NotImplementedError
+
+    def apply(self, data_gm: fx.GraphModule, ap: Optional[Any] = None):
+        # # if no specific application point is provided, select the first application point found by the `GraphWriter`'s automatic procedure
+        # if ap is None:
+        #     ap = self._select_ap(data_gm)
+        # data_gm = self._apply(data_gm)
         raise NotImplementedError

@@ -3,14 +3,10 @@ import torch.nn as nn
 import torch.fx as fx
 from torch.fx.subgraph_rewriter import Match
 from typing import List, Callable
+import warnings
 
-from quantlib.newutils import quantlib_err_header
-
-
-_OPCODE_PLACEHOLDER = {'placeholder'}
-_OPCODE_OUTPUT      = {'output'}
-_OPCODE_CALL_MODULE = {'call_module'}
-_OPCODES_WILDCARDS  = _OPCODE_PLACEHOLDER | _OPCODE_OUTPUT
+from quantlib.newediting.tracing import _OPCODE_PLACEHOLDER, _OPCODE_OUTPUT, _OPCODES_IO, _OPCODE_CALL_MODULE
+from quantlib.newutils import quantlib_err_header, quantlib_wng_header
 
 
 class LinearGraphMatcher(object):
@@ -129,7 +125,7 @@ class LinearGraphMatcher(object):
 
         """
 
-        if pn.op in _OPCODES_WILDCARDS:
+        if pn.op in _OPCODES_IO:
             state = True
 
         elif pn.op in _OPCODE_CALL_MODULE:
@@ -229,7 +225,7 @@ class LinearGraphMatcher(object):
         matched_nodes = set()
 
         def overlaps_with_previous_matches(match: Match) -> bool:
-            body_nodes = set(dn for pn, dn in match.nodes_map.items() if (dn.op not in _OPCODES_WILDCARDS))
+            body_nodes = set(dn for pn, dn in match.nodes_map.items() if (dn.op not in _OPCODES_IO))
             return any(n in matched_nodes for n in body_nodes)
 
         matches: List[Match] = []
@@ -240,8 +236,8 @@ class LinearGraphMatcher(object):
                 match = Match(anchor=data_anchor, nodes_map=candidate_match)
                 if not overlaps_with_previous_matches(match):
                     matches.append(match)
-                    matched_nodes.union(set(dn for pn, dn in match.nodes_map.items() if pn not in _OPCODES_WILDCARDS))
+                    matched_nodes.union(set(dn for pn, dn in match.nodes_map.items() if pn not in _OPCODES_IO))
                 else:
-                    print('Warning: match already found!')
+                    warnings.warn(quantlib_wng_header(obj_name=self.__class__.__name__) + "two matches with non-zero overlap were found; the latest will be discarded.")
 
         return matches

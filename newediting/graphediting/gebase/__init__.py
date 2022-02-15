@@ -1,1 +1,1 @@
-from .gebase import GraphEditor, GraphAnnotator, GraphRewriter
+from .gebase import GraphEditor, GraphAnnotator, GraphRewriter, ApplicationPoint
