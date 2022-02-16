@@ -117,9 +117,9 @@ class GraphRewriter(GraphEditor):
         # self._polish_graphmodule(data_gm)
         raise NotImplementedError
 
-    def apply(self, data_gm: fx.GraphModule, ap: Optional[Any] = None):
+    def apply(self, data_gm: fx.GraphModule, ap: Optional[ApplicationPoint] = None):
         # # if no specific application point is provided, select the first application point found by the `GraphWriter`'s automatic procedure
         # if ap is None:
         #     ap = self._select_ap(data_gm)
-        # data_gm = self._apply(data_gm)
+        # self._apply(data_gm)
         raise NotImplementedError
