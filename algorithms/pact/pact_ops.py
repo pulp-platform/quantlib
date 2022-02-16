@@ -235,16 +235,12 @@ class RequantShift(nn.Module):
 
         @staticmethod
         def forward(ctx, x, mul, add, div, signed, n_levels_out, cmsis_requant):
-            dummyTwo = torch.tensor(2.).type_as(x)
-            dummyOne = torch.tensor(1.).type_as(x)
-            dummyZero = torch.tensor(0.).type_as(x)
-
             # CMSIS-NN performs addition first, then multiplication and
             # division. The rounding in (y / div).round() is folded into the
             # addition.
             if cmsis_requant:
                 y = (x + torch.round(add/mul)) * mul
-                y = (y / div).round()
+                y = torch.round(y / div)
             # PULP-NN performs multiplication first, then addition and
             # division. Division is with flooring.
             else:
@@ -256,25 +252,27 @@ class RequantShift(nn.Module):
                 return torch.clip(y, min=0., max=float(n_levels_out-1))
             else:
             # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
-                c = torch.round(torch.Tensor((n_levels_out,))/2. + 0.001).type_as(x)
+                c = torch.round(n_levels_out/2. + 0.001).type_as(x)
                 return torch.clip(y, min=-c, max=(c - 1)).type_as(x)
 
         @staticmethod
         @parse_args('v', 'v', 'v', 't', 't', 't', 't')
-        def symbolic(g, x, mul, add, div, signed, n_levels_out, enable_add_first):
+        def symbolic(g, x, mul, add, div, signed, n_levels_out, cmsis_requant):
+
+            signed = torch.Tensor((signed,)).type_as(div)
             div_ = g.op("Constant", value_t=div)
             signed_ = g.op("Constant", value_t=signed)
             n_levels_out_ = g.op("Constant", value_t=n_levels_out)
 
-            return g.op("PACTOps::RequantShift", x, mul, add, div_t=div, signed_t=signed, n_levels_t=n_levels_out)
+            return g.op("PACTOps::RequantShift", x, mul, add, div_t=div, signed_t=signed, n_levels_out_t=n_levels_out)
 
-    def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**16), cmsis_requant=False, requant_node=True):
+    def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.Tensor((2**16,)), cmsis_requant=False, requant_node=True):
         super(RequantShift, self).__init__()
         self.register_buffer('mul', mul.clone().detach())
         self.register_buffer('add', add.clone().detach())
-        self.register_buffer('div', D.type_as(add).detach())
+        self.div = D.clone().type_as(add).detach()
         self.signed = signed
-        self.n_levels_out = n_levels
+        self.n_levels_out = torch.Tensor((n_levels,)).detach()
         # cmsis_requant specifies whether we want to do requantization in
         # CMSIS-NN (true) or PULP-NN (false) style
         self.cmsis_requant = cmsis_requant

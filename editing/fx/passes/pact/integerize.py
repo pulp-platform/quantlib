@@ -311,7 +311,7 @@ class IntegerizeEmbeddingsPass(SequentialPass):
 
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -333,6 +333,6 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeSoftmaxPass())
         passes.append(IntegerizeLayerNormPass())
         passes.append(IntegerizeGELUPass())
-        passes.append(IntegerizeBNActPass(D, enable_add_first))
+        passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
         passes.append(IntegerizeEmbeddingsPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")
