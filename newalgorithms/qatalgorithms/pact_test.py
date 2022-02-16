@@ -40,12 +40,13 @@ class PACTModulesTest(unittest.TestCase):
         qrangespec = 'binary'
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = ('const', {'a': -0.25, 'b': 0.25})
-        pactrelu = PACTReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        pactrelu = PACTReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(pactrelu.clip_lo.requires_grad)
         self.assertFalse(pactrelu.clip_hi.requires_grad)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(pactrelu(x) == _RELU_MODULE(x)))
+        self.assertTrue(pactrelu.inplace == _RELU_MODULE.inplace)
         # finalise quantiser parametrisation
         pactrelu.init_qhparams()
         # fake-quantise input
@@ -100,12 +101,13 @@ class PACTModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 4, 'signed': False}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = ('const', {'a': 0.0, 'b': 2.0})
-        pactrelu = PACTReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        pactrelu = PACTReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertFalse(pactrelu.clip_lo.requires_grad)
         self.assertTrue(pactrelu.clip_hi.requires_grad)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(pactrelu(x) == _RELU_MODULE(x)))
+        self.assertTrue(pactrelu.inplace == _RELU_MODULE.inplace)
         # finalise quantiser parametrisation
         pactrelu.init_qhparams()
         # fake-quantise input
@@ -157,12 +159,13 @@ class PACTModulesTest(unittest.TestCase):
         qrangespec = {'n_levels': 255}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'minmax'
-        pactrelu = PACTReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        pactrelu = PACTReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(pactrelu.clip_lo.requires_grad)
         self.assertTrue(pactrelu.clip_hi.requires_grad)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(pactrelu(x) == _RELU_MODULE(x)))
+        self.assertTrue(pactrelu.inplace == _RELU_MODULE.inplace)
         # warm-up observer and finalise quantiser parametrisation
         self.assertFalse(pactrelu._is_observing)
         pactrelu.start_observing()
@@ -210,12 +213,10 @@ class PACTModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': True}
         qgranularityspec = 'per-outchannel_weights'
         qhparamsinitstrategyspec = 'meanstd'  # using a statistics-dependent strategy is fundamental, otherwise the quantisers might not be re-computed
-        pactc2d = PACTConv2d(qrangespec, qgranularityspec, qhparamsinitstrategyspec,
-                             in_channels=_IN_CHANNELS, out_channels=_OUT_CHANNELS, kernel_size=_KERNEL_SIZE, padding=_PADDING, bias=_HAS_BIAS)
+        pactc2d = PACTConv2d.from_fp_module(_CONV2D_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertFalse(pactc2d.clip_lo.requires_grad)
         self.assertFalse(pactc2d.clip_hi.requires_grad)
         # does it have Conv2d behaviour when unquantised?
-        pactc2d.weight.data.copy_(_CONV2D_MODULE.weight.data)
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(pactc2d(x) == _CONV2D_MODULE(x)))
         # finalise quantiser parametrisation

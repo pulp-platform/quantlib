@@ -9,11 +9,11 @@ from .qmodules import QConv2d
 from quantlib.newalgorithms.qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 
 
-def _fake_quantise(x: torch.Tensor,
+def _fake_quantise(x:       torch.Tensor,
                    clip_lo: torch.Tensor,
                    clip_hi: torch.Tensor,
-                   step: torch.Tensor,
-                   scale: torch.Tensor) -> torch.Tensor:
+                   step:    torch.Tensor,
+                   scale:   torch.Tensor) -> torch.Tensor:
 
     x = torch.clip(x, clip_lo, clip_hi + scale / 4)
     x = x - clip_lo
@@ -27,10 +27,10 @@ def _fake_quantise(x: torch.Tensor,
 class MockUpQReLU(QReLU):  # no real `torch.autograd.Function` object is registered
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 inplace: bool = False):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 inplace:                  bool = False):
 
         super().__init__(qrangespec,
                          qgranularityspec,
@@ -43,33 +43,21 @@ class MockUpQReLU(QReLU):  # no real `torch.autograd.Function` object is registe
     def _call_qop(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         return _fake_quantise(x, self.clip_lo, self.clip_hi, self.step, self.scale)
 
-    @classmethod
-    def from_fp_module(cls,
-                       fpm: nn.ReLU,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> MockUpQReLU:
-        """Special constructor to build ``MockUpQReLU``s from FP ``ReLU``s."""
-
-        qrelu = cls(qrangespec,
-                    qgranularityspec,
-                    qhparamsinitstrategyspec,
-                    inplace=fpm.inplace)
-
-        return qrelu
-
 
 class MockUpQConv2d(QConv2d):
 
     def __init__(self,
-                 qrangespec,
-                 qgranularityspec,
-                 qhparamsinitstrategyspec,
-                 in_channels: int,
-                 out_channels: int,
-                 kernel_size: Tuple[int, ...],
-                 bias: bool = False):
+                 qrangespec:               QRangeSpecType,
+                 qgranularityspec:         QGranularitySpecType,
+                 qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                 in_channels:              int,
+                 out_channels:             int,
+                 kernel_size:              Tuple[int, ...],
+                 stride:                   Tuple[int, ...] = 1,
+                 padding:                  str = 0,
+                 dilation:                 Tuple[int, ...] = 1,
+                 groups:                   int = 1,
+                 bias:                     bool = False):
 
         super().__init__(qrangespec,
                          qgranularityspec,
@@ -77,6 +65,10 @@ class MockUpQConv2d(QConv2d):
                          in_channels,
                          out_channels,
                          kernel_size,
+                         stride,
+                         padding,
+                         dilation,
+                         groups,
                          bias=bias)
 
     def _register_qop(self):
@@ -84,30 +76,6 @@ class MockUpQConv2d(QConv2d):
 
     def _call_qop(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         return _fake_quantise(x, self.clip_lo, self.clip_hi, self.step, self.scale)
-
-    @classmethod
-    def from_fp_module(cls,
-                       fpm: nn.Conv2d,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> MockUpQConv2d:
-        """Special constructor to build ``MockUpQConv2d``s from FP ``Conv2d``s."""
-
-        qconv2d = cls(qrangespec,
-                      qgranularityspec,
-                      qhparamsinitstrategyspec,
-                      in_channels=fpm.in_channels,
-                      out_channels=fpm.out_channels,
-                      kernel_size=fpm.kernel_size,
-                      bias=(fpm.bias is not None))
-
-        # copy parameters over
-        qconv2d.weight.data.copy_(fpm.weight.data)
-        if fpm.bias is not None:
-            qconv2d.bias.data.copy_(fpm.bias.data)
-
-        return qconv2d
 
 
 _FEATURES_SHAPE           = (1, 8, 200, 200)

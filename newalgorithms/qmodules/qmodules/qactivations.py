@@ -28,13 +28,17 @@ class QIdentity(_QActivation, nn.Identity):
 
     @classmethod
     def from_fp_module(cls,
-                       fpm: nn.Identity,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> QIdentity:
+                       fpm:                      nn.Identity,
+                       qrangespec:               QRangeSpecType,
+                       qgranularityspec:         QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> QIdentity:
         """Special constructor to build ``QIdentity``s from FP ``Identity``s."""
-        raise NotImplementedError
+
+        qidentity = cls(qrangespec,
+                        qgranularityspec,
+                        qhparamsinitstrategyspec)
+
+        return qidentity
 
 
 class QReLU(_QActivation, nn.ReLU):
@@ -60,13 +64,18 @@ class QReLU(_QActivation, nn.ReLU):
 
     @classmethod
     def from_fp_module(cls,
-                       fpm: nn.ReLU,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> QReLU:
+                       fpm:                      nn.ReLU,
+                       qrangespec:               QRangeSpecType,
+                       qgranularityspec:         QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> QReLU:
         """Special constructor to build ``QReLU``s from FP ``ReLU``s."""
-        raise NotImplementedError
+
+        qrelu = cls(qrangespec,
+                    qgranularityspec,
+                    qhparamsinitstrategyspec,
+                    inplace=fpm.inplace)
+
+        return qrelu
 
 
 class QReLU6(_QActivation, nn.ReLU6):
@@ -92,13 +101,18 @@ class QReLU6(_QActivation, nn.ReLU6):
 
     @classmethod
     def from_fp_module(cls,
-                       fpm: nn.ReLU6,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> QReLU6:
+                       fpm:                      nn.ReLU6,
+                       qrangespec:               QRangeSpecType,
+                       qgranularityspec:         QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> QReLU6:
         """Special constructor to build ``QReLU6``s from FP ``ReLU6``s."""
-        raise NotImplementedError
+
+        qrelu6 = cls(qrangespec,
+                     qgranularityspec,
+                     qhparamsinitstrategyspec,
+                     inplace=fpm.inplace)
+
+        return qrelu6
 
 
 class QLeakyReLU(_QActivation, nn.LeakyReLU):
@@ -126,13 +140,19 @@ class QLeakyReLU(_QActivation, nn.LeakyReLU):
 
     @classmethod
     def from_fp_module(cls,
-                       fpm: nn.LeakyReLU,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> QLeakyReLU:
+                       fpm:                      nn.LeakyReLU,
+                       qrangespec:               QRangeSpecType,
+                       qgranularityspec:         QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> QLeakyReLU:
         """Special constructor to build ``QLeakyReLU``s from FP ``LeakyReLU``s."""
-        raise NotImplementedError
+
+        qleakyrelu = cls(qrangespec,
+                         qgranularityspec,
+                         qhparamsinitstrategyspec,
+                         negative_slope=fpm.negative_slope,
+                         inplace=fpm.inplace)
+
+        return qleakyrelu
 
 
 NNMODULE_TO_QMODULE = {

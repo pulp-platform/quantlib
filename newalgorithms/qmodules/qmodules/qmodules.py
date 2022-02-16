@@ -142,11 +142,10 @@ class _QModule(nn.Module):
 
     @classmethod
     def from_fp_module(cls,
-                       fpm: nn.Module,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> _QModule:
+                       fpm:                      nn.Module,
+                       qrangespec:               QRangeSpecType,
+                       qgranularityspec:         QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> _QModule:
         """Special constructor to build ``_QModule``s from FP ``Module``s."""
         raise NotImplementedError
 
@@ -231,11 +230,10 @@ class _QActivation(_QModule):
 
     @classmethod
     def from_fp_module(cls,
-                       fpm: nn.Module,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> _QActivation:
+                       fpm:                      nn.Module,
+                       qrangespec:               QRangeSpecType,
+                       qgranularityspec:         QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> _QActivation:
         """Special constructor to build ``_QActivation``s from FP ``Module``s."""
         raise NotImplementedError
 
@@ -288,10 +286,9 @@ class _QLinear(_QModule):
 
     @classmethod
     def from_fp_module(cls,
-                       fpm: nn.Module,
-                       qrangespec: QRangeSpecType,
-                       qgranularityspec: QGranularitySpecType,
-                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                       **kwargs) -> _QLinear:
+                       fpm:                      nn.Module,
+                       qrangespec:               QRangeSpecType,
+                       qgranularityspec:         QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> _QLinear:
         """Special constructor to build ``_QLinear``s from FP ``Module``s."""
         raise NotImplementedError
