@@ -249,7 +249,7 @@ class RequantShift(nn.Module):
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
-                return torch.clip(y, min=torch.Tensor((0.,)).type_as(x), max=n_levels_out-1)
+                return torch.clip(y, min=torch.zeros(1).type_as(x), max=(n_levels_out-1).type_as(x))
             else:
             # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
                 c = torch.round(n_levels_out/2. + 0.001)
@@ -257,8 +257,8 @@ class RequantShift(nn.Module):
                 # must be the last thing called on a tensor before feeding into
                 # the clip operator. Otherwise, it may get exported as
                 # min(max(..)) or some other weirdness
-                lo = torch.tensor(c * -1).type_as(x)
-                hi = torch.tensor(c-1).type_as(x)
+                lo = (c * -1).type_as(x)
+                hi = (c-1).type_as(x)
                 return torch.clip(y, min=lo, max=hi)
 
         @staticmethod
