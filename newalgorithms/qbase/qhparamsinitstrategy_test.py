@@ -3,7 +3,7 @@ import torch
 
 from .qgranularity import resolve_qgranularityspec
 from .observer import MinMaxMeanVarObserver
-from .qinitstrategy import resolve_qhparamsinitstrategyspec
+from .qhparamsinitstrategy import resolve_qhparamsinitstrategyspec
 
 
 _TARGET_SHAPE = (4, 16, 8, 8)

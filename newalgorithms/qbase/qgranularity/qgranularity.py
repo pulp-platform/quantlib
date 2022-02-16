@@ -15,7 +15,11 @@ QGranularity = NewType('QGranularity', Tuple[int, ...])
 # The data type representing how users can specify quantisation granularity:
 #   * either they provide the explicit collection of dimension indices
 #   * or they provide string shortcuts.
-QGranularitySpecType = Union[Tuple[int, ...], str]
+QGranularitySpecType = Union[QGranularity, Tuple[int, ...], str]
+
+
+def resolve_qgranularity_qgranularityspec(qgranularityspec: QGranularity) -> QGranularity:
+    return qgranularityspec
 
 
 def resolve_tuple_qgranularityspec(qgranularityspec: Tuple[int, ...]) -> QGranularity:
@@ -53,8 +57,9 @@ def resolve_str_qgranularityspec(qgranularityspec: str) -> QGranularity:
 # Redirect the general solver to the type-specific solver method.
 QGranularitySpecSolvers = Enum('QGranularitySpecSolvers',
                                [
-                                   ('TUPLE', resolve_tuple_qgranularityspec),
-                                   ('STR',   resolve_str_qgranularityspec),
+                                   ('QGRANULARITY', resolve_qgranularity_qgranularityspec),
+                                   ('TUPLE',        resolve_tuple_qgranularityspec),
+                                   ('STR',          resolve_str_qgranularityspec),
                                ])
 
 

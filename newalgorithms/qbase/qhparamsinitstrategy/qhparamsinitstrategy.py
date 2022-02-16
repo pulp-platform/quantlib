@@ -20,7 +20,7 @@ class QHParamsInitStrategy(object):
         raise NotImplementedError
 
 
-class ConstInitStrategy(object):
+class ConstInitStrategy(QHParamsInitStrategy):
 
     default_kwargs = {'a': -1.0, 'b': 1.0}
 
@@ -37,7 +37,7 @@ class ConstInitStrategy(object):
         return a, b
 
 
-class MinMaxInitStrategy(object):
+class MinMaxInitStrategy(QHParamsInitStrategy):
 
     default_kwargs = {}
 
@@ -52,7 +52,7 @@ class MinMaxInitStrategy(object):
         return a, b
 
 
-class MeanStdInitStrategy(object):
+class MeanStdInitStrategy(QHParamsInitStrategy):
 
     # We borrow the "golden rule" of Gaussian distributions, where 99.7% of
     # the probability mass lies within 3 standard deviations from the mean.
@@ -72,21 +72,25 @@ class MeanStdInitStrategy(object):
         return a, b
 
 
-QHParamsInitStrategySpecType = Union[str, Tuple[str, Dict[str, Any]]]
-
-
 # define the list of supported strategies, together with their default arguments; then, turn it into an enumerated
-QHParamsInitStrategyDefaultParams = Enum('QHParamsInitStrategyDefaultParams',
-                                         [
-                                             ('CONST',   ConstInitStrategy),
-                                             ('MINMAX',  MinMaxInitStrategy),
-                                             ('MEANSTD', MeanStdInitStrategy),
-                                         ])
+QHParamsInitStrategies = Enum('QHParamsInitStrategies',
+                              [
+                                  ('CONST',   ConstInitStrategy),
+                                  ('MINMAX',  MinMaxInitStrategy),
+                                  ('MEANSTD', MeanStdInitStrategy),
+                              ])
+
+
+QHParamsInitStrategySpecType = Union[QHParamsInitStrategy, Tuple[str, Dict[str, Any]], str]
+
+
+def resolve_qhparamsinitstrategy_qhparamsinitstrategyspec(qhparamsinitstrategyspec: QHParamsInitStrategy) -> QHParamsInitStrategy:
+    return qhparamsinitstrategyspec
 
 
 def _try_get_qhparamsinitstrategy_class(qhparamsinitstrategyname: str) -> Type[QHParamsInitStrategy]:
     try:
-        class_ = getattr(QHParamsInitStrategyDefaultParams, qhparamsinitstrategyname).value
+        class_ = getattr(QHParamsInitStrategies, qhparamsinitstrategyname).value
         return class_
     except AttributeError:
         caller_name = inspect.getouterframes(inspect.currentframe())[1].function    # https://stackoverflow.com/a/2529895 and https://docs.python.org/3/library/inspect.html#inspect.getouterframes
@@ -124,8 +128,11 @@ def resolve_str_qhparamsinitstrategyspec(qhparamsinitstrategyspec: str) -> QHPar
     return qhparamsinitstrategy
 
 
-QHParamsInitStrategySolvers = Enum('',
+QHParamsInitStrategySolvers = Enum('QHParamsInitStrategySolvers',
                                    [
+                                       *[
+                                           (item_.value.__name__.upper(), resolve_qhparamsinitstrategy_qhparamsinitstrategyspec) for item_ in QHParamsInitStrategies
+                                       ],
                                        ('TUPLE', resolve_tuple_qhparamsinitstrategyspec),
                                        ('STR',   resolve_str_qhparamsinitstrategyspec),
                                    ])

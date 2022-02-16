@@ -27,6 +27,6 @@ class PTQQATIndex(object):
 
 
 # create indices
-ptqqatindex = PTQQATIndex()
+ptqqat_index = PTQQATIndex()
 # register PACT
-ptqqatindex.register_algorithm('PACT', NNMODULE_TO_PACTMODULE)
+ptqqat_index.register_algorithm('PACT', NNMODULE_TO_PACTMODULE)

@@ -7,5 +7,5 @@ from .qgranularity import QGranularity
 from .qgranularity import QGranularitySpecType, resolve_qgranularityspec
 from .observer import TensorObserver
 from .observer import MinMaxMeanVarObserver
-from .qinitstrategy import QHParamsInitStrategy
-from .qinitstrategy import QHParamsInitStrategySpecType, resolve_qhparamsinitstrategyspec
+from .qhparamsinitstrategy import QHParamsInitStrategy
+from .qhparamsinitstrategy import QHParamsInitStrategySpecType, resolve_qhparamsinitstrategyspec

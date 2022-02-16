@@ -149,7 +149,11 @@ class QRange(object):
             return False  # signed ranges always specify their offset, so they do not raise an exception
 
 
-QRangeSpecType = Union[Tuple[int, ...], Dict[str, int], str]
+QRangeSpecType = Union[QRange, Tuple[int, ...], Dict[str, int], str]
+
+
+def resolve_qrange_qrangespec(qrangespec: QRange) -> QRange:
+    return qrangespec
 
 
 def resolve_tuple_qrangespec(qrangespec: Tuple[int, ...]) -> QRange:
@@ -191,7 +195,7 @@ def resolve_dict_qrangespec(qrangespec: Dict[str, int]) -> QRange:
     qrangespec_keys = set(qrangespec.keys())
     unknown_keys = qrangespec_keys.difference(n_levels_keys | offset_keys)
     if len(unknown_keys) != 0:
-        raise ValueError(quantlib_err_header() + f"QRange dictionariy specification does not support the following keys: {unknown_keys}.")
+        raise ValueError(quantlib_err_header() + f"QRange dictionary specification does not support the following keys: {unknown_keys}.")
 
     # canonicalise number of levels
     qrangespec_n_levels_keys = qrangespec_keys.intersection(n_levels_keys)
@@ -253,9 +257,10 @@ def resolve_str_qrangespec(qrangespec: str) -> QRange:
 
 QRangeSpecSolvers = Enum('QRangeSpecSolvers',
                          [
-                             ('TUPLE', resolve_tuple_qrangespec),
-                             ('DICT',  resolve_dict_qrangespec),
-                             ('STR',   resolve_str_qrangespec),
+                             ('QRANGE', resolve_qrange_qrangespec),
+                             ('TUPLE',  resolve_tuple_qrangespec),
+                             ('DICT',   resolve_dict_qrangespec),
+                             ('STR',    resolve_str_qrangespec),
                          ])
 
 
