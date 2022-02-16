@@ -1,3 +1,4 @@
+from __future__ import annotations
 import unittest
 import torch
 import torch.nn as nn
@@ -5,6 +6,7 @@ from typing import Tuple, Union
 
 from .qmodules import QReLU
 from .qmodules import QConv2d
+from quantlib.newalgorithms.qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 
 
 def _fake_quantise(x: torch.Tensor,
@@ -41,6 +43,22 @@ class MockUpQReLU(QReLU):  # no real `torch.autograd.Function` object is registe
     def _call_qop(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         return _fake_quantise(x, self.clip_lo, self.clip_hi, self.step, self.scale)
 
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.ReLU,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> MockUpQReLU:
+        """Special constructor to build ``MockUpQReLU``s from FP ``ReLU``s."""
+
+        qrelu = cls(qrangespec,
+                    qgranularityspec,
+                    qhparamsinitstrategyspec,
+                    inplace=fpm.inplace)
+
+        return qrelu
+
 
 class MockUpQConv2d(QConv2d):
 
@@ -66,6 +84,30 @@ class MockUpQConv2d(QConv2d):
 
     def _call_qop(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         return _fake_quantise(x, self.clip_lo, self.clip_hi, self.step, self.scale)
+
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Conv2d,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> MockUpQConv2d:
+        """Special constructor to build ``MockUpQConv2d``s from FP ``Conv2d``s."""
+
+        qconv2d = cls(qrangespec,
+                      qgranularityspec,
+                      qhparamsinitstrategyspec,
+                      in_channels=fpm.in_channels,
+                      out_channels=fpm.out_channels,
+                      kernel_size=fpm.kernel_size,
+                      bias=(fpm.bias is not None))
+
+        # copy parameters over
+        qconv2d.weight.data.copy_(fpm.weight.data)
+        if fpm.bias is not None:
+            qconv2d.bias.data.copy_(fpm.bias.data)
+
+        return qconv2d
 
 
 _FEATURES_SHAPE           = (1, 8, 200, 200)
@@ -141,13 +183,14 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'n_levels': 3}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'const'
-        muqr = MockUpQReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        muqr = MockUpQReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
         self.assertTrue(QModulesTest._check_is_unquantised_zero_and_scale(muqr))
         self.assertFalse(muqr._is_observing)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
+        self.assertTrue(muqr.inplace == _RELU_MODULE.inplace)
         # finalise quantiser parametrisation
         muqr.init_qhparams()
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
@@ -164,13 +207,14 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': True}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'const'
-        muqr = MockUpQReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        muqr = MockUpQReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
         self.assertTrue(QModulesTest._check_is_unquantised_only_scale(muqr))
         self.assertFalse(muqr._is_observing)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
+        self.assertTrue(muqr.inplace == _RELU_MODULE.inplace)
         # finalise quantiser parametrisation
         muqr.init_qhparams()
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
@@ -187,13 +231,14 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'n_levels': 3}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'minmax'
-        muqr = MockUpQReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        muqr = MockUpQReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
         self.assertTrue(QModulesTest._check_is_unquantised_zero_and_scale(muqr))
         self.assertFalse(muqr._is_observing)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
+        self.assertTrue(muqr.inplace == _RELU_MODULE.inplace)
         # finalise quantiser parametrisation
         self.assertRaises(RuntimeError, lambda: muqr.init_qhparams())
 
@@ -202,13 +247,14 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': True}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'minmax'
-        muqr = MockUpQReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        muqr = MockUpQReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
         self.assertTrue(QModulesTest._check_is_unquantised_only_scale(muqr))
         self.assertFalse(muqr._is_observing)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
+        self.assertTrue(muqr.inplace == _RELU_MODULE.inplace)
         # finalise quantiser parametrisation
         self.assertRaises(RuntimeError, lambda: muqr.init_qhparams())
 
@@ -219,13 +265,14 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': False}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'const'
-        muqr = MockUpQReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        muqr = MockUpQReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
         self.assertTrue(QModulesTest._check_is_unquantised_only_scale(muqr))
         self.assertFalse(muqr._is_observing)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
+        self.assertTrue(muqr.inplace == _RELU_MODULE.inplace)
         # warm-up observer and finalise quantiser parametrisation
         muqr.start_observing()
         for i in range(0, _LOOP_LENGTH):
@@ -247,13 +294,14 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': False}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'minmax'
-        muqr = MockUpQReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        muqr = MockUpQReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
         self.assertTrue(QModulesTest._check_is_unquantised_only_scale(muqr))
         self.assertFalse(muqr._is_observing)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
+        self.assertTrue(muqr.inplace == _RELU_MODULE.inplace)
         # warm-up observer and finalise quantiser parametrisation
         muqr.start_observing()
         for i in range(0, _LOOP_LENGTH):
@@ -275,13 +323,14 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': False}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'meanstd'
-        muqr = MockUpQReLU(qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        muqr = MockUpQReLU.from_fp_module(_RELU_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqr))
         self.assertTrue(QModulesTest._check_is_unquantised_only_scale(muqr))
         self.assertFalse(muqr._is_observing)
         # does it have ReLU behaviour when unquantised?
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqr(x) == _RELU_MODULE(x)))
+        self.assertTrue(muqr.inplace == _RELU_MODULE.inplace)
         # warm-up observer and finalise quantiser parametrisation
         muqr.start_observing()
         for i in range(0, _LOOP_LENGTH):
@@ -305,12 +354,11 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'n_levels': 3}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'const'
-        muqc2d = MockUpQConv2d(qrangespec, qgranularityspec, qhparamsinitstrategyspec, _IN_CHANNELS, _OUT_CHANNELS, _KERNEL_SIZE, bias=_HAS_BIAS)
+        muqc2d = MockUpQConv2d.from_fp_module(_CONV2D_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqc2d))
         self.assertTrue(QModulesTest._check_is_unquantised_zero_and_scale(muqc2d))
         self.assertFalse(muqc2d._is_observing)
         # does it have Conv2d behaviour when unquantised?
-        muqc2d.weight.data.copy_(_CONV2D_MODULE.weight.data)
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqc2d(x) == _CONV2D_MODULE(x)))
         # finalise quantiser parametrisation
@@ -328,12 +376,11 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': False}
         qgranularityspec = 'per-array'
         qhparamsinitstrategyspec = 'minmax'
-        muqc2d = MockUpQConv2d(qrangespec, qgranularityspec, qhparamsinitstrategyspec, _IN_CHANNELS, _OUT_CHANNELS, _KERNEL_SIZE, bias=_HAS_BIAS)
+        muqc2d = MockUpQConv2d.from_fp_module(_CONV2D_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_FEATURES_SHAPE, muqc2d))
         self.assertTrue(QModulesTest._check_is_unquantised_only_scale(muqc2d))
         self.assertFalse(muqc2d._is_observing)
         # does it have Conv2d behaviour when unquantised?
-        muqc2d.weight.data.copy_(_CONV2D_MODULE.weight.data)
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqc2d(x) == _CONV2D_MODULE(x)))
         # finalise quantiser parametrisation (weights are already available it their entirety, so we don't need to warm-up statistic counters)
@@ -351,12 +398,11 @@ class QModulesTest(unittest.TestCase):
         qrangespec = {'bitwidth': 8, 'signed': False}
         qgranularityspec = 'per-outchannel_weights'
         qhparamsinitstrategyspec = 'meanstd'
-        muqc2d = MockUpQConv2d(qrangespec, qgranularityspec, qhparamsinitstrategyspec, _IN_CHANNELS, _OUT_CHANNELS, _KERNEL_SIZE, bias=_HAS_BIAS)
+        muqc2d = MockUpQConv2d.from_fp_module(_CONV2D_MODULE, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
         self.assertTrue(QModulesTest._check_broadcastability(_BROADCAST_WEIGHTS_SHAPE, muqc2d))
         self.assertTrue(QModulesTest._check_is_unquantised_only_scale(muqc2d))
         self.assertFalse(muqc2d._is_observing)
         # does it have Conv2d behaviour when unquantised?
-        muqc2d.weight.data.copy_(_CONV2D_MODULE.weight.data)
         x = torch.randn(_FEATURES_SHAPE)
         self.assertTrue(torch.all(muqc2d(x) == _CONV2D_MODULE(x)))
         # warm-up observer and finalise quantiser parametrisation

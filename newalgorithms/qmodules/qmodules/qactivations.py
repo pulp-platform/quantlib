@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch
 import torch.nn as nn
 
@@ -25,6 +26,16 @@ class QIdentity(_QActivation, nn.Identity):
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Identity,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QIdentity:
+        """Special constructor to build ``QIdentity``s from FP ``Identity``s."""
+        raise NotImplementedError
+
 
 class QReLU(_QActivation, nn.ReLU):
 
@@ -47,6 +58,16 @@ class QReLU(_QActivation, nn.ReLU):
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.ReLU,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QReLU:
+        """Special constructor to build ``QReLU``s from FP ``ReLU``s."""
+        raise NotImplementedError
+
 
 class QReLU6(_QActivation, nn.ReLU6):
 
@@ -67,6 +88,16 @@ class QReLU6(_QActivation, nn.ReLU6):
         raise NotImplementedError
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.ReLU6,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QReLU6:
+        """Special constructor to build ``QReLU6``s from FP ``ReLU6``s."""
         raise NotImplementedError
 
 
@@ -92,3 +123,21 @@ class QLeakyReLU(_QActivation, nn.LeakyReLU):
 
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
+
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.LeakyReLU,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QLeakyReLU:
+        """Special constructor to build ``QLeakyReLU``s from FP ``LeakyReLU``s."""
+        raise NotImplementedError
+
+
+NNMODULE_TO_QMODULE = {
+    nn.Identity:  QIdentity,
+    nn.ReLU:      QReLU,
+    nn.ReLU6:     QReLU6,
+    nn.LeakyReLU: QLeakyReLU,
+}

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch
 import torch.nn as nn
 from typing import Union
@@ -139,6 +140,16 @@ class _QModule(nn.Module):
     def _call_qop(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Module,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> _QModule:
+        """Special constructor to build ``_QModule``s from FP ``Module``s."""
+        raise NotImplementedError
+
 
 class _QActivation(_QModule):
 
@@ -218,6 +229,16 @@ class _QActivation(_QModule):
 
         return x
 
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Module,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> _QActivation:
+        """Special constructor to build ``_QActivation``s from FP ``Module``s."""
+        raise NotImplementedError
+
 
 class _QLinear(_QModule):
 
@@ -264,3 +285,13 @@ class _QLinear(_QModule):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError  # different linear `Module`s will call different functionals, to which weights should be explicitly passed
+
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Module,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> _QLinear:
+        """Special constructor to build ``_QLinear``s from FP ``Module``s."""
+        raise NotImplementedError

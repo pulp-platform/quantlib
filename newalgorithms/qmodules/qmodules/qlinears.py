@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -39,6 +40,16 @@ class QLinear(_QLinear, nn.Linear):
             weight = self.weight
 
         return F.linear(x, weight, self.bias)
+
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Linear,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QLinear:
+        """Special constructor to build ``QLinear``s from FP ``Linear``s."""
+        raise NotImplementedError
 
 
 class QConv1d(_QLinear, nn.Conv1d):
@@ -85,6 +96,16 @@ class QConv1d(_QLinear, nn.Conv1d):
 
         return F.conv1d(x, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Conv1d,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QConv1d:
+        """Special constructor to build ``QConv1d``s from FP ``Conv1d``s."""
+        raise NotImplementedError
+
 
 class QConv2d(_QLinear, nn.Conv2d):
 
@@ -130,6 +151,16 @@ class QConv2d(_QLinear, nn.Conv2d):
 
         return F.conv2d(x, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Conv2d,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QConv2d:
+        """Special constructor to build ``QConv2d``s from FP ``Conv2d``s."""
+        raise NotImplementedError
+
 
 class QConv3d(_QLinear, nn.Conv3d):
 
@@ -174,3 +205,21 @@ class QConv3d(_QLinear, nn.Conv3d):
             weight = self.weight
 
         return F.conv3d(x, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+    @classmethod
+    def from_fp_module(cls,
+                       fpm: nn.Conv3d,
+                       qrangespec: QRangeSpecType,
+                       qgranularityspec: QGranularitySpecType,
+                       qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
+                       **kwargs) -> QConv3d:
+        """Special constructor to build ``QConv3d``s from FP ``Conv3d``s."""
+        raise NotImplementedError
+
+
+NNMODULE_TO_QMODULE = {
+    nn.Linear: QLinear,
+    nn.Conv1d: QConv1d,
+    nn.Conv2d: QConv2d,
+    nn.Conv3d: QConv3d,
+}
