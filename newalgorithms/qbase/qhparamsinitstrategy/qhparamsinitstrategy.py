@@ -130,18 +130,23 @@ def resolve_str_qhparamsinitstrategyspec(qhparamsinitstrategyspec: str) -> QHPar
 
 QHParamsInitStrategySolvers = Enum('QHParamsInitStrategySolvers',
                                    [
-                                       *[
-                                           (item_.value.__name__.upper(), resolve_qhparamsinitstrategy_qhparamsinitstrategyspec) for item_ in QHParamsInitStrategies
-                                       ],
-                                       ('TUPLE', resolve_tuple_qhparamsinitstrategyspec),
-                                       ('STR',   resolve_str_qhparamsinitstrategyspec),
+                                       ('QHPARAMSINITSTRATEGY', resolve_qhparamsinitstrategy_qhparamsinitstrategyspec),
+                                       ('TUPLE',                resolve_tuple_qhparamsinitstrategyspec),
+                                       ('STR',                  resolve_str_qhparamsinitstrategyspec),
                                    ])
 
 
 def resolve_qhparamsinitstrategyspec(qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> QHParamsInitStrategy:
 
-    # I apply a strategy pattern to retrieve the correct solver method based on the QInit specification type
-    qhparamsinitstrategyspec_class = qhparamsinitstrategyspec.__class__.__name__
+    # I apply a strategy pattern to retrieve the correct solver method based on the QHParamsInitStrategy specification type
+    # TODO: is there a (more elegant) way to avoid this redirection? Setting
+    #       the variable to the name of a parent class doesn't look consistent
+    #       with the practice of other canonicalisation flows.
+    if isinstance(qhparamsinitstrategyspec, QHParamsInitStrategy):
+        qhparamsinitstrategyspec_class = QHParamsInitStrategy.__name__
+    else:
+        qhparamsinitstrategyspec_class = qhparamsinitstrategyspec.__class__.__name__
+
     try:
         solver = getattr(QHParamsInitStrategySolvers, qhparamsinitstrategyspec_class.upper())  # when the values of an enumerated are functions, I can not access them in dictionary-style: https://stackoverflow.com/a/50211710
         qhparamsinitstrategy = solver(qhparamsinitstrategyspec)
