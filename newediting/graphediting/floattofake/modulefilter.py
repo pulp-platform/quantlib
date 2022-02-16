@@ -43,7 +43,7 @@ def exclusive_names_filter(name_to_module: Dict[str, nn.Module], names: Tuple[st
 
 
 def compose(*filters: ModuleFilter) -> ModuleFilter:
-    return functools.reduce(lambda f, g: lambda n2m: g(f(n2m)), filters)
+    return functools.reduce(lambda f, g: lambda n2m: g(f(n2m)), filters)  # https://www.youtube.com/watch?v=ka70COItN40&t=1346s
 
 
 _STRING_TO_NNMODULECLASS = {
