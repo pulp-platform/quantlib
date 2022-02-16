@@ -249,7 +249,7 @@ class RequantShift(nn.Module):
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
-                return torch.clip(y, min=0., max=float(n_levels_out-1))
+                return torch.clip(y, min=torch.Tensor((0.,)).type_as(x), max=n_levels_out-1)
             else:
             # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
                 c = torch.round(n_levels_out/2. + 0.001).type_as(x)
