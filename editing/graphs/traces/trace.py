@@ -4,7 +4,7 @@
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
 # 
-# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# Copyright (c) 2020-2022 ETH Zuerich.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -117,33 +117,6 @@ def trace_quantlib_modules():
     import quantlib.algorithms as qa
 
     library = 'QuantLab'
-
-    #########
-    ## STE ##
-    #########
-    algorithm = 'STE'
-
-    # TODO: upgrading to PyTorch 1.9.0 breaks tracing of STE activation for "some reason": we must look into this!
-    # mod_STEActivation = qa.ste.STEActivation()
-    # dummy_input = torch.ones((_batch_size, _n_input_channels))
-    # trace_module(library, algorithm, mod_STEActivation, dummy_input)
-
-    #########
-    ## INQ ##
-    #########
-    algorithm = 'INQ'
-
-    mod_INQConv1d = qa.inq.INQConv1d(_n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
-    dummy_inpyut = torch.ones((_batch_size, _n_input_channels, _dim1))
-    trace_module(library, algorithm, mod_INQConv1d, dummy_inpyut)
-
-    mod_INQConv2d = qa.inq.INQConv2d(_n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
-    dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2))
-    trace_module(library, algorithm, mod_INQConv2d, dummy_input)
-
-    # mod_INQConv3d = qa.inq.INQConv3d(_n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
-    # dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2, _dim3))
-    # trace_module(library, algorithm, mod_INQConv3d, dummy_input)
 
     #########
     ## ANA ##
