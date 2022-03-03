@@ -414,4 +414,3 @@ class RemovePrecisionTunnelRule(HelperRule):
         gs = list(filter(is_valid_application_point, gs))
 
         return gs
-

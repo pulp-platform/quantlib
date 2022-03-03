@@ -110,4 +110,3 @@ class HelperOutputPrecisionTunnel(HelperPrecisionTunnel):
 
     def __init__(self, eps_out):
         super(HelperOutputPrecisionTunnel, self).__init__(1.0, eps_out)
-

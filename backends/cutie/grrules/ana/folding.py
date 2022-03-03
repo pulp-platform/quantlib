@@ -124,4 +124,3 @@ def fold_anaact_analinear_bn1d_anaact(eps_x: torch.Tensor,
         return torch.from_numpy(x.astype(np.float64))
 
     return numpy2torchfp64(np.ceil(tau)).float(), numpy2torchfp64(weight).float()
-

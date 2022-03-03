@@ -25,4 +25,3 @@ from .dporules import FoldANAActANAConvBNANAActTypeBRule
 from .dporules import FoldANAActANALinearBNANAActTypeARule
 from .dporules import FoldANAActANALinearBNANAActTypeBRule
 from .dporules import FoldANAActLinearRule
-

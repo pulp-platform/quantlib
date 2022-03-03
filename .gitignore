@@ -19,4 +19,3 @@
 # ignore built documentation and Jupyter notebook checkpoints
 **/docs/_build/*
 **/.ipynb_checkpoints
-

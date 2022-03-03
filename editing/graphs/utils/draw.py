@@ -58,4 +58,3 @@ def draw_graph(G, save_dir, filename, node_2_label=None):
         gvG.edge(e[0], e[1])
 
     gvG.render(directory=save_dir, filename=filename)
-

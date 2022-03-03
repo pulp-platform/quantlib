@@ -273,4 +273,3 @@ class AutoRescopingRule(DPORule):
     def seek(self, G, nodes_dict):
         gs = self.seeker.get_morphisms(G)
         return gs
-

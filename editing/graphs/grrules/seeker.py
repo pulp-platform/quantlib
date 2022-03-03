@@ -81,4 +81,3 @@ class Seeker(object):
         # This assures there is no ambiguity in the mapping (<- This is the assumption here)
         
         return morphisms
-

@@ -35,4 +35,3 @@ setup(name='quantlib',
           'graphviz',
       ],
      )
-

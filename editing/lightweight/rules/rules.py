@@ -102,4 +102,3 @@ class LightweightRule(object):
             self.replace_module(graph.net, a.path, a.old_module)
 
         graph.rebuild_nodes_list()
-

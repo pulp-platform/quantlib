@@ -147,4 +147,3 @@ class LightweightEditor(object):
 
         else:
             print("Graph editing denied: {} object is non in an editing session.".format(self.__class__.__name__))
-

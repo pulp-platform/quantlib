@@ -59,4 +59,3 @@ class LightweightGraph(object):
 
         for lwn in self._nodes_list:
             print("{:30s} {}".format(lwn.name, lwn.type_))
-

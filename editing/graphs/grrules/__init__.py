@@ -39,4 +39,3 @@ def load_rescoping_rules(modules=None):
             librules[mod_name] = AutoRescopingRule(L, K)
 
     return librules
-

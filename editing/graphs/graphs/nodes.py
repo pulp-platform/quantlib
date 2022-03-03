@@ -96,4 +96,3 @@ class PyTorchNode(QuantLabNode):
         elif isinstance(self.nobj, torch._C.Value):
             nscope = self.nobj.debugName()
         return nscope
-

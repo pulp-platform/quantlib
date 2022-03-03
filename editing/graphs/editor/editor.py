@@ -234,4 +234,3 @@ class Editor(object):
 # which "ingredients" did I use in the past to generate these labels? (my personal "database/record" of use cases)
 #   - ONNX op type
 #   - node scope
-

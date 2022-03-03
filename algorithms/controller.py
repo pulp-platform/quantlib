@@ -49,4 +49,3 @@ class Controller(object):
     def step_pre_validation_epoch(self, *args, **kwargs):
         """Update the quantization hyper-parameters before the validation step of the current epoch."""
         raise NotImplementedError
-

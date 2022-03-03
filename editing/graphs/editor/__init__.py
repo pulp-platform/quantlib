@@ -20,4 +20,3 @@
 # 
 
 from .editor import Editor
-

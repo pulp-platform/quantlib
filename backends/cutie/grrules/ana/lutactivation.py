@@ -28,4 +28,3 @@ class LUTActivation(nn.Module):
         y = self.q0 + torch.sum(self.jumps[(...,) + (None,) * (cdf.dim() - 2)] * cdf, 1)
 
         return y
-

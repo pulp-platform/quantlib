@@ -273,4 +273,3 @@ class PyTorchGraph(object):
                 return PyTorchGraph.get_pytorch_module_by_name(child, target_name.split('.', 1)[-1])
 
         return module
-

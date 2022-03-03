@@ -169,4 +169,3 @@ class TypeFilter(Filter):
 
     def __repr__(self):
         return "".join([self.__class__.__name__, "(", self._type_str, ")"])
-

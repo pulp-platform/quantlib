@@ -37,4 +37,3 @@ class LightweightNode(object):
     @property
     def type_(self) -> type:
         return type(self.module)
-

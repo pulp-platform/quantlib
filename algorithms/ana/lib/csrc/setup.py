@@ -30,4 +30,3 @@ setup(name='ana',
           cpp_extension.CUDAExtension(name='ana_logistic_cuda',   sources=['logistic_cuda.cpp',   'logistic_cuda_kernel.cu']),
       ],
       cmdclass={'build_ext': cpp_extension.BuildExtension})
-
