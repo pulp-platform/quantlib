@@ -20,7 +20,7 @@
 # limitations under the License.
 #
 
-from typing import Optional, Union
+from typing import Optional, Union, List
 
 from torch import fx, nn
 from torch.fx.subgraph_rewriter import Match
@@ -116,7 +116,7 @@ class SequentialPass(FxPass):
             gm = p.apply(gm)
         return gm
 
-    def setup_passes(self, passes):
+    def setup_passes(self, passes: List[FxPass]):
         for i, p in enumerate(passes):
             self.register_subpass(self.name_prefix + '_' + str(i), p)
 
@@ -155,7 +155,10 @@ class ModifySequentialPatternPass(SequentialPass):
     def retarget(self, gm: fx.GraphModule):
         for k in self.named_subpasses().keys():
             self.remove_subpass(k)
-        self.matches = self.matcher.match_graph(gm)
+        self.matches = self.matcher.match_graph(gm)  # TODO: Quali garanzie ho sull'ordine di matching?
+                                                     #       Ritracciare il grafo sembra consistente ma non ho comunque garanzie su dove applichero' la regola prima.
+                                                     #       Ho garanzia di non applicare la regola a punti "out-of-date", i.e., punti di applicazione che non sono piu' tali dopo precedenti applicazioni della regola.
+                                                     #       Tuttavia, dovrei abbinare questa consistenza alla possibilita' di decidere a quale punto applicare la regola.
         passes = []
         for i, m in enumerate(self.matches):
             passes.append(
@@ -187,18 +190,20 @@ class ReplaceMatchWithModulePass(FxPass):
             # we use the first matched node as the hierarchy level to insert the
             # new submodule. if the first matched node is not a module, try to use
             # the insert_target field
+
+            # TODO: this list simply stores the name components of the module to be replaced
             target_list = []
-            if self.insert_target is None and first_matched_node.op == 'call_module':
-                first_pattern_node_target = get_qualified_prefix(
-                    first_matched_node.target)
-                if len(first_pattern_node_target):
-                    target_list.append(
-                        get_qualified_prefix(first_matched_node.target))
+            if self.insert_target is None:
+                if first_matched_node.op == 'call_module':
+                    first_pattern_node_target = get_qualified_prefix(first_matched_node.target)
+                    if len(first_pattern_node_target):
+                        target_list.append(first_pattern_node_target)
             elif self.insert_target is not None:
                 target_list.append(self.insert_target)
 
             target_list.append(f"_QL_REPLACED_{self.name.upper()}")
             target = '.'.join(target_list)
+
             #add the submodule
             gm.add_submodule(target, self.module)
 
@@ -295,13 +300,22 @@ class ModularizePass(SequentialPass):
     # replacement_fn(node)
     def __init__(self, op: str, target: Union[list, tuple, str, callable],
                  replacement_fn: callable, name: str):
+
         self.op = op
-        if not isinstance(target, (list, tuple)):
-            target = (target,)
-        else:
+
+        # TODO: canonicalise target
+        if isinstance(target, tuple):
+            pass
+        elif isinstance(target, list):
             target = tuple(target)
+        else:
+            target = (target,)
+        # if not isinstance(target, (list, tuple)):
+        #     target = (target,)
+        # else:
+        #     target = tuple(target)
         self.target = target
-        self.op = op
+
         self.replacement_fn = replacement_fn
 
     def retarget(self, gm: fx.GraphModule):

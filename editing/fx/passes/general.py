@@ -282,32 +282,32 @@ class InsertModuleBetweenModulesPass(SequentialPass):
         passes = []
         idx = 0
         for node in gm.graph.nodes:
+
             if node.op == 'call_module':
+
                 m = module_of_node(gm, node)
                 if isinstance(m, self.modules_before):
+
                     insert_before_users = []
                     for u in node.users:
                         if u.op == 'call_module':
                             user_module = module_of_node(gm, u)
                             if isinstance(user_module, self.modules_after):
                                 insert_before_users.append((u, user_module))
-                    if len(insert_before_users) >= 1 and (
-                        (len(insert_before_users) == len(node.users)
-                         and self.combine == 'conservative')
-                            or self.combine == 'force'):
-                        new_module = self.make_module_fn(
-                            m, insert_before_users[0][1])
-                        passes.append(
-                            InsertModuleAfterNodePass(
-                                node, new_module, f"{self.name.upper()}_{idx}"))
+
+                    cond1 = len(insert_before_users) >= 1
+                    cond2 = (self.combine == 'conservative') and (len(insert_before_users) == len(node.users))
+                    cond3 = self.combine == 'force'
+                    if cond1 and (cond2 or cond3):
+                        # add a single instance of the module, then link each user to this unique new instance
+                        new_module = self.make_module_fn(m, insert_before_users[0][1])
+                        passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
                         idx += 1
                     else:
+                        # add a different instance of the module along each arc
                         for u, user_mod in insert_before_users:
                             new_module = self.make_module_fn(m, user_mod)
-                            passes.append(
-                                InsertModuleBetweenNodesPass(
-                                    node, u, new_module,
-                                    f"{self.name.upper()}_{idx}"))
+                            passes.append(InsertModuleBetweenNodesPass(node, u, new_module, f"{self.name.upper()}_{idx}"))
                             idx += 1
 
         super(InsertModuleBetweenModulesPass, self).setup_passes(passes)

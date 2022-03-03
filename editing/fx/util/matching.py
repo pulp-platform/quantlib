@@ -145,10 +145,12 @@ class SequentialMatcher:
         matched_nodes = set()
 
         def match_overlaps_with_previous(match):
-            return any(
-                n in matched_nodes and n.op not in ("placeholder", "output")
-                and k.op not in ("placeholder", "output")
-                for k, n in match.nodes_map.items())
+            core_nodes = tuple(n for k, n in match.nodes_map.items() if (k.op not in ('placeholder', 'output')) and (n.op not in ('placeholder', 'output')))
+            return any(n in matched_nodes for n in core_nodes)
+            # return any(
+            #     n in matched_nodes and n.op not in ("placeholder", "output")
+            #     and k.op not in ("placeholder", "output")
+            #     for k, n in match.nodes_map.items())
 
         for node in self.searched_gm.graph.nodes:
             matches = self.matches_subgraph_from_anchor(node)
