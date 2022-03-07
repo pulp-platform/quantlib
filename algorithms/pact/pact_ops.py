@@ -1181,6 +1181,8 @@ class _PACTLinOp:
         clip_lo = self.expand_bounds(clip_lo)
         self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip and not tqt)
         self.register_buffer('clip_gradient', torch.tensor(True))
+
+
         clip_hi = torch.tensor(1.)
         clip_hi = self.expand_bounds(clip_hi)
         # in the case when learn_clip and symm_wts are both True, clip_hi is not actually used;
@@ -1206,6 +1208,9 @@ class _PACTLinOp:
         # this member indicates that the module's clipping bounds should not be
         # touched. it is set by the controller
         self.register_buffer('frozen', torch.tensor(False))
+        # this member indicates that parameters (weight + bias) of the layer
+        # are frozen
+        self.register_buffer('params_frozen', torch.tensor(False))
 
     def get_eps_w(self):
         """
@@ -1232,19 +1237,35 @@ class _PACTLinOp:
 
     @property
     def weight_q(self):
+        if self.params_frozen:
+            wt = self.weight_frozen
+        else:
+            wt = self.weight
         if not self.tqt:
             if self.learn_clip and self.symm_wts:
                 clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
             else:
                 clip_upper = self.clip_hi
 
-            return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+            return PACTQuantize(wt, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
         else:
-            return TQTQuantize(self.weight, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
+            return TQTQuantize(wt, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
 
     @property
     def weight_int(self):
         return (self.weight_q / self.get_eps_w()).detach().clone().round()
+
+    # not nice: inheriting classes must set up weight_frozen/bias_frozen in
+    # their constructors!!!
+    def freeze_params(self):
+        self.weight_frozen.copy_(self.weight.data)
+        if self.bias is not None:
+            self.bias_frozen.copy_(self.bias.data)
+
+        self.params_frozen |= True
+
+    def unfreeze_params(self):
+        self.params_frozen &= False
 
 
 class PACTConv2d(nn.Conv2d, _PACTLinOp):
@@ -1281,6 +1302,16 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
                                 tqt_clip_grad=tqt_clip_grad)
+        # we want to be able to freeze weights; to avoid updating them, we must
+        # keep them in a buffer (e.g., ADAM will keep updating weights even
+        # with requires_grad == False)
+        self.register_buffer('weight_frozen', self.weight.data.clone())
+        if self.bias is not None:
+            self.register_buffer('bias_frozen', self.bias.data.clone())
+        else:
+            self.bias_frozen = None
+
+
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
@@ -1291,12 +1322,16 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
 
 
     def forward(self, x):
+        b = self.bias
         if self.started:
             w = self.weight_q
+        elif self.params_frozen:
+            w = self.weight_frozen
+            b = self.bias_frozen
         else:
             w = self.weight
 
-        return nn.functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return nn.functional.conv2d(x, w, b, self.stride, self.padding, self.dilation, self.groups)
 
 
     # this is not very pretty. Any suggestions on how to avoid it are welcome...
@@ -1322,6 +1357,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             pact_conv.bias.data.copy_(c.bias.data)
 
         return pact_conv
+
 
 
 class PACTConv1d(nn.Conv1d, _PACTLinOp):
@@ -1358,6 +1394,14 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
                                 tqt_beta=tqt_beta,
                                 tqt_clip_grad=tqt_clip_grad)
 
+
+        self.register_buffer('weight_frozen', self.weight.data.clone())
+        if self.bias is not None:
+            self.register_buffer('bias_frozen', self.bias.data.clone())
+        else:
+            self.bias_frozen = None
+
+
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
@@ -1366,11 +1410,16 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             t = torch.reshape(t, (self.out_channels, 1, 1))
         return t
     def forward(self, x):
+        b = self.bias
         if self.started:
             w = self.weight_q
+        elif self.params_frozen:
+            w = self.weight_frozen
+            b = self.bias_frozen
         else:
             w = self.weight
-        return nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+        return nn.functional.conv1d(x, w, b, self.stride, self.padding, self.dilation, self.groups)
 
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
@@ -1429,6 +1478,12 @@ class PACTLinear(nn.Linear, _PACTLinOp):
                                 tqt_beta=tqt_beta,
                                 tqt_clip_grad=tqt_clip_grad)
 
+        self.register_buffer('weight_frozen', self.weight.data.clone())
+        if self.bias is not None:
+            self.register_buffer('bias_frozen', self.bias.data.clone())
+        else:
+            self.bias_frozen = None
+
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
             if t.numel() == 1:
@@ -1449,11 +1504,16 @@ class PACTLinear(nn.Linear, _PACTLinOp):
         return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
 
     def forward(self, x):
+        b = self.bias
         if self.started:
             w = self.weight_q
+        elif self.params_frozen:
+            w = self.weight_frozen
+            b = self.bias_frozen
         else:
             w = self.weight
-        return nn.functional.linear(x, w, self.bias)
+
+        return nn.functional.linear(x, w, b)
 
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
@@ -1469,6 +1529,8 @@ class PACTLinear(nn.Linear, _PACTLinOp):
         if l.bias is not None:
             pact_linear.bias.data.copy_(l.bias.data)
         return pact_linear
+
+
 
 
 #############################################################

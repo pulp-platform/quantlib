@@ -23,7 +23,7 @@ class BBLossFactory(object):
                     bb_filter = VariadicOrFilter(*[TypeFilter(t) for t in _BB_CLASSES])
                     bb_modules = [n.module for n in bb_filter(net_nodes)]
                     # each controller only contributes to loss term once!
-                    self.controllers = list(set([m.gate_ctrl for m in bb_modules if m.gate_ctrl is not None]))
+                    self.controllers = list(set([ctrl for m in bb_modules for ctrl in m.gate_ctrls]))
                     self.mu0 = mu0
                     base_loss_type.__init__(self, *args, **kwargs)
 

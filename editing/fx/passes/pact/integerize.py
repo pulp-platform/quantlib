@@ -51,6 +51,7 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizeGELUPass',
            'IntegerizeLayerNormPass',
            'IntegerizeEmbeddingsPass',
+           'FixChannelNumbersPass',
            'PACTTracer',
            'PACT_symbolic_trace',]
 
@@ -157,7 +158,10 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          groups=conv.groups,
                          bias=None,
                          padding_mode=conv.padding_mode)
-    new_conv.weight.data.copy_(conv.weight_int)
+    try:
+        new_conv.weight.data.copy_(conv.weight_int)
+    except RuntimeError:
+        import ipdb; ipdb.set_trace()
 
     # annotate the new conv with the number of levels
     new_conv.n_levels = conv.n_levels
@@ -310,8 +314,95 @@ class IntegerizeEmbeddingsPass(SequentialPass):
         super().__init__(*passes, name_prefix='_INTEGERIZE_EMBEDDING_PASS')
 
 
+class FixChannelNumbersPass(FxPass):
+
+    def retarget(self, gm : fx.GraphModule):
+        self.visited_nodes = set()
+
+    def fix_conv_channels(self, gm : fx.GraphModule, node : fx.Node, force_out_channels : int):
+        if node.op == 'call_module' and node not in self.visited_nodes:
+            module = module_of_node(gm, node)
+            if isinstance(module, (PACTConv1d, PACTConv2d)):
+                conv_levels = module.n_levels
+                bw_in = int(np.ceil(np.log2(node.meta['quant'].n_levels_in)))
+                bw_w = int(np.ceil(np.log2(conv_levels)))
+                min_bw = np.minimum(bw_in, bw_w)
+                assert module.groups in [1, module.in_channels], f"fix_conv_channels: Unsupported groups config for conv {module}; {module.groups} groups not supported"
+                if min_bw not in [2,4,8]:
+                    print(f"modify_convs: minimum bitwidth {min_bw} will not give sensible result")
+                channel_multiple = int(np.ceil(8/min_bw))
+                in_ch = module.in_channels
+                out_ch = module.out_channels
+                extra_in_channels = (-in_ch) % channel_multiple
+                new_in_ch = in_ch+extra_in_channels
+                new_groups = module.groups
+                if module.groups == in_ch:
+                    new_groups = new_in_ch
+                new_out_ch = out_ch
+                if force_out_channels > 0:
+                    new_out_ch = force_out_channels
+                new_weights = torch.zeros(tuple([new_out_ch, (new_in_ch//new_groups)]+[k for k in module.kernel_size])).type_as(module.weight.data)
+                new_weights[:out_ch, :in_ch, :, :] = module.weight.data
+                module.weight.data = new_weights
+                if module.bias is not None and force_out_channels > 0:
+                    new_bias = torch.zeros([new_out_ch]).type_as(module.bias.data)
+                    new_bias[:out_ch] = module.bias.data
+                    module.bias.data = new_bias
+
+                print(f"Adjusting Conv {node.target}'s channels: {module.in_channels}/{module.out_channels} ==> {new_in_ch}/{new_out_ch}")
+                module.in_channels = new_in_ch
+                module.out_channels = new_out_ch
+                self.visited_nodes.add(node)
+                self.fix_conv_channels(gm, node.all_input_nodes[0], new_in_ch)
+            elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                if force_out_channels > 0:
+                    n_ch = module.num_features
+                    def pad_bn_param(t : torch.Tensor, val : float):
+                        new_param = torch.full([force_out_channels], val).type_as(module.bias.data)
+                        new_param[:n_ch] = t
+                        return new_param
+                    module.bias.data = pad_bn_param(module.bias.data, 0.)
+                    module.weight.data = pad_bn_param(module.weight.data, 1.)
+                    module.running_mean = pad_bn_param(module.running_mean, 0.)
+                    module.running_var = pad_bn_param(module.running_var, 1.)
+                    print(f"Adjusting BN {node.target}'s channels: {module.num_features} ==> {force_out_channels}")
+                    module.num_features = force_out_channels
+                self.visited_nodes.add(node)
+                self.fix_conv_channels(gm, node.all_input_nodes[0], force_out_channels)
+            # naively assume that number of channels is propagated through any
+            # other module type
+            else:
+                self.visited_nodes.add(node)
+                for inp in node.all_input_nodes:
+                    self.fix_conv_channels(gm, inp, force_out_channels)
+        elif node.op != 'placeholder' and node not in self.visited_nodes:
+            self.visited_nodes.add(node)
+            for inp in node.all_input_nodes:
+                    self.fix_conv_channels(gm, inp, force_out_channels)
+
+    def run_pass(self, gm : fx.GraphModule):
+        out_nodes = [n for n in gm.graph.nodes if n.op == 'output']
+        assert len(out_nodes) == 1, "FixChannelNumbersPass only supports single-output networks!"
+        self.fix_conv_channels(gm, out_nodes[0], -1)
+        return gm
+
+class SignedToUnsignedInputPass(FxPass):
+    #intended to be run on an INTEGERIZED network
+    def __init__(self, n_levels_in : int = 256):
+        self.n_levels_in = n_levels_in
+
+    def run_pass(self, gm : fx.GraphModule):
+        input_nodes = [n for n in gm.graph.nodes if n.op == 'placeholder']
+        for in_node in input_nodes:
+            users = [n for n in gm.graph.nodes if in_node in n.all_input_nodes]
+            user_conv_modules = [module_of_node(u) for u in users if u.op == 'call_module' and isinstance(module_of_node(u), (nn.Conv1d, nn.Conv2d, nn.Conv3d))]
+            if len(users) != len(user_conv_modules):
+                print(f"SignedToUnsignedInputPass will likely create bogus - input is used by non-module or non-Conv nodes!")
+
+
+
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False, convert_input_to_unsigned : bool = False):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -324,8 +415,11 @@ class IntegerizePACTNetPass(SequentialPass):
         # passes.append(LayerNormDisassemblePass())
         # first step: merge any convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
-        # second step: annotate epsilons
-        passes.append(AnnotateEpsPass(eps_in))
+        # second step: annotate epsilons and n_levels
+        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in))
+        # if desired, insert "ghost channels"
+        if fix_channel_numbers:
+            passes.append(FixChannelNumbersPass())
         # with epsilons annotated everywhere, we can integerize linear
         # functions (conv and FC)
         passes.append(IntegerizePACTConvPass())

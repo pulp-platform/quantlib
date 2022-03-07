@@ -40,13 +40,14 @@ class BBConv2d(PACTConv2d):
         self.hc_lo = -hc_over
         self.hc_hi = 1. + hc_over
         self.hc_T = hc_T
-        self.gate_ctrl = None
+        self.gate_ctrls = []
         self.bb_gates = None
 
+
     def register_gate_ctrl(self, c):
-        if self.gate_ctrl is not None:
-            print("Warning: BBConv2d's gate_ctrl is being overwritten... This is probably due to a bug in your code!")
-        self.gate_ctrl = c
+#        if self.gate_ctrl is not None:
+ #           print("Warning: BBConv2d's gate_ctrl is being overwritten... This is probably due to a bug in your code!")
+        self.gate_ctrls.append(c)
 
 
     @property
@@ -54,7 +55,7 @@ class BBConv2d(PACTConv2d):
         if self.training:
             #return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, self.clip_hi, floor=False, clip_gradient=self.clip_gradient)
             # stochastic quantized weights
-            return BBQuantize(self.weight, self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T, self.clip_lo, self.clip_hi, self.precs, self.symm_wts, expand=True)
+            return BBQuantize(self.weight, self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T, self.clip_lo, self.clip_hi, self.precs, self.symm_wts, expand=False)
         else:
             # deterministically quantized weights
             return BBQuantizeTestTime(self.weight, self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T, self.clip_lo, self.clip_hi, self.precs, self.symm_wts)
@@ -104,13 +105,13 @@ class BBLinear(PACTLinear):
         self.hc_lo = -hc_over
         self.hc_hi = 1. + hc_over
         self.hc_T = hc_T
-        self.gate_ctrl = None
+        self.gate_ctrls = []
         self.bb_gates = None
 
     def register_gate_ctrl(self, c):
-        if self.gate_ctrl is not None:
-            print("Warning: BBLinear's gate_ctrl is being overwritten... This is probably due to a bug in your code!")
-        self.gate_ctrl = c
+        #if self.gate_ctrl is not None:
+            #print("Warning: BBLinear's gate_ctrl is being overwritten... This is probably due to a bug in your code!")
+        self.gate_ctrls.append(c)
 
 
     @property
@@ -118,7 +119,7 @@ class BBLinear(PACTLinear):
         if self.training:
             #return PACTQuantize(self.weight, self.get_eps_w(), self.clip_lo, self.clip_hi, floor=False, clip_gradient=self.clip_gradient)
             # stochastic quantized weights
-            return BBQuantize(self.weight, self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T, self.clip_lo, self.clip_hi, self.precs, self.symm_wts, expand=True)
+            return BBQuantize(self.weight, self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T, self.clip_lo, self.clip_hi, self.precs, self.symm_wts, expand=False)
         else:
             # deterministically quantized weights
             return BBQuantizeTestTime(self.weight, self.bb_gates, self.hc_lo, self.hc_hi, self.hc_T, self.clip_lo, self.clip_hi, self.precs, self.symm_wts)
@@ -167,13 +168,13 @@ class BBAct(_PACTActivation):
         self.hc_lo = -hc_over
         self.hc_hi = 1. + hc_over
         self.hc_T = hc_T
-        self.gate_ctrl = None
+        self.gate_ctrls = []
         self.bb_gates = None
 
     def register_gate_ctrl(self, c):
-        if self.gate_ctrl is not None:
-            print("Warning: BBAct's gate_ctrl is being overwritten... This is probably due to a bug in your code!")
-        self.gate_ctrl = c
+        #if self.gate_ctrl is not None:
+         #   print("Warning: BBAct's gate_ctrl is being overwritten... This may be due to a bug in your code, or you have multiple controllers for the same layer (which may be legitimate)")
+        self.gate_ctrls.append(c)
 
     def forward(self, x):
         if not self.started:

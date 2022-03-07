@@ -39,16 +39,16 @@ import operator
 __all__ = ['AnnotateEpsPass',
            'extract_eps']
 
-def eps_conversion_pact_linears(m : torch.nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor):
     return m.get_eps_out(eps_in)
 
-def eps_conversion_pact_acts(m : torch.nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor):
     return m.get_eps()
 
-def eps_conversion_invalid(m : torch.nn.Module, *eps_in : torch.Tensor, **kw_eps_in : torch.Tensor):
+def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : torch.Tensor):
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
-def eps_conversion_pact_gelu(m : torch.nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
     #return (1./(m.n_levels//2-1))
     return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
     #return torch.Tensor(((m.n_levels//2-1)/m.maxval),)
@@ -56,11 +56,11 @@ def eps_conversion_pact_gelu(m : torch.nn.Module, eps_in : torch.Tensor):
 def eps_conversion_matmul(*eps_ins):
     return eps_ins[0] * eps_ins[1]
 
-def eps_conversion_pact_softmax(m : torch.nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
     return torch.Tensor((1./(m.n_levels-1.),))
     #return torch.Tensor((m.maxval/(m.n_levels-1),))
 
-def eps_conversion_pact_layernorm(m : torch.nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
     return torch.Tensor(max((m.maxval/(m.n_levels//2-1)), 0.),)
 
 def eps_conversion_identity(*eps_ins):
@@ -76,11 +76,12 @@ def eps_conversion_truediv(*eps_ins, **kwargs):
 #     except:
 #         return eps_ins[0]
 
-def eps_conversion_embedding(m : torch.nn.Module, eps_in : torch.Tensor):
+def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
     return m.maxval/(m.adder.n_levels//2-1)
 
-def eps_conversion_PACTWrapModule(m : torch.nn.Module, *eps_in):
+def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
     return m.statTracker.get_eps()
+
 
 
 #return torch.Tensor((1./m.n_levels,))
@@ -89,7 +90,6 @@ def eps_conversion_PACTWrapModule(m : torch.nn.Module, *eps_in):
 _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTConv1d : eps_conversion_pact_linears,
                     PACTConv2d : eps_conversion_pact_linears,
-                    PACTLinear : eps_conversion_pact_linears,
                     PACTAsymmetricAct : eps_conversion_pact_acts,
                     PACTUnsignedAct : eps_conversion_pact_acts,
                     nn.Conv1d : eps_conversion_invalid,
@@ -116,13 +116,44 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
 # modules which "generate" an eps without needing an input eps
 _ORIGINAL_EPS_MODULES = (PACTUnsignedAct, PACTAsymmetricAct)
 
+def n_levels_out_invalid(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    assert False, f"Module class: {type(m)} does not have a valid n_levels_out getter!"
+
+def n_levels_out_pact_linears(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    return accumulator_levels
+
+def n_levels_out_pact_acts(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    return m.n_levels
+
+def n_levels_out_pact_embedding(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    act_type = type(m.adder.act_out)
+    return _N_LEVELS_PROP[act_type](m.adder.act_out, in_levels, accumulator_levels)
+
+
+_N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
+                      PACTConv1d : n_levels_out_pact_linears,
+                      PACTConv2d : n_levels_out_pact_linears,
+                      PACTAsymmetricAct : n_levels_out_pact_acts,
+                      PACTUnsignedAct : n_levels_out_pact_acts,
+                      PACTWrapModule : n_levels_out_pact_acts,
+                      PACTEmbedding : n_levels_out_pact_embedding,
+                      PACTGELU : n_levels_out_pact_acts,
+                      PACTIntegerGELU : n_levels_out_pact_acts,
+                      PACTIntegerMatmul : n_levels_out_pact_linears,
+                      PACTSoftmax : n_levels_out_pact_acts,
+                      PACTIntegerSoftmax : n_levels_out_pact_acts,
+                      f'_CALL_FUNCTION_{repr(torch.matmul)}' : n_levels_out_pact_linears,
+                      f'_CALL_FUNCTION_{repr(torch.bmm)}' : n_levels_out_pact_linears,}
+
 @dataclass
 class QuantInfo:
     eps_in : torch.Tensor
     eps_out : torch.Tensor
+    n_levels_in : int
+    n_levels_out : int
 
 class AnnotateEpsPass(FxPass):
-    def __init__(self, eps_in : Optional[Union[torch.Tensor, float]]):
+    def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32):
         super(AnnotateEpsPass, self).__init__()
         if not isinstance(eps_in, torch.Tensor) and eps_in is not None:
             self.eps_in = torch.tensor(eps_in).reshape(-1)
@@ -134,11 +165,19 @@ class AnnotateEpsPass(FxPass):
             self.eps_in = eps_in.reshape(-1)
             self.noeps = False
 
+        if n_levels_in is None:
+            # providing no n_levels_in is equivalent to providing no eps_in
+            self.noeps = True
+        self.n_levels_in = n_levels_in
+
+        self.accumulator_levels = accumulator_levels
+
+
     def run_pass(self, gm : fx.GraphModule):
         modules = gm_modules(gm)
         for node in gm.graph.nodes:
             if node.op == 'placeholder':
-                node.meta['quant'] = QuantInfo(eps_in=self.eps_in, eps_out=self.eps_in)
+                node.meta['quant'] = QuantInfo(eps_in=self.eps_in, eps_out=self.eps_in, n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in)
                 for u in node.users:
                     if self.noeps:
                         assert u.op == 'call_module' and isinstance(module_of_node(gm, u), _ORIGINAL_EPS_MODULES), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
@@ -146,6 +185,7 @@ class AnnotateEpsPass(FxPass):
             else:
                 arg_eps_ins = [i.meta['quant'].eps_out for i in node.args if isinstance(i, fx.Node)]
                 other_args = [i for i in node.args if not isinstance(i, fx.Node)]
+
                 kwarg_eps_ins = {k : v.meta['quant'].eps_out for k, v in node.kwargs.items() if isinstance(v, fx.Node)}
                 other_kwargs = {k : v for k, v in node.kwargs.items() if not isinstance(v, fx.Node)}
                 conversion_kwargs = copy.copy(other_kwargs)
@@ -165,14 +205,20 @@ class AnnotateEpsPass(FxPass):
                 except KeyError:
                     print(f"key {k} not found in _EPS_CONVERSIONS!")
                     eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
-                    try:
-                        assert all(d < 1e-8 for d in eps_diffs)
-                    except:
-                        import IPython; IPython.embed()
+                    assert all(d < 1e-8 for d in eps_diffs), "Mismatching input epsilons in node with no eps propagation function!"
                     print(f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
                     eps_out = all_eps[0]
 
-                node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out)
+                node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
+                try:
+                    node_out_levels = _N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
+                except KeyError:
+                    print(f"key {k} not found in _N_LEVELS_OUT_PROP!")
+                    assert node_in_levels[1:] == node_in_levels[:-1], "Mismatching input n_levels in node with no n_levels_out propagation function! "
+                    node_out_levels = node_in_levels[0]
+
+                node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels)
+
         return gm
 
 

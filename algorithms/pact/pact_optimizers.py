@@ -22,7 +22,6 @@
 from torch import nn
 from torch.optim import SGD, Adam, Adagrad
 
-import inspect
 
 from .pact_ops import *
 from quantlib.editing.lightweight.rules.filters import TypeFilter, VariadicOrFilter

@@ -31,7 +31,9 @@ from ..util import get_ordered_active_nodes, get_qualified_prefix, module_of_nod
 __all__ = ['FxPass',
            'SequentialPass',
            'ModifyMatchedModulesPass',
+           'ModifyMatchesPass',
            'ModifySequentialPatternPass',
+           'FindSequentialPatternsPass',
            'ReplaceMatchWithModulePass',
            'ReplaceSequentialPatternPass',
            'ReplaceSingleInputPatternPass',
@@ -134,13 +136,28 @@ class ModifyMatchedModulesPass(FxPass):
         self.mod_fun(modules, **self.kwargs)
         return gm
 
+class ModifyMatchesPass(FxPass):
+    # applies mod_fun to the nodes in a Match object
+    def __init__(self, match : Match, mod_fun : callable, **kwargs):
+        super(ModifyMatchedModulesPass, self).__init__()
+        active_nodes = get_ordered_active_nodes(match)
+        self.nodes = active_nodes
+        self.mod_fun = mod_fun
+        self.kwargs = kwargs
+
+    def run_pass(self, gm : fx.GraphModule):
+        module_nodes = [n for n in self.nodes if n.op == 'call_module']
+        self.mod_fun(gm, module_nodes, **self.kwargs)
+        return gm
+
 class ModifySequentialPatternPass(SequentialPass):
-    def __init__(self, pattern : callable, trace : callable, mod_fun : callable, name : str = '', **kwargs):
+    def __init__(self, pattern : callable, trace : callable, mod_fun : callable, name : str = '', modify_matches : bool = False, **kwargs):
         super(ModifySequentialPatternPass, self).__init__(name_prefix=name)
         self.matcher = SequentialMatcher(pattern, trace)
         self.mod_fun = mod_fun
         self.name = name
         self.kwargs = kwargs
+        self.modify_matches = modify_matches
 
     def retarget(self, gm : fx.GraphModule):
         for k in self.named_subpasses().keys():
@@ -148,9 +165,33 @@ class ModifySequentialPatternPass(SequentialPass):
         self.matches = self.matcher.match_graph(gm)
         passes = []
         for i, m in enumerate(self.matches):
-            passes.append(ModifyMatchedModulesPass(m, self.mod_fun, **self.kwargs))
+            if self.modify_matches:
+                passes.append(ModifyMatchesPass(m, self.mod_fun, **self.kwargs))
+            else:
+                passes.append(ModifyMatchedModulesPass(m, self.mod_fun, **self.kwargs))
 
         super(ModifySequentialPatternPass, self).setup_passes(passes)
+
+class FindSequentialPatternsPass(ModifySequentialPatternPass):
+
+    def register_match(self, gm : fx.GraphModule, nodes : list):
+        match_list = []
+        for n in nodes:
+            match_dict = {'name': n.target}
+            if self.include_objects:
+                match_dict.update({'node': n, 'module':None})
+            match_list.append(match_dict)
+        self.found_patterns.append(match_list)
+
+    def __init__(self, pattern : callable, trace : callable, name : str, include_objects : bool = False):
+        self.found_patterns = []
+        self.include_objects = include_objects
+        super(FindSequentialPatternsPass, self).__init__(pattern, trace, self.register_match, name, modify_matches=True)
+
+    def retarget(self, gm : fx.GraphModule):
+        super(FindSequentialPatternsPass, self).__init__(gm)
+        self.found_patterns = []
+
 
 # class ReplaceMatchWithModulePass(FxPass):
 #     #Matches are specific to graph instances, so don't use this type of pass on its

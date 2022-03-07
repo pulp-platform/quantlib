@@ -22,6 +22,8 @@
 
 from typing import Union, Optional, Tuple, List
 
+import numpy as np
+
 import torch
 from torch import nn, fx
 from torch.fx.passes.shape_prop import ShapeProp
@@ -29,9 +31,9 @@ from torch.nn import functional as F
 from .pass_base import FxPass, SequentialPass, ModifySequentialPatternPass, ModularizePass
 from ..util import module_of_node, get_qualified_prefix
 
-from quantlib.algorithms.pact import PACTConv2d, PACTLinear
+from quantlib.algorithms.pact.pact_ops import *
 #TODO refactor ops into PACT??
-from quantlib.algorithms.bb import BBConv2d, BBLinear
+from quantlib.algorithms.bb import BBConv2d, BBLinear, BBAct
 
 __all__ = ['MergeConvBNPass',
            'ModularizeActivationsPass',
@@ -41,6 +43,8 @@ __all__ = ['MergeConvBNPass',
            'InsertModuleBetweenModulesPass',
            'ShapePropPass',
            'CountMACsPass',
+           'MemoryUsagePass',
+           'CollectPropertiesPass',
            '_MAC_CNT_FNS']
 
 
@@ -71,6 +75,56 @@ _MAC_CNT_FNS = {nn.Conv2d : madd_of_conv2d,
                 PACTLinear : madd_of_lin,
                 BBLinear : madd_of_lin}
 
+def mem_of_linop(l, _, use_bias):
+    num_w_el = l.weight.numel()
+    w_mem = num_w_el * np.ceil(np.log2((l.n_levels))) / 8
+    b_mem = 0
+    if use_bias and l.bias is not None:
+        num_b_el = l.bias.numel()
+        #assumption: we always use 32b biases
+        b_mem = 4*num_b_el
+
+    return w_mem+b_mem
+
+def mem_of_act(l, shp, _):
+    #THE ASSUMPTION IS THAT BATCH DIMENSION IS ALWAYS INCLUDED
+    if isinstance(shp, (tuple, list)):
+        shp = torch.Size(shp)
+    if isinstance(shp, torch.Size):
+        shp = shp[1:]
+    else:
+        assert False, "mem_of_act expected tuple, list or size for tensor shape specification"
+
+    num_act_el = shp.numel()
+    act_mem = num_act_el * np.ceil(np.log2(l.n_levels))/8
+    return act_mem
+
+
+
+_MEM_CNT_FNS = {
+    PACTConv1d : mem_of_linop,
+    PACTConv2d : mem_of_linop,
+    BBConv2d : mem_of_linop,
+    PACTLinear : mem_of_linop,
+    BBLinear : mem_of_linop,
+    PACTUnsignedAct : mem_of_act,
+    PACTAsymmetricAct : mem_of_act,
+    BBAct : mem_of_act}
+
+# functions to translate 'call_module' node properties stored in the 'meta'
+# dict
+# should return a (key : str, value : <any>) pair
+_PROPERTY_TRANSL_FNS = {
+    'tensor_meta': lambda v: ('out_shape', v.shape)
+}
+def translate_property(k : str, v):
+    try:
+        translate_fn = _PROPERTY_TRANSL_FNS[k]
+    except KeyError:
+        # if no translate_fn is in the dict, return the same value
+        translate_fn = lambda v_: (k, v_)
+    return translate_fn(v)
+
 
 def merge_conv_bn_fun(ml : list):
     assert len(ml) == 2, "List passed to merge_conv_bn_fun should have length 2"
@@ -81,6 +135,8 @@ def merge_conv_bn_fun(ml : list):
     bias_data = conv_module.bias.data.clone().detach()
     conv_module.bias = None
     bn_module.running_mean.data -= bias_data
+
+
 
 class MergeConvBNPass(SequentialPass):
     def __init__(self, trace : callable = fx.symbolic_trace):
@@ -301,6 +357,47 @@ class CountMACsPass(FxPass):
                 m = module_of_node(gm, node)
                 k = type(m)
                 if k in _MAC_CNT_FNS.keys():
-                    shp = node.meta['tensor_meta'].shape
+                    if len(node.all_input_nodes) != 1:
+                        print("WARNING: CountMACsPass will probably count wrong for modules with >1 inputs!")
+                    in_node = node.all_input_nodes[0]
+                    shp = in_node.meta['tensor_meta'].shape
                     node.meta['macs'] = int(_MAC_CNT_FNS[k](shp, m))
+        return gm
+
+class MemoryUsagePass(FxPass):
+    # annotate each node with the amount of memory the storage of the complete
+    # parameters takes
+    def run_pass(self, gm: fx.GraphModule):
+
+        for node in gm.graph.nodes:
+            if node.op == 'call_module':
+                m = module_of_node(gm, node)
+                k = type(m)
+                if k in _MEM_CNT_FNS.keys():
+                    use_bias = False
+                    if node.next.op == 'output':
+                        use_bias = True
+                    shp = node.meta['tensor_meta'].shape
+                    node.meta['memory'] = int(np.ceil(_MEM_CNT_FNS[k](m, shp, use_bias)))
+
+        return gm
+
+
+class CollectPropertiesPass(FxPass):
+    def __init__(self, prop_dict : Optional[dict]=None):
+        if prop_dict is None:
+            prop_dict = {}
+        self.prop_dict = prop_dict
+
+    def run_pass(self, gm : fx.GraphModule):
+        for node in gm.graph.nodes:
+            if node.op == 'call_module':
+                m = module_of_node(gm, node)
+                pd = {}
+                for k, v in node.meta.items():
+                    tk, tv = translate_property(k, v)
+                    pd[tk] = tv
+
+                pd['n_users'] = len(node.users)
+                self.prop_dict[node.target] = pd
         return gm
