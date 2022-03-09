@@ -1137,6 +1137,20 @@ class _PACTLinOp:
         pass
 
 
+    # ensure backward compatibility with checkpoints from before the addition
+    # of "params_frozen" by adding this as a load_state_dict_pre_hook
+    def make_state_dicts_compat(self, state_dict, prefix, strict, *args, **kwargs):
+        if strict:
+            to_fix = ["params", "weight"]
+            try:
+                if self.bias is not None:
+                    to_fix.append("bias")
+            except AttributeError:
+                pass
+            for p in to_fix:
+                if prefix+p+"_frozen" not in state_dict.keys():
+                    state_dict[prefix+p+"_frozen"] = getattr(self, p+"_frozen")
+
     def setup_quant_params(
             self,
             n_levels : int = 256,
@@ -1268,6 +1282,7 @@ class _PACTLinOp:
         self.params_frozen &= False
 
 
+
 class PACTConv2d(nn.Conv2d, _PACTLinOp):
     def __init__(
             self,
@@ -1310,6 +1325,8 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             self.register_buffer('bias_frozen', self.bias.data.clone())
         else:
             self.bias_frozen = None
+
+        self._register_load_state_dict_pre_hook(self.make_state_dicts_compat)
 
 
     def expand_bounds(self, t):
@@ -1401,6 +1418,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         else:
             self.bias_frozen = None
 
+        self._register_load_state_dict_pre_hook(self.make_state_dicts_compat)
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
@@ -1483,6 +1501,8 @@ class PACTLinear(nn.Linear, _PACTLinOp):
             self.register_buffer('bias_frozen', self.bias.data.clone())
         else:
             self.bias_frozen = None
+
+        self._register_load_state_dict_pre_hook(self.make_state_dicts_compat)
 
     def expand_bounds(self, t):
         if self.quantize == 'per_channel':
