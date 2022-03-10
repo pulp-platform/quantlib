@@ -21,7 +21,7 @@
 # limitations under the License.
 #
 
-from typing import Union
+from typing import Union, Optional
 import torch
 from torch import nn
 import numpy as np
@@ -58,7 +58,11 @@ __all__ = [
     'PACTEmbedding',
     'PACTWrapModule',
     'PACTWrapMHSA',
-    'RequantShift'
+    'RequantShift',
+    'PACTHardswish',
+    'PACTHardsigmoid',
+    'PACTIntegerHardswish',
+    'PACTIntegerHardsigmoid'
 ]
 
 
@@ -1161,7 +1165,8 @@ class _PACTLinOp:
             nb_std : Union[int, float]= 3,
             tqt : bool = False,
             tqt_beta : float = 0.9,
-            tqt_clip_grad : bool = True
+            tqt_clip_grad : bool = True,
+            rounding : bool = True
     ):
         """
         :param n_levels: Number of weight quantization levels
@@ -1185,6 +1190,7 @@ class _PACTLinOp:
         self.quantize = quantize
         self.init_clip = init_clip
         self.learn_clip = learn_clip
+        self.rounding = rounding
         # this member indicates that quantization is enabled
         self.register_buffer('started', torch.tensor(False))
         self.symm_wts = symm_wts
@@ -1263,7 +1269,7 @@ class _PACTLinOp:
 
             return PACTQuantize(wt, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
         else:
-            return TQTQuantize(wt, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad)
+            return TQTQuantize(wt, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, rounding=True)
 
     @property
     def weight_int(self):
@@ -1298,6 +1304,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             tqt = False,
             tqt_beta = 0.9,
             tqt_clip_grad = True,
+            rounding = True,
             **kwargs
     ):
         """
@@ -1392,6 +1399,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             tqt = False,
             tqt_beta = 0.9,
             tqt_clip_grad = True,
+            rounding = True,
             **kwargs
     ):
         """
@@ -1409,7 +1417,8 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
                                 nb_std=nb_std,
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
-                                tqt_clip_grad=tqt_clip_grad)
+                                tqt_clip_grad=tqt_clip_grad,
+                                rounding=rounding)
 
 
         self.register_buffer('weight_frozen', self.weight.data.clone())
@@ -1478,6 +1487,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
                  tqt = False,
                  tqt_beta = 0.9,
                  tqt_clip_grad = True,
+                 rounding = True,
                  **kwargs):
         """
         :param in_features:   see nn.Linear
@@ -1494,7 +1504,8 @@ class PACTLinear(nn.Linear, _PACTLinOp):
                                 nb_std=nb_std,
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
-                                tqt_clip_grad=tqt_clip_grad)
+                                tqt_clip_grad=tqt_clip_grad,
+                                rounding=rounding)
 
         self.register_buffer('weight_frozen', self.weight.data.clone())
         if self.bias is not None:
@@ -1558,69 +1569,176 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 # PACTIntegerLayerNorm, PACTIntegerMatmul, PACTIntegerSoftmax
 # ARE STILL IN BETA STADIUM - DO NOT USE FOR IMPORTANT THINGS!
 #############################################################
+class PACTHardswish(nn.Module):
+    def __init__(self, eps_s : float, eps_in_fn : Optional[callable] = None):
+        super(PACTHardswish, self).__init__()
+        self.eps_s = eps_s
+        self.eps_in_fn = eps_in_fn
 
-# class PACTIntegerLayerNorm(torch.nn.Module):
+    def forward(self, x):
+        inp = x
+        three = torch.tensor(3., dtype=x.dtype, device=x.device)
+        six = 2 * three
+        z = torch.zeros(1, dtype=x.dtype, device=x.device)
+        o = torch.ones(1, dtype=x.dtype, device=x.device)
+        # if we have a handle on the input epsilon, quantize the constants 3
+        # and 6 to eps_in
+        if self.eps_in_fn:
+            three = PACTQuantize(three, self.eps_in_fn(), 2., 4., floor=False)
+            six = PACTQuantize(six, self.eps_in_fn(), 5., 6., floor=False)
+        # now perform quantized hswish with the input data:
+        # 1. relu6(x+3)
+        x = x + three
+        x = torch.minimum(torch.maximum(z, x), six)
+        # 2. /6
+        one_over_six = PACTQuantize(o/6, self.eps_s, 0., 1., floor=False)
+        x = x * one_over_six
+        # 3. x * (ans)
+        return inp * x
 
-#     def __init__(self, module, n_levels: int = 256):
-#         super().__init__()
+    def get_eps_out(self, eps_in):
+        return self.eps_s * eps_in * eps_in
 
-#         self.n_levels = n_levels
-#         self.frozen = False
-#         self.eps_in = 1.
-#         self.eps = 1.
-#         self.module = copy.deepcopy(module)
 
-#         self.register_buffer('totScaler', torch.Tensor((255.,)))
-#         self.register_buffer('D', torch.Tensor((2**16,)))
-#         self.register_buffer('maxval', torch.Tensor((1.,)))
+class PACTIntegerHardswish(nn.Module):
+    def __init__(self, eps_in : float, eps_s : float):
+        super(PACTIntegerHardswish, self).__init__()
+        self.eps_in = eps_in
+        self.eps_s = eps_s
+        three = torch.tensor(3.)
+        six = 2 * three
+        three_q = torch.round(three/self.eps_in)
+        six_q = torch.round(six/self.eps_in)
+        self.register_buffer("three", three_q)
+        self.register_buffer("six", six_q)
+        one_over_six = 1/six
+        one_over_six_q = torch.round(one_over_six/eps_s)
+        self.register_buffer("one_over_six", one_over_six_q)
 
-#     def forward(self, x):
-#         if self.frozen:
-#             nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
-#             denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
-#             y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
-#             y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
-#         else:
-#             y = self.module(x)
+    def forward(self, x):
+        z = torch.zeros.type_as(x)
+        inp = x
+        x = x + self.three
+        x = torch.clip(x, z, self.six)
+        x = x * self.one_over_six
+        return inp * x
 
-#             self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-#             scaler = (self.n_levels)/self.maxval
-#             self.totScaler.data[0] = math.floor(self.D * scaler)
 
-#         return y
+class PACTHardsigmoid(nn.Module):
+    def __init__(self, eps_s : float, eps_in_fn : Optional[callable] = None):
+        super(PACTHardsigmoid, self).__init__()
+        self.eps_s = eps_s
+        self.eps_in_fn = eps_in_fn
 
-# class PACTIntegerSoftmax(torch.nn.Module):
+    def forward(self, x):
+        three = torch.tensor(3., dtype=x.dtype, device=x.device)
+        six = 2 * three
+        z = torch.zeros(1, dtype=x.dtype, device=x.device)
+        o = torch.ones(1, dtype=x.dtype, device=x.device)
+        # if we have a handle on the input epsilon, quantize the constants 3
+        # and 6 to eps_in
+        if self.eps_in_fn:
+            three = PACTQuantize(three, self.eps_in_fn(), 2., 4., floor=False)
+            six = PACTQuantize(six, self.eps_in_fn(), 5., 6.5, floor=False)
+        # now perform quantized hswish with the input data:
+        # 1. relu6(x+3)
+        x = x + three
+        x = torch.minimum(torch.maximum(z, x), six)
+        # 2. /6
+        one_over_six = PACTQuantize(o/six, self.eps_s, z, o, floor=False)
+        return x * one_over_six
 
-#     def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
-#         super().__init__()
-#         self.n_levels = n_levels
-#         self.module = copy.deepcopy(module)
-#         self.frozen = False
-#         self.eps_in = eps_in
+    def get_eps_out(self, eps_in):
+        return self.eps_s * eps_in
 
-#         self.register_buffer('coeffA', torch.Tensor((0.3585,)))
-#         self.register_buffer('coeffB', torch.Tensor((1.353,)))
-#         self.register_buffer('coeffC', torch.Tensor((0.344,)))
-#         self.register_buffer('log2', torch.Tensor((4.,)))
 
-#     def updateCoeffs(self, eps):
-#         eps2 = (1./(2**8))/(eps**2)
+class PACTIntegerHardsigmoid(nn.Module):
+    def __init__(self, eps_in : float, eps_s : float):
+        super(PACTIntegerHardsigmoid, self).__init__()
+        self.eps_in = eps_in
+        self.eps_s = eps_s
+        three = torch.tensor(3.)
+        six = 2 * three
+        three_q = torch.round(three/self.eps_in)
+        six_q = torch.round(six/self.eps_in)
+        self.register_buffer("three", three_q)
+        self.register_buffer("six", six_q)
+        one_over_six = 1/six
+        one_over_six_q = torch.round(one_over_six/eps_s)
+        self.register_buffer("one_over_six", one_over_six_q)
 
-#         self.coeffA.data[0] = math.floor(0.3585/eps2)
-#         self.coeffB.data[0] = math.floor(1.353/eps)
-#         self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
-#         self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
 
-#     def forward(self, x):
-#         if self.frozen:
-#             xTilde = (x - torch.max(x))
-#             z = torch.floor(-xTilde / self.log2)
-#             p = xTilde + z * self.log2
-#             y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
-#             ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-#             out = torch.floor(y*(self.n_levels-1)/ysum)
-#             return out
-#         else:
-#             y = self.module(x)
+    def forward(self, x):
+        z = torch.zeros.type_as(x)
+        inp = x
+        x = x + self.three
+        x = torch.clip(x, z, self.six)
+        return x * self.one_over_six
 
-#         return y
+
+class PACTIntegerLayerNorm(torch.nn.Module):
+
+    def __init__(self, module, n_levels: int = 256):
+        super().__init__()
+
+        self.n_levels = n_levels
+        self.frozen = False
+        self.eps_in = 1.
+        self.eps = 1.
+        self.module = copy.deepcopy(module)
+
+        self.register_buffer('totScaler', torch.Tensor((255.,)))
+        self.register_buffer('D', torch.Tensor((2**16,)))
+        self.register_buffer('maxval', torch.Tensor((1.,)))
+
+    def forward(self, x):
+        if self.frozen:
+            nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
+            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
+            y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
+            y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
+        else:
+            y = self.module(x)
+
+            self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
+            scaler = (self.n_levels)/self.maxval
+            self.totScaler.data[0] = math.floor(self.D * scaler)
+
+        return y
+
+class PACTIntegerSoftmax(torch.nn.Module):
+
+    def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
+        super().__init__()
+        self.n_levels = n_levels
+        self.module = copy.deepcopy(module)
+        self.frozen = False
+        self.eps_in = eps_in
+
+        self.register_buffer('coeffA', torch.Tensor((0.3585,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC', torch.Tensor((0.344,)))
+        self.register_buffer('log2', torch.Tensor((4.,)))
+
+    def updateCoeffs(self, eps):
+        eps2 = (1./(2**8))/(eps**2)
+
+        self.coeffA.data[0] = math.floor(0.3585/eps2)
+        self.coeffB.data[0] = math.floor(1.353/eps)
+        self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
+        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
+
+    def forward(self, x):
+        if self.frozen:
+            xTilde = (x - torch.max(x))
+            z = torch.floor(-xTilde / self.log2)
+            p = xTilde + z * self.log2
+            y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
+            ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+            out = torch.floor(y*(self.n_levels-1)/ysum)
+            return out
+        else:
+            y = self.module(x)
+
+        return y
+

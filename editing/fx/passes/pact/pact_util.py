@@ -25,10 +25,13 @@ from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 from quantlib.algorithms.pact import *
 from quantlib.algorithms.pact.pact_ops import _PACTActivation
+from quantlib.algorithms.generic.generic_ops import *
+
 
 
 
 #PACT operations which should not be traced through
+
 PACT_OPS = set([_PACTActivation,
                 PACTUnsignedAct,
                 PACTAsymmetricAct,
@@ -42,9 +45,14 @@ PACT_OPS = set([_PACTActivation,
                 PACTIntegerGELU,
                 PACTIntegerLayerNorm,
                 PACTEmbedding,
-                PACTWrapModule
-])
+                PACTWrapModule,
+                PACTHardsigmoid,
+                PACTHardswish,
+                PACTIntegerHardsigmoid,
+                PACTIntegerHardswish,
+                Multiply])
 
+#TODO is this still reasonable??
 PACT_OPS_INT = set([PACTIntegerAdd,
                     PACTIntegerConcat,
                     PACTIntegerMatmul,

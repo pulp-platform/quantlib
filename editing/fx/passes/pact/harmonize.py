@@ -29,6 +29,8 @@ from torch import nn, fx
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
+from quantlib.algorithms.generic.generic_ops import *
+
 
 from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
 from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, ReplaceSequentialPatternPass
@@ -110,7 +112,7 @@ class OpTreeReplacementPass(FxPass):
         return node.op == node_spec[0] and node.target in node_spec[1]
 
     @staticmethod
-    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : Optional[set], always_terminate : bool = False):
+    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : set, always_terminate : bool = False):
         if node in seen_nodes:
             # if we have already seen this node, it is either already part of a
             # tree or it will never be, so if we exited a tree, terminate the
@@ -196,6 +198,17 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
 
         return PACTIntegerAdd(num_args=len(tree.args),  **self.kwargs)
 
+class MulReplacementPass(OpTreeReplacementPass):
+    mul_node_specs = [('call_function', (torch.mul, operator.mul)),
+                      ('call_method', ('mul',))]
+
+    def __init__(self):
+        super(MulReplacementPass, self).__init__(node_specs=self.mul_node_specs, replacement_fn=self.mul_replacement_fn, name="MULTIPLICATION", always_terminate=True)
+
+    def mul_replacement_fn(self, tree):
+        # multiply takes no args
+        return Multiply()
+
 
 class ConcatTreeReplacementPass(SequentialPass):
     cat_node_specs = [('call_function', (torch.cat,))]
@@ -223,12 +236,14 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
                       nn.BatchNorm1d,
                       nn.BatchNorm2d,
                       nn.BatchNorm3d,
-                      nn.Linear)
-    after_modules = (nn.Conv1d,
-                      nn.Conv2d,
-                      nn.Conv3d,
                       nn.Linear,
-                     PACTIntegerMatmul)
+                      Multiply)
+    after_modules = (nn.Conv1d,
+                     PACTIntegerMatmul,
+                     nn.Conv2d,
+                     nn.Conv3d,
+                     nn.Linear,
+                     Multiply)
 
     def __init__(self, signed : bool = True, **kwargs):
         name = "PACT_LINEAR_ACTIVATIONS"
@@ -252,6 +267,7 @@ class HarmonizePACTNetPass(SequentialPass):
         passes = []
         passes.append(RetracePass(PACT_symbolic_trace))
         passes.append(AddTreeReplacementPass(**kwargs))
+        passes.append(MulReplacementPass())
         actpass_kwargs = {k:v for k,v in kwargs.items() if k != 'force_out_eps'}
         passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
         super(HarmonizePACTNetPass, self).__init__(*passes, name_prefix='_HARMONIZE_PACT_NET_PASS')
