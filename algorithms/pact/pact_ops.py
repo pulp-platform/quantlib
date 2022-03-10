@@ -1143,7 +1143,7 @@ class _PACTLinOp:
 
     # ensure backward compatibility with checkpoints from before the addition
     # of "params_frozen" by adding this as a load_state_dict_pre_hook
-    def make_state_dicts_compat(self, state_dict, prefix, strict, *args, **kwargs):
+    def make_state_dicts_compat(self, state_dict, prefix, _, strict, *args, **kwargs):
         if strict:
             to_fix = ["params", "weight"]
             try:
