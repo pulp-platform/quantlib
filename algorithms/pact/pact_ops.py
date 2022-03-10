@@ -767,6 +767,31 @@ class PACTHardswish(nn.Module):
         return self.eps_s * eps_in * eps_in
 
 
+class PACTIntegerHardswish(nn.Module):
+    def __init__(self, eps_in : float, eps_s : float):
+        super(PACTIntegerHardswish, self).__init__()
+        self.eps_in = eps_in
+        self.eps_s = eps_s
+        three = torch.tensor(3.)
+        six = 2 * three
+        three_q = torch.round(three/self.eps_in)
+        six_q = torch.round(six/self.eps_in)
+        self.register_buffer("three", three_q)
+        self.register_buffer("six", six_q)
+        one_over_six = 1/six
+        one_over_six_q = torch.round(one_over_six/eps_s)
+        self.register_buffer("one_over_six", one_over_six_q)
+
+
+    def forward(self, x):
+        z = torch.zeros.type_as(x)
+        inp = x
+        x = x + self.three
+        x = torch.clip(x, z, self.six)
+        x = x * self.one_over_six
+        return inp * x
+
+
 class PACTHardsigmoid(nn.Module):
     def __init__(self, eps_s : float, eps_in_fn : Optional[callable] = None):
         super(PACTHardsigmoid, self).__init__()
@@ -793,6 +818,30 @@ class PACTHardsigmoid(nn.Module):
 
     def get_eps_out(self, eps_in):
         return self.eps_s * eps_in
+
+
+class PACTIntegerHardsigmoid(nn.Module):
+    def __init__(self, eps_in : float, eps_s : float):
+        super(PACTIntegerHardsigmoid, self).__init__()
+        self.eps_in = eps_in
+        self.eps_s = eps_s
+        three = torch.tensor(3.)
+        six = 2 * three
+        three_q = torch.round(three/self.eps_in)
+        six_q = torch.round(six/self.eps_in)
+        self.register_buffer("three", three_q)
+        self.register_buffer("six", six_q)
+        one_over_six = 1/six
+        one_over_six_q = torch.round(one_over_six/eps_s)
+        self.register_buffer("one_over_six", one_over_six_q)
+
+
+    def forward(self, x):
+        z = torch.zeros.type_as(x)
+        inp = x
+        x = x + self.three
+        x = torch.clip(x, z, self.six)
+        return x * self.one_over_six
 
 
 class PACTIntegerLayerNorm(torch.nn.Module):
