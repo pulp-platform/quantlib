@@ -1593,6 +1593,11 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             in_channels=c.in_channels,
             out_channels=c.out_channels,
             kernel_size=c.kernel_size,
+            stride=c.stride,
+            dilation=c.dilation,
+            groups=c.groups,
+            bias=(c.bias is not None),
+            padding_mode=c.padding_mode,
             **kwargs)
         # initialize parameters from the nn.Conv1d
         pact_causalconv.weight.data.copy_(c.weight.data)

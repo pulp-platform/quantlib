@@ -250,6 +250,52 @@ class SwapMaxPoolActPass(SequentialPass):
         super(SwapMaxPoolActPass, self).__init__(*passes, name_prefix="_SWAP_MAXPOOL_ACT_PASS")
 
 
+def replace_pact_causalconv1d_padconv1d_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    causalconv_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    causalconv = matched_modules[0]
+
+    new_module = nn.Sequential(
+        nn.ConstantPad1d(
+            padding=(causalconv.__padding__, 0),
+            value=0
+        ),
+        PACTConv1d(
+            in_channels=causalconv.in_channels,
+            out_channels=causalconv.out_channels,
+            kernel_size=causalconv.kernel_size,
+            bias=causalconv.bias is not None,
+            stride=causalconv.stride,
+            padding=0,
+            dilation=causalconv.dilation,
+            groups=causalconv.groups,
+            padding_mode='zeros',
+            n_levels=causalconv.n_levels,
+            quantize=causalconv.quantize,
+            init_clip=causalconv.init_clip,
+            learn_clip=causalconv.learn_clip,
+            symm_wts=causalconv.symm_wts,
+            nb_std=causalconv.nb_std,
+            tqt=causalconv.tqt,
+            tqt_beta=causalconv.tqt_beta,
+            tqt_clip_grad=causalconv.tqt_clip_grad
+        )
+    )
+    new_module[1].weight.data.copy_(causalconv.weight)
+    if causalconv.bias is not None:
+        new_module[1].bias.data.copy_(causalconv.bias)
+
+    return new_module
+
+
+class ReplacePACTCausalConv1DPass(ReplaceSequentialPatternPass):
+    def __init__(self):
+        pattern = nn.Sequential(PACTCausalConv1d(1,1,1))
+        name = "_REPLACE_PACT_CAUSALCONV1D_PADCONV1D_PASS"
+        super(ReplacePACTCausalConv1DPass, self).__init__(pattern, PACT_symbolic_trace, replace_pact_causalconv1d_padconv1d_fun, name)
+
 
 def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_requant=False, requant_node=False):
     modules = dict(gm.named_modules())
@@ -588,9 +634,10 @@ class IntegerizePACTNetPass(SequentialPass):
         # if there's a MaxPool followed directly by an PACT Activation, swap their positions
         # (will be needed later for the IntegerizeBNActPass)
         passes.append(SwapMaxPoolActPass())
-        # SwapMaxPoolActPass swapped consecutive MaxPools and Activations with a nn.Sequential
-        # module containing an Activation and a MaxPool. Retrace the network again to dissolve
-        # the nn.Sequential in two separate modules
+        # replace all CausalConv1d with a ConstantPad+Conv1d module
+        passes.append(ReplacePACTCausalConv1DPass())
+        # SwapMaxPoolActPass and ReplacePACTCausalConv1DPass inserted nn.Sequential modules
+        # containing two submodules. Retrace the network again to separate these
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
