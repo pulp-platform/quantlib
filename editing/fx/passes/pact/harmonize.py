@@ -262,6 +262,39 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
             module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
             return PACTUnsignedAct(**module_kwargs)
 
+
+class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
+    before_modules = (PACTConv1d,
+                      PACTConv2d)
+    after_modules = (PACTUnsignedAct,
+                     PACTAsymmetricAct,
+                     PACTHardswish,
+                     PACTHardsigmoid)
+    @staticmethod
+    def make_dummy_bn(m : nn.Module, act : nn.Module):
+        if m.bias is None:
+            return None
+        if isinstance(m, PACTConv1d):
+            bn = nn.BatchNorm1d(m.out_channels)
+        else:
+            assert isinstance(m, PACTConv2d), f"InsertBNBetweenBiasedConvAndActsPass: Got bad module - expected PACTConv1/2d, got {type(m)}"
+            bn = nn.BatchNorm2d(m.out_channels)
+        bn.weight.data.copy_(torch.ones([m.out_channels]))
+        bn.bias.data.copy_(m.bias)
+        bn.running_mean.copy_(torch.zeros([m.out_channels]))
+        bn.running_var.copy_(torch.ones([m.out_channels])-bn.eps)
+        # Hacky: we are editing the source module...
+        m.bias = None
+        return bn
+
+    def __init__(self):
+        super(InsertBNBetweenBiasedConvAndActsPass, self).__init__(modules_before=self.before_modules,
+                                                                   modules_after=self.after_modules,
+                                                                   make_module_fn=self.make_dummy_bn,
+                                                                   name="BIASED_CONV_AND_ACT")
+
+
+
 class HarmonizePACTNetPass(SequentialPass):
     def __init__(self, **kwargs):
         passes = []

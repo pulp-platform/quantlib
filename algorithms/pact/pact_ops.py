@@ -59,6 +59,7 @@ __all__ = [
     'PACTWrapModule',
     'PACTWrapMHSA',
     'RequantShift',
+    'HardActRequantShift',
     'PACTHardswish',
     'PACTHardsigmoid',
     'PACTIntegerHardswish',
@@ -296,6 +297,52 @@ class RequantShift(nn.Module):
         else:
             # calling `forward` directly does not trigger the symbolic export
             return self.MyRequantShift.forward(None, x, self.mul.type_as(x), self.add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out, self.cmsis_requant)
+
+class HardActRequantShift(nn.Module):
+    #def __init__(self, gamma_h : torch.Tensor, beta_h : torch.Tensor, three :
+    #torch.Tensor, six : torch.Tensor, one_over_six : torch.Tensor, D1 : float,
+    #D2 : float, hsigmoid : bool, c_lo : torch.Tensor, c_hi : torch.Tensor,
+    #eps_half : Optional[float] = None):
+    def __init__(self, gamma_h : torch.Tensor, beta_h : torch.Tensor, three : torch.Tensor, six : torch.Tensor, D1 : float, D2 : float, hsigmoid : bool, c_lo : torch.Tensor, c_hi : torch.Tensor, eps_half : Optional[float] = None):
+        super(HardActRequantShift, self).__init__()
+        self.register_buffer("gamma_h", gamma_h)
+        self.register_buffer("beta_h", beta_h)
+        self.register_buffer("three", three)
+        self.register_buffer("six", six)
+        #self.register_buffer("one_over_six", one_over_six)
+        self.D1 = D1
+        self.D2 = D2
+        self.hsigmoid = hsigmoid
+        self.shift_factor = D1
+        self.c_lo = c_lo
+        self.c_hi = c_hi
+        if not hsigmoid:
+            self.shift_factor = self.shift_factor * D1/D2
+        self.register_buffer("eps_half", eps_half)
+
+    def forward(self, x):
+        x = x * self.gamma_h.type_as(x)
+        x = x + self.beta_h.type_as(x)
+        if not self.hsigmoid:
+            x1 = x + self.three.type_as(x)
+        else:
+            x1 = x
+        clip_lo = torch.zeros(1).type_as(x)
+        clip_hi = torch.tensor(self.six.item()).type_as(x)
+        x1 = torch.clip(x1, clip_lo, clip_hi)
+        #x1 = x1 * self.one_over_six.type_as(x1)
+        if not self.hsigmoid:
+            x = x/self.D2
+            x = torch.floor(x)
+            x1 = x1 * x
+        if self.eps_half is not None:
+            x1 = x1 + self.eps_half.type_as(x)
+        x1 = x1/self.shift_factor.type_as(x)
+        x1 = torch.floor(x1)
+        clip_lo = torch.tensor(self.c_lo.item()).type_as(x)
+        clip_hi = torch.tensor(self.c_hi.item()).type_as(x)
+        x1 = torch.clip(x1, clip_lo, clip_hi)
+        return x1
 
 class PACTEmbedding(torch.nn.Module):
 
@@ -1622,6 +1669,8 @@ class PACTIntegerHardswish(nn.Module):
         x = torch.clip(x, z, self.six)
         x = x * self.one_over_six
         return inp * x
+
+
 
 
 class PACTHardsigmoid(nn.Module):

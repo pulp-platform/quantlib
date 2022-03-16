@@ -283,7 +283,7 @@ class InsertModuleBetweenModulesPass(SequentialPass):
         #  and before all users if all users match the pattern, otherwise it
         # will insert a separate module between the before_node and each of the
         # matching users
-        # - 'none' will insert separate module between the before_node and the
+        # - 'none' will insert separate modules between the before_node and the
         # matching users regardless of the matching status of the users.
         super(InsertModuleBetweenModulesPass, self).__init__(name_prefix=name)
         self.modules_before = tuple(modules_before)
@@ -310,13 +310,15 @@ class InsertModuleBetweenModulesPass(SequentialPass):
                                 insert_before_users.append((u, user_module))
                     if len(insert_before_users) >= 1 and ((len(insert_before_users) == len(node.users) and self.combine == 'conservative') or self.combine == 'force'):
                         new_module = self.make_module_fn(m, insert_before_users[0][1])
-                        passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
-                        idx += 1
+                        if new_module is not None:
+                            passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
+                            idx += 1
                     else:
                         for u, user_mod in insert_before_users:
                             new_module = self.make_module_fn(m, user_mod)
-                            passes.append(InsertModuleBetweenNodesPass(node, u, new_module, f"{self.name.upper()}_{idx}"))
-                            idx += 1
+                            if new_module is not None:
+                                passes.append(InsertModuleBetweenNodesPass(node, u, new_module, f"{self.name.upper()}_{idx}"))
+                                idx += 1
 
         super(InsertModuleBetweenModulesPass, self).setup_passes(passes)
 

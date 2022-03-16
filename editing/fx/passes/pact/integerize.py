@@ -35,11 +35,11 @@ from quantlib.algorithms.pact.pact_ops import *
 from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
-from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule
-from ...util import gm_modules, module_of_node
+from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBNBetweenBiasedConvAndActsPass
+from ...util import gm_modules, module_of_node, get_ordered_active_nodes
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from quantlib.algorithms.pact.pact_ops import RequantShift
+from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
@@ -52,6 +52,7 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizeLayerNormPass',
            'IntegerizeEmbeddingsPass',
            'FixChannelNumbersPass',
+           'IntegerizeBNPACTHardActsPass',
            'PACTTracer',
            'PACT_symbolic_trace',]
 
@@ -400,9 +401,137 @@ class SignedToUnsignedInputPass(FxPass):
                 print(f"SignedToUnsignedInputPass will likely create bogus - input is used by non-module or non-Conv nodes!")
 
 
+class IntegerizeBNPACTHardActsPass(SequentialPass):
+    @staticmethod
+    def bn_hardact_qact_to_requant_fun(gm : fx.GraphModule, match : Match, D1=2**19, D2=2**10):
+        if not isinstance(D1, torch.Tensor):
+            D1 = torch.tensor(D1)
+        if not isinstance(D2, torch.Tensor):
+            D2 = torch.tensor(D2)
+
+        matched_nodes = get_ordered_active_nodes(match)
+        matched_modules = [module_of_node(gm, n) for n in matched_nodes]
+        if len(matched_modules) == 2:
+            q_act = matched_modules[1]
+            q_act_node = matched_nodes[1]
+            hard_act = matched_modules[0]
+            hard_act_node = matched_nodes[0]
+            bn = None
+        else:
+            assert len(matched_modules) == 3, "bn_hardact_qact_to_requant_fun got wrong number of modules!"
+            q_act = matched_modules[2]
+            q_act_node = matched_nodes[2]
+            hard_act = matched_modules[1]
+            hard_act_node = matched_nodes[1]
+            bn = matched_modules[0]
+            bn_node = matched_nodes[0]
+
+        signed_act = isinstance(q_act, PACTAsymmetricAct)
+        is_hardsigmoid = isinstance(hard_act, (PACTHardsigmoid, nn.Hardsigmoid))
+        in_node = bn_node if bn else hard_act_node
+        eps_in = extract_eps(in_node.meta['quant'].eps_in).cpu().clone().detach().squeeze()
+        eps_out = q_act_node.meta['quant'].eps_out.cpu().clone().detach().squeeze()
+        eps_s = 1./6
+
+        gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
+        beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
+        #import ipdb; ipdb.set_trace()
+        # the scale of the half epsilon depends on whether we are dealing with
+        # a hsigm (scale D1) or a hswish (scale D1^2/D2) activation
+        # if we are not dealing with a hardswish, we can perform the addition
+        # of bias and 3 in one step
+        shift_factor = D1
+        if is_hardsigmoid:
+            beta_h += 3.
+            intermediate_eps = eps_out/eps_s
+        else:
+            shift_factor = shift_factor * D1/D2
+            intermediate_eps = torch.sqrt(eps_out/eps_s)
+        # this is where it gets interesting. We perform requantization to
+        # sqrt(eps_out/eps_s) scaled by 2^D1 first.
+        gamma_h *= D1
+        gamma_h *= eps_in / intermediate_eps
+        gamma_h = torch.round(gamma_h)
+        beta_h *= D1
+        beta_h /= intermediate_eps
+        beta_h = torch.round(beta_h)
+
+        # if we want to round, we need to add 1/2 epsilon at the output
+        eps_half = None
+        if q_act.rounding:
+            eps_half = 1./2
+            eps_half *= shift_factor
+            eps_half = torch.round(eps_half)
+        # otherwise, 3 will be added separately
+        three = torch.tensor(3.)
+        three *= D1
+        three /= intermediate_eps
+        three = torch.round(three)
+        # the upper clipping bound (6) needs to be scaled to the same epsilon
+        six = torch.tensor(6.)
+        six *= D1
+        six /= intermediate_eps
+        six = torch.round(six)
+        # one_over_six = torch.tensor(1./6.)
+        # one_over_six /= hard_act.eps_s
+        # one_over_six = torch.round(one_over_six)
+
+        #copied str8 out of bn_act_to_requant
+        if bn and gamma_h.numel() > 1:
+            if isinstance(bn, nn.BatchNorm1d):
+                # BN1D can take two input tensor formats:
+                # 1. [N_B, N_C, L], e.g. if it comes after a Conv1d layer
+                # 2. [N_B, L], e.g. if it comes after a linear layer
+                # depending on how it is used in the network we are processing, the
+                # mul/add parameters must have different shape. we use the
+                # information stored in the graph by the ShapePropPass to determine
+                # this.
+                bn_outshape = bn_node.meta['tensor_meta'].shape
+                if len(bn_outshape) == 3:
+                    gamma_h = gamma_h.reshape((gamma_h.numel(), 1))
+                    beta_h = beta_h.reshape((beta_h.numel(), 1))
+                elif len(bn_outshape) == 2:
+                    gamma_h = gamma_h.reshape((gamma_h.numel(),))
+                    beta_h = beta_h.reshape((beta_h.numel(),))
+            elif isinstance(bn, nn.BatchNorm2d):
+                    gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1))
+                    beta_h = beta_h.reshape((beta_h.numel(), 1, 1))
+            elif isinstance(bn, nn.BatchNorm3d):
+                    gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1, 1))
+                    beta_h = beta_h.reshape((beta_h.numel(), 1, 1, 1))
+        #TODO add bias functionality for asymmetric activations
+        if signed_act:
+            clip_bound = np.floor(q_act.n_levels/2 + 0.01)
+            c_lo = torch.tensor(-clip_bound)
+            c_hi = torch.tensor(clip_bound)
+            if q_act.n_levels % 2 == 0:
+                c_hi -= 1.
+        else:
+            c_lo = torch.tensor(0.)
+            c_hi = torch.tensor(float(q_act.n_levels-1))
+
+        #ha_requant = HardActRequantShift(gamma_h, beta_h, three=three,
+        #six=six, one_over_six=one_over_six, D1=D1, D2=D2,
+        #hsigmoid=is_hardsigmoid, c_lo=c_lo, c_hi=c_hi, eps_half=eps_half)
+        ha_requant = HardActRequantShift(gamma_h, beta_h, three=three, six=six, D1=D1, D2=D2, hsigmoid=is_hardsigmoid, c_lo=c_lo, c_hi=c_hi, eps_half=eps_half)
+
+        return ha_requant
+
+    def __init__(self, D1, D2):
+        passes = []
+        for act_name, act_type in [("HARDSIGMOID", PACTHardsigmoid), ("HARDSWISH", PACTHardswish)]:
+            for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
+                pattern = nn.Sequential(bn_type(1), act_type(1.), _PACTActivation(1, 'max', False, 'relu'))
+                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, self.bn_hardact_qact_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D1=D1, D2=D2))
+            pattern = nn.Sequential(act_type(1.), _PACTActivation(1, 'max', False, 'relu'))
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, self.bn_hardact_qact_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D1=D1, D2=D2))
+
+        super(IntegerizeBNPACTHardActsPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_HARDACT_QACT_PASS")
+
+
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False, convert_input_to_unsigned : bool = False):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False, convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -411,9 +540,12 @@ class IntegerizePACTNetPass(SequentialPass):
         # IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
         # ShapePropPass will contaminate the batchnorm parameters!
         passes.append(ShapePropPass(shape_in))
-        # make use of the annotated shapes to disassemble layernorms
-        # passes.append(LayerNormDisassemblePass())
-        # first step: merge any convolutions with biases into batch norms
+        # biases of convolutional layers which are not followed by a BN must be
+        # folded into a new batchNorm layer and their biases discarded/turned off
+        passes.append(InsertBNBetweenBiasedConvAndActsPass())
+        #make use of the annotated shapes to disassemble layernorms
+        # passes.append(LayerNormDisassemblePass()) first step: merge any
+        # convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
         # second step: annotate epsilons and n_levels
         passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in))
@@ -424,6 +556,7 @@ class IntegerizePACTNetPass(SequentialPass):
         # functions (conv and FC)
         passes.append(IntegerizePACTConvPass())
         passes.append(IntegerizePACTLinearPass())
+        passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2))
         passes.append(IntegerizeSoftmaxPass())
         passes.append(IntegerizeLayerNormPass())
         passes.append(IntegerizeGELUPass())

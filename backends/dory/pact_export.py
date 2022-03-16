@@ -66,8 +66,9 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
         #assert lower == 0.0, "clip node {} has lower clip bound {} not equal to zero!".format(n.name, lower)
         upper = get_attr_by_name(n, "max").f
 
-        assert np.log2(upper+1.0) % 1.0 < 1e-6
+        #assert np.log2(upper+1.0) % 1.0 < 1e-6
         n_bits = int(np.round(np.log2(upper-lower+1.0)))
+        n_bits = n_bits if n_bits <= 8 else 32
         precision_attr = onnx.helper.make_attribute(key='out_bits', value=n_bits)
         n.attribute.append(precision_attr)
 

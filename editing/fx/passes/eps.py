@@ -30,6 +30,7 @@ import torch
 from torch import fx, nn
 
 from quantlib.algorithms.pact.pact_ops import *
+from quantlib.algorithms.generic.generic_ops import *
 
 from .pass_base import FxPass, ReplaceSequentialPatternPass
 from ..util import gm_modules, module_of_node
@@ -82,6 +83,9 @@ def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
 def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
     return m.statTracker.get_eps()
 
+def eps_conversion_mul(m : nn.Module, *eps_in):
+    return eps_in[0] * eps_in[1]
+
 
 
 #return torch.Tensor((1./m.n_levels,))
@@ -108,12 +112,14 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTIntegerLayerNorm : eps_conversion_pact_layernorm,
                     PACTLayerNorm : eps_conversion_pact_layernorm,
                     PACTIntegerMatmul: eps_conversion_matmul,
+
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
                     '_CALL_METHOD_reshape' : eps_conversion_identity,
 #                     f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
                     f'_CALL_FUNCTION_{repr(operator.truediv)}' : eps_conversion_truediv,
+                    Multiply : eps_conversion_mul
 }
 
 # modules which "generate" an eps without needing an input eps
