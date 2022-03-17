@@ -23,6 +23,7 @@
 from typing import Union, Optional, Tuple, List
 from dataclasses import dataclass
 from functools import partial
+from copy import deepcopy
 
 import numpy as np
 
@@ -217,29 +218,9 @@ def swap_maxpool_act_fun(gm : fx.GraphModule, match : Match):
     act = matched_modules[1]
     assert isinstance(maxpool, (nn.MaxPool2d)), f"swap_maxpool_act_fun got bad match - expected torch.nn.MaxPool2d, got {type(maxpool)}"
     assert isinstance(act, (PACTUnsignedAct, PACTAsymmetricAct)), f"swap_maxpool_act_fun got bad match - expected 'PACTUnsignedAct' or 'PACTAsymmetricAct', got {type(act)}"
-
-    maxpool_type = nn.MaxPool2d
-    act_type = PACTUnsignedAct if isinstance(act, PACTUnsignedAct) else PACTAsymmetricAct
-
-    replacement_sequence = nn.Sequential(
-        act_type(n_levels=act.n_levels,
-                init_clip=act.init_clip,
-                learn_clip=act.learn_clip,
-                act_kind=act.act_kind,
-                leaky=act.leaky,
-                nb_std=act.nb_std,
-                symm=act.symm,
-                noisy=act.noisy,
-                rounding=act.rounding,
-                tqt=act.tqt,
-                tqt_beta=act.tqt_beta,
-                tqt_clip_grad=act.tqt_clip_grad),
-        maxpool_type(kernel_size=maxpool.kernel_size,
-                    stride=maxpool.stride,
-                    padding=maxpool.padding,
-                    dilation=maxpool.dilation,
-                    ceil_mode=maxpool.ceil_mode)
-    )
+    new_act = deepcopy(act)
+    new_pool = deepcopy(maxpool)
+    replacement_sequence = nn.Sequential(new_act, new_pool)
     return replacement_sequence
 
 class SwapMaxPoolActPass(SequentialPass):
