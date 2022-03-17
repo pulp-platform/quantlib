@@ -85,8 +85,13 @@ class BBMultiLayerController:
             r.register_layers(self.layers)
 
         gate_init_fun(layer_dict, **gate_init_kwargs)
-        for l in self.layers.values():
-            l[0].register_gate_ctrl(self)
+        for n, l in self.layers.items():
+            try:
+                register_fn = l[0].register_gate_ctrl
+            except AttributeError as e:
+                print(f"BBMultiLayerController: Did not register BB gate controller for layer {n} of type {type(l[0])} as it does not seem to be a BB layer...")
+                register_fn = lambda _ : None
+            register_fn(self)
 
     def loss_term(self):
         lt = 0.
@@ -118,6 +123,7 @@ class BBBOPComplexityRegularizer(BBRegularizer):
         if len(layers) != 1:
             act_layer_and_props = [v for k, v in layers.items() if v[0] is not self.op_layer][0]
             act_layer = act_layer_and_props[0]
+
         self.act_layer = act_layer
 
     def loss_term(self):

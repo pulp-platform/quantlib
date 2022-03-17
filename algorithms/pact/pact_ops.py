@@ -864,7 +864,6 @@ class _PACTActivation(nn.Module):
         """
 
     def __init__(self,
-
                  n_levels : int,
                  init_clip : str,
                  learn_clip : bool,

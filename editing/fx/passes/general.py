@@ -32,8 +32,7 @@ from .pass_base import FxPass, SequentialPass, ModifySequentialPatternPass, Modu
 from ..util import module_of_node, get_qualified_prefix
 
 from quantlib.algorithms.pact.pact_ops import *
-#TODO refactor ops into PACT??
-from quantlib.algorithms.bb import BBConv2d, BBLinear, BBAct
+from quantlib.algorithms.bb.bb_ops import *
 
 __all__ = ['MergeConvBNPass',
            'ModularizeActivationsPass',
@@ -124,6 +123,28 @@ def translate_property(k : str, v):
         # if no translate_fn is in the dict, return the same value
         translate_fn = lambda v_: (k, v_)
     return translate_fn(v)
+
+# functions to extend the property dictionary based on the node being
+# annotated. Specifically, this is needed to annotate not only PACT/BBIntegerAdd
+# modules with, e.g., the #MACs but also their output activation submodules.
+# functions take as arguments the module, the module's name (node.target) and
+# the properties of the supplied module. They should return a dict with which
+# the top-level property dict will be updated.
+def intadd_outact_dict_update(m : nn.Module, target : str, props : dict):
+    return {target+'.act_out' : props.copy()}
+
+_PROP_DICT_EXTENSION_FNS = {
+    PACTIntegerAdd : intadd_outact_dict_update,
+    BBIntegerAdd : intadd_outact_dict_update
+}
+
+def extend_properties(m : nn.Module, target : str, props : dict):
+    try:
+        extension_fn = _PROP_DICT_EXTENSION_FNS[type(m)]
+    except KeyError:
+        extension_fn = lambda a, b, c : {}
+
+    return extension_fn(m, target, props)
 
 
 def merge_conv_bn_fun(ml : list):
@@ -402,4 +423,5 @@ class CollectPropertiesPass(FxPass):
 
                 pd['n_users'] = len(node.users)
                 self.prop_dict[node.target] = pd
+                self.prop_dict.update(extend_properties(m, node.target, pd))
         return gm

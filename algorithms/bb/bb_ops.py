@@ -7,8 +7,8 @@ __all__ = ["_BB_CLASSES",
            "_BB_LINOPS",
            "BBAct",
            "BBConv2d",
-           "BBLinear"]
-
+           "BBLinear",
+           "BBIntegerAdd"]
 
 
 
@@ -25,6 +25,10 @@ class BBConv2d(PACTConv2d):
                  init_clip, #TODO: make this 'max' always?
                  **kwargs):
 
+        if "n_levels" in kwargs.keys():
+            del kwargs["n_levels"]
+        if "learn_clip" in kwargs.keys():
+            del kwargs["learn_clip"]
         super(BBConv2d, self).__init__(in_channels,
                                        out_channels,
                                        kernel_size,
@@ -91,6 +95,10 @@ class BBLinear(PACTLinear):
                  init_clip,
                  **kwargs):
 
+        if "n_levels" in kwargs.keys():
+            del kwargs["n_levels"]
+        if "learn_clip" in kwargs.keys():
+            del kwargs["learn_clip"]
         super(BBLinear, self).__init__(in_features,
                                          out_features,
                                          256,
@@ -154,6 +162,7 @@ class BBAct(_PACTActivation):
                  act_kind,
                  signed,
                  leaky=0.1):
+
         super(BBAct, self).__init__(256,
                                     init_clip,
                                     learn_clip,
@@ -213,3 +222,24 @@ _BB_CLASSES = [BBAct,
 
 _BB_LINOPS = [BBConv2d,
               BBLinear]
+
+
+class BBIntegerAdd(PACTIntegerAdd):
+    def __init__(self,
+                 num_args = 1,
+                 signed : bool = True,
+                 pact_kwargs : dict = {},
+                 bb_kwargs : dict = {}):
+
+        nn.Module.__init__(self)
+        in_act_cls = PACTAsymmetricAct if signed else PACTUnsignedAct
+        self.acts = torch.nn.ModuleList([])
+        for i in range(num_args):
+            self.acts.append(in_act_cls(**kwargs))
+
+        self.act_out = BBAct(signed=signed, **bb_kwargs)
+
+        self.clip_lo = self.acts[0].clip_lo
+        self.clip_hi = self.acts[0].clip_hi
+        self.n_levels = self.acts[0].n_levels
+        self.force_out_eps = False

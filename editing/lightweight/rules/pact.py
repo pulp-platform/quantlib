@@ -74,6 +74,22 @@ def replace_pact_hard_act(module : nn.Module,
         ]
     return nn.Sequential(*layers)
 
+
+def pact_quant_hard_act(module : nn.Module,
+                        quant_act_kwargs : dict):
+    if isinstance(module, nn.Hardsigmoid):
+        layers = [
+            nn.Hardsigmoid(),
+            PACTUnsignedAct(**quant_act_kwargs)
+        ]
+    elif isinstance(module, nn.Hardswish):
+        layers = [
+            PACTHardswish(),
+            PACTAsymmetricAct(**quant_act_kwargs)
+        ]
+    return nn.Sequential(*layers)
+
+
 class ReplaceConvLinearPACTRule(LightweightRule):
     def __init__(self,
                  filter_: Filter,
@@ -93,7 +109,11 @@ class ReplaceActPACTRule(LightweightRule):
 class ReplaceHardActPACTRule(LightweightRule):
     def __init__(self,
                  filter_: Filter,
-                 hact_kwargs : dict,
-                 quant_act_kwargs : dict):
-        replacement_fun = partial(replace_pact_hard_act, hact_kwargs=hact_kwargs, quant_act_kwargs=quant_act_kwargs)
+                 hact_kwargs : dict = {},
+                 quant_act_kwargs : dict = {},
+                 use_pact_hact : bool = True):
+        if use_pact_hact:
+            replacement_fun = partial(replace_pact_hard_act, hact_kwargs=hact_kwargs, quant_act_kwargs=quant_act_kwargs)
+        else:
+            replacement_fun = partial(pact_quant_hard_act, quant_act_kwargs=quant_act_kwargs)
         super(ReplaceHardActPACTRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)

@@ -248,7 +248,9 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
     def __init__(self, signed : bool = True, **kwargs):
         name = "PACT_LINEAR_ACTIVATIONS"
         self.signed = signed
-        self.kwargs = kwargs
+        default_kwargs = {'learn_clip' : True, 'tqt' : True, 'init_clip' : 'max', 'act_kind' : 'identity'}
+        default_kwargs.update(kwargs)
+        self.kwargs = default_kwargs
         super(InsertActivationsBetweenLinearsPass, self).__init__(modules_before=self.before_modules,
                                                                   modules_after=self.after_modules,
                                                                   make_module_fn=self.inserted_module,

@@ -222,8 +222,9 @@ class BBActConvControllerInitPass(FxPass):
                 if maybe_act is not None:
                     am = module_of_node(gm, maybe_act)
                     act_target = maybe_act.target
-                    if isinstance(maybe_act, PACTIntegerAdd):
+                    if isinstance(am, PACTIntegerAdd):
                         act_target += ".act_out"
+                        am = am.act_out
                     cur_layer_pair = [act_target] + cur_layer_pair
                 layer_pairs.append(cur_layer_pair)
         return layer_pairs
