@@ -17,54 +17,54 @@ _LOOP_LENGTH = 100
 
 class ObserverTest(unittest.TestCase):
 
-        def test_loop_per_array(self):
+    def test_loop_per_array(self):
 
-            # zero-dimensional arrays are not supported
-            qgranularity = resolve_qgranularityspec('per-array')
-            observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
-            t = torch.randn(1).squeeze()
-            self.assertRaises(ValueError, lambda: observer.update(t))
+        # zero-dimensional arrays are not supported
+        qgranularity = resolve_qgranularityspec('per-array')
+        observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
+        t = torch.randn(1).squeeze()
+        self.assertRaises(ValueError, lambda: observer.update(t))
 
-            # inconsistent number of dimensions across updates
-            qgranularity = resolve_qgranularityspec('per-array')
-            observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
+        # inconsistent number of dimensions across updates
+        qgranularity = resolve_qgranularityspec('per-array')
+        observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
+        t = torch.randn(_TARGET_SHAPE)
+        observer.update(t)
+        t = torch.randn(_INCONSISTENT_NDIM)  # `t.ndim == 3` as opposed to the expected `t.ndim == 4`
+        self.assertRaises(ValueError, lambda: observer.update(t))
+
+        # consistent shapes across updates (verify broadcastability)
+        qgranularity = resolve_qgranularityspec('per-array')
+        observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
+        for _ in range(0, _LOOP_LENGTH):
             t = torch.randn(_TARGET_SHAPE)
             observer.update(t)
-            t = torch.randn(_INCONSISTENT_NDIM)  # `t.ndim == 3` as opposed to the expected `t.ndim == 4`
-            self.assertRaises(ValueError, lambda: observer.update(t))
+        self.assertTrue(observer.broadcasting_shape == _BROADCASTING_SHAPE_TRIVIAL)
+        self.assertTrue(observer.n.shape    == observer.broadcasting_shape)
+        self.assertTrue(observer.min.shape  == observer.broadcasting_shape)
+        self.assertTrue(observer.max.shape  == observer.broadcasting_shape)
+        self.assertTrue(observer.mean.shape == observer.broadcasting_shape)
+        self.assertTrue(observer.var.shape  == observer.broadcasting_shape)
 
-            # consistent shapes across updates (verify broadcastability)
-            qgranularity = resolve_qgranularityspec('per-array')
-            observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
-            for _ in range(0, _LOOP_LENGTH):
-                t = torch.randn(_TARGET_SHAPE)
-                observer.update(t)
-            self.assertTrue(observer.broadcasting_shape == _BROADCASTING_SHAPE_TRIVIAL)
-            self.assertTrue(observer.n.shape    == observer.broadcasting_shape)
-            self.assertTrue(observer.min.shape  == observer.broadcasting_shape)
-            self.assertTrue(observer.max.shape  == observer.broadcasting_shape)
-            self.assertTrue(observer.mean.shape == observer.broadcasting_shape)
-            self.assertTrue(observer.var.shape  == observer.broadcasting_shape)
+    def test_loop_per_channel_features(self):
 
-        def test_loop_per_channel_features(self):
+        # inconsistent shapes across updates
+        qgranularity = resolve_qgranularityspec('per-outchannel_weights')
+        observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
+        t = torch.randn(_TARGET_SHAPE)
+        observer.update(t)
+        t = torch.randn(_INCONSISTENT_SHAPE)
+        self.assertRaises(ValueError, lambda: observer.update(t))
 
-            # inconsistent shapes across updates
-            qgranularity = resolve_qgranularityspec('per-outchannel_weights')
-            observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
-            t = torch.randn(_TARGET_SHAPE)
-            observer.update(t)
-            t = torch.randn(_INCONSISTENT_SHAPE)
-            self.assertRaises(ValueError, lambda: observer.update(t))
-
-            # consistent shapes across updates (broadcastability is preserved)
-            qgranularity = resolve_qgranularityspec('per-outchannel_weights')
-            observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
-            t = torch.randn(_TARGET_SHAPE)
-            observer.update(t)
-            t = torch.randn(_CONSISTENT_SHAPE)
-            self.assertTrue(observer.broadcasting_shape == _BROADCASTING_SHAPE_GRANULAR)
-            self.assertTrue(observer.n.shape    == observer.broadcasting_shape)
-            self.assertTrue(observer.min.shape  == observer.broadcasting_shape)
-            self.assertTrue(observer.max.shape  == observer.broadcasting_shape)
-            self.assertTrue(observer.mean.shape == observer.broadcasting_shape)
-            self.assertTrue(observer.var.shape  == observer.broadcasting_shape)
+        # consistent shapes across updates (broadcastability is preserved)
+        qgranularity = resolve_qgranularityspec('per-outchannel_weights')
+        observer = MinMaxMeanVarObserver(subpopulation_dims=qgranularity)
+        t = torch.randn(_TARGET_SHAPE)
+        observer.update(t)
+        t = torch.randn(_CONSISTENT_SHAPE)
+        self.assertTrue(observer.broadcasting_shape == _BROADCASTING_SHAPE_GRANULAR)
+        self.assertTrue(observer.n.shape    == observer.broadcasting_shape)
+        self.assertTrue(observer.min.shape  == observer.broadcasting_shape)
+        self.assertTrue(observer.max.shape  == observer.broadcasting_shape)
+        self.assertTrue(observer.mean.shape == observer.broadcasting_shape)
+        self.assertTrue(observer.var.shape  == observer.broadcasting_shape)

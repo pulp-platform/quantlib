@@ -1,7 +1,7 @@
 from __future__ import annotations
 import torch
 import torch.nn as nn
-from typing import Union
+from typing import Tuple, Union
 
 from quantlib.newalgorithms.qbase import QRangeSpecType, resolve_qrangespec, QRange
 from quantlib.newalgorithms.qbase import QGranularitySpecType, resolve_qgranularityspec, QGranularity
@@ -149,6 +149,9 @@ class _QModule(nn.Module):
         """Special constructor to build ``_QModule``s from FP ``Module``s."""
         raise NotImplementedError
 
+    def get_output_qhparams(self, in_scales: Tuple[torch.Tensor, ...]) -> torch.Tensor:
+        raise NotImplementedError
+
 
 class _QActivation(_QModule):
 
@@ -237,6 +240,9 @@ class _QActivation(_QModule):
         """Special constructor to build ``_QActivation``s from FP ``Module``s."""
         raise NotImplementedError
 
+    def get_output_qhparams(self, in_scales: Tuple[torch.Tensor, ...]) -> torch.Tensor:
+        return self.scale.clone().detach()
+
 
 class _QLinear(_QModule):
 
@@ -292,3 +298,20 @@ class _QLinear(_QModule):
                        qhparamsinitstrategyspec: QHParamsInitStrategySpecType) -> _QLinear:
         """Special constructor to build ``_QLinear``s from FP ``Module``s."""
         raise NotImplementedError
+
+    def get_output_qhparams(self, in_scales: Tuple[torch.Tensor, ...]) -> torch.Tensor:
+
+        if len(in_scales) != 1:
+            raise ValueError(quantlib_err_header(obj_name=self.__class__.__name__) + "expects exactly one fake-quantised input.")
+
+        eps_in = in_scales[0]
+        assert eps_in.numel() == 1
+
+        if self._qgranularity == QGranularity(tuple()):
+            out_scale = eps_in * self.scale.clone().detach()
+        elif self._qgranularity == QGranularity((0,)):
+            out_scale = eps_in * torch.swapaxes(self.scale.clone().detach(), 0, 1)  # the channel dimension is pushed to second place in feature arrays
+        else:
+            raise NotImplementedError
+
+        return out_scale
