@@ -270,7 +270,10 @@ def replace_pact_causalconv1d_padconv1d_fun(gm : fx.GraphModule, match : Match):
     new_module[1].weight.data.copy_(causalconv.weight)
     if causalconv.bias is not None:
         new_module[1].bias.data.copy_(causalconv.bias)
-
+    new_module[1].clip_lo = causalconv.clip_lo
+    new_module[1].clip_hi = causalconv.clip_hi
+    new_module[1].clipping_params = causalconv.clipping_params
+    new_module[1].started = causalconv.started
     return new_module
 
 
