@@ -21,6 +21,7 @@
 
 from typing import Union
 from functools import partial
+from copy import deepcopy
 
 from torch import nn
 
@@ -84,10 +85,27 @@ def pact_quant_hard_act(module : nn.Module,
         ]
     elif isinstance(module, nn.Hardswish):
         layers = [
-            PACTHardswish(),
+            nn.Hardswish(),
             PACTAsymmetricAct(**quant_act_kwargs)
         ]
     return nn.Sequential(*layers)
+
+def quantize_pool_pact(module : nn.Module,
+                       signed : bool,
+                       **quant_act_kwargs):
+    if signed:
+        act = PACTAsymmetricAct(**quant_act_kwargs)
+    else:
+        act = PACTUnsignedAct(**quant_act_kwargs)
+
+    return nn.Sequential(module, act)
+
+class QuantizePoolingLayers(LightweightRule):
+    def __init__(self,
+                 filter_: Filter,
+                 **kwargs):
+        replacement_fun = partial(quantize_pool_pact, **kwargs)
+        super(QuantizePoolingLayers, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
 
 
 class ReplaceConvLinearPACTRule(LightweightRule):

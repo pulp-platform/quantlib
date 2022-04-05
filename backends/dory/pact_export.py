@@ -31,7 +31,9 @@ import onnx
 import numpy as np
 
 import quantlib.editing.fx as qlfx
+from quantlib.editing.lightweight import LightweightGraph
 from quantlib.algorithms.pact import RequantShift
+from .dory_passes import AvgPoolWrap, DORYHarmonizePass
 
 # annotate:
 #   conv, FC nodes:
@@ -102,7 +104,7 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
         mult_attr = onnx.helper.make_attribute(key='mult_bits', value=requant_bits)
         n.attribute.append(mult_attr)
 
-def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10):
+def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False):
     net = net.eval()
 
 
@@ -120,10 +122,18 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         net_integerized = int_pass(net_traced)
     else: # assume the net is already integerized
         net_integerized = net
+
+    if align_avg_pool:
+        align_avgpool_pass = DORYHarmonizePass(in_shape=shape_in)
+        net_integerized = align_avgpool_pass(net_integerized)
+
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap,))
+
     # the integerization pass annotates the conv layers with the number of
     # weight levels. from this information we can make a dictionary of the number of
     # weight bits.
     prec_dict = {}
+
     for name, module in net_integerized.named_modules():
         if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Linear)):
             n_bits = int(np.log2(module.n_levels+1.2))
@@ -152,18 +162,18 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
     acts = []
     def dump_hook(self, inp, outp, name):
         # DORY wants HWC tensors
-        acts.append((name, outp[0]))
+        acts.append((name, torch.floor(outp[0])))
 
-    for n, m in net_integerized.named_modules():
-        if isinstance(m, RequantShift):
-            hook = partial(dump_hook, name=n)
-            m.register_forward_hook(hook)
+    for n in integerized_nodes:
+        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap)):
+            hook = partial(dump_hook, name=n.name)
+            n.module.register_forward_hook(hook)
 
     # open the supplied input image
     if in_data is not None:
         im_tensor = in_data.clone()
-
-        output = net_integerized(im_tensor.to(dtype=torch.float32))
+        net_integerized = net_integerized.to(dtype=torch.float64)
+        output = net_integerized(im_tensor.to(dtype=torch.float64))
 
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
@@ -178,7 +188,6 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                 fp.write(f"# {layer_name} (shape {list(t.shape)}),\n")
                 for el in t.flatten():
                     fp.write(f"{int(el)},\n")
-
         save_beautiful_text(im_tensor, "input", "input")
         save_beautiful_text(output, "output", "output")
         for i, (name, t) in enumerate(acts):

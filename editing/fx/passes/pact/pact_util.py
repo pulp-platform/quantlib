@@ -50,6 +50,7 @@ PACT_OPS = set([_PACTActivation,
                 PACTHardswish,
                 PACTIntegerHardsigmoid,
                 PACTIntegerHardswish,
+                RequantShift,
                 Multiply])
 
 #TODO is this still reasonable??
