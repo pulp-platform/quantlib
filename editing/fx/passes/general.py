@@ -33,6 +33,7 @@ from ..util import module_of_node, get_qualified_prefix
 
 from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.bb.bb_ops import *
+from quantlib.algorithms.generic.generic_ops import *
 
 __all__ = ['MergeConvBNPass',
            'ModularizeActivationsPass',
@@ -45,8 +46,6 @@ __all__ = ['MergeConvBNPass',
            'MemoryUsagePass',
            'CollectPropertiesPass',
            '_MAC_CNT_FNS']
-
-
 
 
 def madd_of_conv2d(insize, c):
@@ -67,12 +66,21 @@ def madd_of_conv2d(insize, c):
 def madd_of_lin(_, l):
     return l.in_features * l.out_features
 
+def madd_of_mul(insizes, _):
+    numel_max = 0
+    for s in insizes:
+        assert isinstance(s, torch.Size), f"madd_of_mul only supports torch.Size shapes - got {type(s)}"
+        # discard batch dimension
+        numel_max = max(s[1:].numel(), numel_max)
+    return numel_max
+
 _MAC_CNT_FNS = {nn.Conv2d : madd_of_conv2d,
                 PACTConv2d : madd_of_conv2d,
                 BBConv2d : madd_of_conv2d,
                 nn.Linear : madd_of_lin,
                 PACTLinear : madd_of_lin,
-                BBLinear : madd_of_lin}
+                BBLinear : madd_of_lin,
+                Multiply : madd_of_mul}
 
 def mem_of_linop(l, _, use_bias):
     num_w_el = l.weight.numel()
@@ -381,9 +389,12 @@ class CountMACsPass(FxPass):
                 k = type(m)
                 if k in _MAC_CNT_FNS.keys():
                     if len(node.all_input_nodes) != 1:
-                        print("WARNING: CountMACsPass will probably count wrong for modules with >1 inputs!")
-                    in_node = node.all_input_nodes[0]
-                    shp = in_node.meta['tensor_meta'].shape
+                        print("Multi-input module: double-check result of CountMACsPass")
+                        in_node = node.all_input_nodes
+                        shp = [n.meta['tensor_meta'].shape for n in in_node]
+                    else:
+                        in_node = node.all_input_nodes[0]
+                        shp = in_node.meta['tensor_meta'].shape
                     node.meta['macs'] = int(_MAC_CNT_FNS[k](shp, m))
         return gm
 

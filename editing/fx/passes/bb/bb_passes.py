@@ -8,7 +8,7 @@ from quantlib.editing.fx.passes import FxPass, ModifySequentialPatternPass, Shap
 from quantlib.algorithms.pact import PACTIntegerAdd
 from .bb_util import BB_symbolic_trace
 
-from quantlib.algorithms.bb import BBAct, BBConv2d, BBLinear, BBGateController, BBBOPComplexityRegularizer, BBMultiLayerController, BB_attach_gates_individual
+from quantlib.algorithms.bb import BBAct, BBConv2d, BBLinear, BBGateController, BBBOPComplexityRegularizer, BBMultiLayerController, BB_attach_gates_individual, BB_attach_gates_shared
 from quantlib.algorithms.bb.bb_ops import _BB_LINOPS
 
 
@@ -190,12 +190,17 @@ class BBActConvControllerInitPass(FxPass):
                         nn.Flatten,
                         nn.Dropout)
 
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], gate_init : float = 2., input_prec : int = 8, joint_distribution : bool = False):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], gate_init : float = 2., input_prec : int = 8, joint_distribution : bool = False, shared_gates : bool = False):
         super(BBActConvControllerInitPass, self).__init__()
         self.register_subpass("prep", BBControllerPrepPass(shape_in, 2**input_prec))
         self.input_prec = input_prec
         self.joint_distribution = joint_distribution
         self.gate_init = gate_init
+        self.shared_gates = shared_gates
+        if shared_gates:
+            self.attach_gate_fn = BB_attach_gates_shared
+        else:
+            self.attach_gate_fn = BB_attach_gates_individual
 
     def find_prev_act(self, gm : fx.GraphModule, node : fx.Node):
         if node.op in ["call_method", "call_function"]:
@@ -246,7 +251,7 @@ class BBActConvControllerInitPass(FxPass):
         for pd in prop_dicts_partitioned:
             bop_reg = BBBOPComplexityRegularizer(self.joint_distribution, self.input_prec)
             # TODO add memory regularizer
-            ctrl = BBMultiLayerController(pd, [bop_reg], BB_attach_gates_individual, {'gate_init':self.gate_init})
+            ctrl = BBMultiLayerController(pd, [bop_reg], self.attach_gate_fn, {'gate_init':self.gate_init})
 
         return gm
 

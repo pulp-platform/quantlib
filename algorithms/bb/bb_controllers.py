@@ -35,6 +35,22 @@ def BB_attach_gates_individual(layer_dict : dict, gate_init : float = 2.):
             gates = nn.Parameter(torch.full((n_precs-1,), gate_init))
             layer.bb_gates = gates
 
+def BB_attach_gates_shared(layer_dict : dict, gate_init : float = 2.):
+    n_precs = []
+    precs = []
+    for l in layer_dict.values():
+        layer = l[0]
+        if isinstance(layer, tuple(_BB_CLASSES)) and layer.bb_gates is None:
+            n_precs.append(len(layer.precs))
+            precs.append(len(layer.precs))
+
+    assert all(p == n_precs[0] for p in n_precs), "Unequal number of precisions in BB_attach_gates_shared... this does not make sense!"
+    assert all(p == precs[0] for p in precs), "Unequal precisions in BB_attach_gates_shared... this does not make sense!"
+    gates = nn.Parameter(torch.full((n_precs[0]-1,), gate_init))
+    for l in layer_dict.values():
+        layer = l[0]
+        if isinstance(layer, tuple(_BB_CLASSES)) and layer.bb_gates is None:
+            layer.bb_gates = gates
 
 class BBGateController:
     # A controller which calculates the loss term for a given BB layer
@@ -140,7 +156,10 @@ class BBBOPComplexityRegularizer(BBRegularizer):
             return t.type_as(self.op_layer.weight.data)
 
         one = move(torch.ones((1,)))
-
+        # if quantization is not started yet, do not contribute a loss so the
+        # gates stay at their initial value until quantization is started!
+        if not self.op_layer.started:
+            return torch.zeros([])
         # no activation -> this must be the input layer
         if self.act_layer is None:
             act_precs = move(torch.tensor([self.input_prec]))

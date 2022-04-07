@@ -161,7 +161,8 @@ class BBAct(_PACTActivation):
                  learn_clip,
                  act_kind,
                  signed,
-                 leaky=0.1):
+                 leaky=0.1,
+                 nb_std=3):
 
         super(BBAct, self).__init__(256,
                                     init_clip,
@@ -169,7 +170,8 @@ class BBAct(_PACTActivation):
                                     act_kind,
                                     symm=signed,
                                     rounding=True,
-                                    signed=signed)
+                                    signed=signed,
+                                    nb_std=nb_std)
         assert hc_stretch >= 1., "BBAct: Hard concrete stretch factor must be >= 1!"
         self.hc_stretch = hc_stretch
         hc_over = (hc_stretch - 1.)/2
