@@ -262,8 +262,8 @@ class RequantShift(nn.Module):
                 # must be the last thing called on a tensor before feeding into
                 # the clip operator. Otherwise, it may get exported as
                 # min(max(..)) or some other weirdness
-                lo = (c * -1).type_as(x)
-                hi = (c-1).type_as(x)
+                lo = (c * -1).type_as(y)
+                hi = (c-1).type_as(y)
                 return torch.clip(y, min=lo, max=hi)
 
         @staticmethod
@@ -324,19 +324,19 @@ class HardActRequantShift(nn.Module):
         x = x * self.gamma_h.type_as(x)
         x = x + self.beta_h.type_as(x)
         if not self.hsigmoid:
+            clip_lo = torch.zeros(1).type_as(x)
+            clip_hi = torch.tensor(self.six.item()).type_as(x)
             x1 = x + self.three.type_as(x)
+            x1 = torch.clip(x1, clip_lo, clip_hi)
         else:
             x1 = x
-        clip_lo = torch.zeros(1).type_as(x)
-        clip_hi = torch.tensor(self.six.item()).type_as(x)
-        x1 = torch.clip(x1, clip_lo, clip_hi)
         #x1 = x1 * self.one_over_six.type_as(x1)
         if not self.hsigmoid:
             x = x/self.D2
             x = torch.floor(x)
             x1 = x1 * x
-        if self.eps_half is not None:
-            x1 = x1 + self.eps_half.type_as(x)
+            if self.eps_half is not None:
+                x1 = x1 + self.eps_half.type_as(x)
         x1 = x1/self.shift_factor.type_as(x)
         x1 = torch.floor(x1)
         clip_lo = torch.tensor(self.c_lo.item()).type_as(x)

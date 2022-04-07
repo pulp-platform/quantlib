@@ -435,7 +435,7 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
 
         gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
         beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
-        #import ipdb; ipdb.set_trace()
+        #
         # the scale of the half epsilon depends on whether we are dealing with
         # a hsigm (scale D1) or a hswish (scale D1^2/D2) activation
         # if we are not dealing with a hardswish, we can perform the addition
@@ -454,14 +454,17 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
         gamma_h = torch.round(gamma_h)
         beta_h *= D1
         beta_h /= intermediate_eps
-        beta_h = torch.round(beta_h)
 
         # if we want to round, we need to add 1/2 epsilon at the output
         eps_half = None
         if q_act.rounding:
             eps_half = 1./2
             eps_half *= shift_factor
+            if is_hardsigmoid:
+                beta_h += eps_half
+
             eps_half = torch.round(eps_half)
+        beta_h = torch.round(beta_h)
         # otherwise, 3 will be added separately
         three = torch.tensor(3.)
         three *= D1
@@ -509,6 +512,12 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
         else:
             c_lo = torch.tensor(0.)
             c_hi = torch.tensor(float(q_act.n_levels-1))
+
+        # when dealing with a hsigm, the output can be at most 1 - we want to
+        # have a node that looks like a RequantShift in the Hsigm case in order
+        # to avoid unnecessary operations
+        if is_hardsigmoid:
+            c_hi = torch.min(c_hi, torch.round(torch.tensor(1./eps_out)))
 
         #ha_requant = HardActRequantShift(gamma_h, beta_h, three=three,
         #six=six, one_over_six=one_over_six, D1=D1, D2=D2,
