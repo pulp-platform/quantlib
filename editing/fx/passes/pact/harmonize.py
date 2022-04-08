@@ -155,17 +155,18 @@ class OpTreeReplacementPass(FxPass):
 
         for i, tree in enumerate(op_trees):
             # then add the submodule
-            module = self.replacement_fn(tree)
-            new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper()}{'_' if self.name != '' else ''}{i}"
-            gm.add_submodule(new_target, module)
-            # add a node for the submodule call
-            with gm.graph.inserting_before(tree.end_node):
-                new_node = gm.graph.call_module(new_target, args=tree.args)
-            # attach the module to the previous users of the tree's end node
-            tree.end_node.replace_all_uses_with(new_node)
-            # finally, delete the nodes in the tree
-            for node in tree.nodes:
-                gm.graph.erase_node(node)
+            module = self.replacement_fn(gm, tree)
+            if module is not None:
+            	new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper()}{'_' if self.name != '' else ''}{i}"
+            	gm.add_submodule(new_target, module)
+            	# add a node for the submodule call
+            	with gm.graph.inserting_before(tree.end_node):
+            	    new_node = gm.graph.call_module(new_target, args=tree.args)
+            	# attach the module to the previous users of the tree's end node
+            	tree.end_node.replace_all_uses_with(new_node)
+            	# finally, delete the nodes in the tree
+            	for node in tree.nodes:
+            	    gm.graph.erase_node(node)
 
         # and we're done...
         return gm
@@ -178,7 +179,7 @@ class MatmulReplacementPass(OpTreeReplacementPass):
         self.kwargs = kwargs
         super().__init__(node_specs=self.matmul_node_specs, replacement_fn=self.matmul_replacement_fn, name="MATMUL")
 
-    def matmul_replacement_fn(self, tree):
+    def matmul_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerMatmul(**self.kwargs)
 
 
@@ -194,7 +195,7 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
         super(AddTreeReplacementPass, self).__init__(node_specs=self.add_node_specs, replacement_fn=self.add_replacement_fn, name="ADDITION")
 
 
-    def add_replacement_fn(self, tree):
+    def add_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
 
         return PACTIntegerAdd(num_args=len(tree.args),  **self.kwargs)
 
@@ -205,7 +206,7 @@ class MulReplacementPass(OpTreeReplacementPass):
     def __init__(self):
         super(MulReplacementPass, self).__init__(node_specs=self.mul_node_specs, replacement_fn=self.mul_replacement_fn, name="MULTIPLICATION", always_terminate=True)
 
-    def mul_replacement_fn(self, tree):
+    def mul_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         # multiply takes no args
         return Multiply()
 
@@ -223,10 +224,10 @@ class ConcatTreeReplacementPass(SequentialPass):
         passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
         super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
-    def cat_replacement_fn(self, tree):
+    def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
 
-    def stack_replacement_fn(self, tree):
+    def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
 
 class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):

@@ -269,7 +269,6 @@ class RequantShift(nn.Module):
         @staticmethod
         @parse_args('v', 'v', 'v', 't', 't', 't', 't')
         def symbolic(g, x, mul, add, div, signed, n_levels_out, cmsis_requant):
-
             signed = torch.Tensor((signed,)).type_as(div)
             div_ = g.op("Constant", value_t=div)
             signed_ = g.op("Constant", value_t=signed)
