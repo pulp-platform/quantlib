@@ -21,7 +21,6 @@
 #
 #
 
->>>>>>> georgr/bayesian_bits:editing/fx/passes/pact/harmonize.py
 from typing import Optional, Union
 import operator
 
