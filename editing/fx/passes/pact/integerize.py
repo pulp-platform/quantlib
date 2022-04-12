@@ -54,7 +54,7 @@ def integerize_gelu_fun(gm : fx.GraphModule, match : Match):
     eps_in = extract_eps(lin_node.meta['quant'].eps_in)
     assert isinstance(module, PACTGELU), f"integerize_gelu_fun got bad match - expected PACTGELU, got {type(lin)}"
 
-    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in)
+    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)
 
     return new_gelu
 
