@@ -1,4 +1,4 @@
 from .integerize import *
-from .canonicalize import *
+from .harmonize import *
 from .pact_util import *
 from .approximate import *

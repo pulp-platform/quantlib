@@ -1,4 +1,28 @@
+# 
+# general.py
+# 
+# Author(s):
+# Georg Rutishauser <georgr@iis.ee.ethz.ch>
+# Moritz Scherer <scheremo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 from typing import Union, Optional, Tuple, List
+
+import numpy as np
 
 import torch
 from torch import nn, fx
@@ -7,13 +31,129 @@ from torch.nn import functional as F
 from .pass_base import FxPass, SequentialPass, ModifySequentialPatternPass, ModularizePass
 from ..util import module_of_node, get_qualified_prefix
 
+from quantlib.algorithms.pact.pact_ops import *
+from quantlib.algorithms.bb.bb_ops import *
+from quantlib.algorithms.generic.generic_ops import *
+
 __all__ = ['MergeConvBNPass',
            'ModularizeActivationsPass',
            'RetracePass',
            'InsertModuleAfterNodePass',
            'InsertModuleBetweenNodesPass',
            'InsertModuleBetweenModulesPass',
-           'ShapePropPass']
+           'ShapePropPass',
+           'CountMACsPass',
+           'MemoryUsagePass',
+           'CollectPropertiesPass',
+           '_MAC_CNT_FNS']
+
+
+def madd_of_conv2d(insize, c):
+    madds_per_pixel = c.kernel_size[0]*c.kernel_size[1]*c.in_channels*c.out_channels//c.groups
+    if isinstance(insize, (torch.Size, tuple, list)):
+        if len(insize) > 2:
+            insize = insize[2:]
+        numel = 1
+        for el in insize:
+            numel *= el
+        #numel = 1; [numel := numel * el for el in insize]
+    elif isinstance(insize, int):
+        numel = insize * insize
+    else:
+        assert False, f"invalid insize argument passed to madd_of_conv2d: {insize}"
+    return madds_per_pixel * numel//(c.stride[0]*c.stride[1])
+
+def madd_of_lin(_, l):
+    return l.in_features * l.out_features
+
+def madd_of_mul(insizes, _):
+    numel_max = 0
+    for s in insizes:
+        assert isinstance(s, torch.Size), f"madd_of_mul only supports torch.Size shapes - got {type(s)}"
+        # discard batch dimension
+        numel_max = max(s[1:].numel(), numel_max)
+    return numel_max
+
+_MAC_CNT_FNS = {nn.Conv2d : madd_of_conv2d,
+                PACTConv2d : madd_of_conv2d,
+                BBConv2d : madd_of_conv2d,
+                nn.Linear : madd_of_lin,
+                PACTLinear : madd_of_lin,
+                BBLinear : madd_of_lin,
+                Multiply : madd_of_mul}
+
+def mem_of_linop(l, _, use_bias):
+    num_w_el = l.weight.numel()
+    w_mem = num_w_el * np.ceil(np.log2((l.n_levels))) / 8
+    b_mem = 0
+    if use_bias and l.bias is not None:
+        num_b_el = l.bias.numel()
+        #assumption: we always use 32b biases
+        b_mem = 4*num_b_el
+
+    return w_mem+b_mem
+
+def mem_of_act(l, shp, _):
+    #THE ASSUMPTION IS THAT BATCH DIMENSION IS ALWAYS INCLUDED
+    if isinstance(shp, (tuple, list)):
+        shp = torch.Size(shp)
+    if isinstance(shp, torch.Size):
+        shp = shp[1:]
+    else:
+        assert False, "mem_of_act expected tuple, list or size for tensor shape specification"
+
+    num_act_el = shp.numel()
+    act_mem = num_act_el * np.ceil(np.log2(l.n_levels))/8
+    return act_mem
+
+
+
+_MEM_CNT_FNS = {
+    PACTConv1d : mem_of_linop,
+    PACTConv2d : mem_of_linop,
+    BBConv2d : mem_of_linop,
+    PACTLinear : mem_of_linop,
+    BBLinear : mem_of_linop,
+    PACTUnsignedAct : mem_of_act,
+    PACTAsymmetricAct : mem_of_act,
+    BBAct : mem_of_act}
+
+# functions to translate 'call_module' node properties stored in the 'meta'
+# dict
+# should return a (key : str, value : <any>) pair
+_PROPERTY_TRANSL_FNS = {
+    'tensor_meta': lambda v: ('out_shape', v.shape)
+}
+def translate_property(k : str, v):
+    try:
+        translate_fn = _PROPERTY_TRANSL_FNS[k]
+    except KeyError:
+        # if no translate_fn is in the dict, return the same value
+        translate_fn = lambda v_: (k, v_)
+    return translate_fn(v)
+
+# functions to extend the property dictionary based on the node being
+# annotated. Specifically, this is needed to annotate not only PACT/BBIntegerAdd
+# modules with, e.g., the #MACs but also their output activation submodules.
+# functions take as arguments the module, the module's name (node.target) and
+# the properties of the supplied module. They should return a dict with which
+# the top-level property dict will be updated.
+def intadd_outact_dict_update(m : nn.Module, target : str, props : dict):
+    return {target+'.act_out' : props.copy()}
+
+_PROP_DICT_EXTENSION_FNS = {
+    PACTIntegerAdd : intadd_outact_dict_update,
+    BBIntegerAdd : intadd_outact_dict_update
+}
+
+def extend_properties(m : nn.Module, target : str, props : dict):
+    try:
+        extension_fn = _PROP_DICT_EXTENSION_FNS[type(m)]
+    except KeyError:
+        extension_fn = lambda a, b, c : {}
+
+    return extension_fn(m, target, props)
+
 
 def merge_conv_bn_fun(ml : list):
     assert len(ml) == 2, "List passed to merge_conv_bn_fun should have length 2"
@@ -24,6 +164,8 @@ def merge_conv_bn_fun(ml : list):
     bias_data = conv_module.bias.data.clone().detach()
     conv_module.bias = None
     bn_module.running_mean.data -= bias_data
+
+
 
 class MergeConvBNPass(SequentialPass):
     def __init__(self, trace : callable = fx.symbolic_trace):
@@ -85,7 +227,7 @@ class ModularizeActivationsPass(ModularizePass):
             module_inst_kwargs['inplace'] = True
         module_call_args = node.args[0:1]
         module_call_kwargs = {k:v for k,v in node.kwargs.items() if k == 'input'}
-        module_class = self.act_function_to_module[node.target]
+        module_class = ModularizeActivationsPass.act_function_to_module[node.target]
         return (module_class(*module_inst_args, **module_inst_kwargs), module_call_args, module_call_kwargs)
 
     def __init__(self):
@@ -170,7 +312,7 @@ class InsertModuleBetweenModulesPass(SequentialPass):
         #  and before all users if all users match the pattern, otherwise it
         # will insert a separate module between the before_node and each of the
         # matching users
-        # - 'none' will insert separate module between the before_node and the
+        # - 'none' will insert separate modules between the before_node and the
         # matching users regardless of the matching status of the users.
         super(InsertModuleBetweenModulesPass, self).__init__(name_prefix=name)
         self.modules_before = tuple(modules_before)
@@ -197,13 +339,15 @@ class InsertModuleBetweenModulesPass(SequentialPass):
                                 insert_before_users.append((u, user_module))
                     if len(insert_before_users) >= 1 and ((len(insert_before_users) == len(node.users) and self.combine == 'conservative') or self.combine == 'force'):
                         new_module = self.make_module_fn(m, insert_before_users[0][1])
-                        passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
-                        idx += 1
+                        if new_module is not None:
+                            passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
+                            idx += 1
                     else:
                         for u, user_mod in insert_before_users:
                             new_module = self.make_module_fn(m, user_mod)
-                            passes.append(InsertModuleBetweenNodesPass(node, u, new_module, f"{self.name.upper()}_{idx}"))
-                            idx += 1
+                            if new_module is not None:
+                                passes.append(InsertModuleBetweenNodesPass(node, u, new_module, f"{self.name.upper()}_{idx}"))
+                                idx += 1
 
         super(InsertModuleBetweenModulesPass, self).setup_passes(passes)
 
@@ -219,9 +363,9 @@ class ShapePropPass(FxPass):
             # This case should ONLY be called if the input is a tuple of a list
             shapes_in = shapes_in[0]
             self.shapes_in = [torch.Size(s) for s in shapes_in]
-            
+
         self.dtype_in = dtype_in
-        
+
     def run_pass(self, gm : fx.GraphModule):
         training = gm.training
         gm.eval()
@@ -232,4 +376,63 @@ class ShapePropPass(FxPass):
             # you really shouldn't be passing over GraphModules in non-eval
             # state, but you do you!
             gm.train()
+        return gm
+
+class CountMACsPass(FxPass):
+    # annotate each node for which a counting function is defined with the
+    # number of MACs it takes to execute it
+
+    def run_pass(self, gm : fx.GraphModule):
+        for node in gm.graph.nodes:
+            if node.op == 'call_module':
+                m = module_of_node(gm, node)
+                k = type(m)
+                if k in _MAC_CNT_FNS.keys():
+                    if len(node.all_input_nodes) != 1:
+                        print("Multi-input module: double-check result of CountMACsPass")
+                        in_node = node.all_input_nodes
+                        shp = [n.meta['tensor_meta'].shape for n in in_node]
+                    else:
+                        in_node = node.all_input_nodes[0]
+                        shp = in_node.meta['tensor_meta'].shape
+                    node.meta['macs'] = int(_MAC_CNT_FNS[k](shp, m))
+        return gm
+
+class MemoryUsagePass(FxPass):
+    # annotate each node with the amount of memory the storage of the complete
+    # parameters takes
+    def run_pass(self, gm: fx.GraphModule):
+
+        for node in gm.graph.nodes:
+            if node.op == 'call_module':
+                m = module_of_node(gm, node)
+                k = type(m)
+                if k in _MEM_CNT_FNS.keys():
+                    use_bias = False
+                    if node.next.op == 'output':
+                        use_bias = True
+                    shp = node.meta['tensor_meta'].shape
+                    node.meta['memory'] = int(np.ceil(_MEM_CNT_FNS[k](m, shp, use_bias)))
+
+        return gm
+
+
+class CollectPropertiesPass(FxPass):
+    def __init__(self, prop_dict : Optional[dict]=None):
+        if prop_dict is None:
+            prop_dict = {}
+        self.prop_dict = prop_dict
+
+    def run_pass(self, gm : fx.GraphModule):
+        for node in gm.graph.nodes:
+            if node.op == 'call_module':
+                m = module_of_node(gm, node)
+                pd = {}
+                for k, v in node.meta.items():
+                    tk, tv = translate_property(k, v)
+                    pd[tk] = tv
+
+                pd['n_users'] = len(node.users)
+                self.prop_dict[node.target] = pd
+                self.prop_dict.update(extend_properties(m, node.target, pd))
         return gm

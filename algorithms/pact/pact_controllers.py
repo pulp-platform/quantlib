@@ -4,7 +4,7 @@
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # 
-# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
+# Copyright (c) 2020-2021 ETH Zurich.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,11 +22,14 @@
 from typing import Union
 
 import torch
+from torch import nn
 import numpy as np
 
+from quantlib.editing.lightweight import LightweightGraph
+from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, SubTypeFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear
+from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat
 from .util import assert_param_valid, almost_symm_quant
 
 
@@ -34,7 +37,8 @@ from .util import assert_param_valid, almost_symm_quant
 __all__ = [
     'PACTActController',
     'PACTLinearController',
-    'PACTIntegerModulesController'
+    'PACTIntegerModulesController',
+    'PACTDynamicPrecController'
 ]
 
 
@@ -86,7 +90,7 @@ class PACTActController(Controller):
     to `True` and setting the initial clipping values based on the `init_clip` value.
     """
     def __init__(self, modules : list, schedule : dict, verbose : bool = False, init_clip_lo : float = -1., init_clip_hi : float = 1.):
-        assert all(isinstance(m, (PACTAsymmetricAct, PACTUnsignedAct)) for m in modules), "Non-activation modules passed to PACTActController!"
+        assert all(isinstance(m, _PACTActivation) for m in modules), "Non-activation modules passed to PACTActController!"
 
         self.modules = modules
         self.schedule = {int(k): v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
@@ -231,6 +235,13 @@ class PACTActController(Controller):
             self.verbose = True
             self.log("Got a bad state_dict - ignoring!")
             self.verbose = vo
+
+    @staticmethod
+    def get_modules(net : nn.Module):
+        net_nodes = LightweightGraph.build_nodes_list(net)
+        filter_act = SubTypeFilter(_PACTActivation)
+        return [n.module for n in filter_act(net_nodes)]
+
 
 
 class PACTLinearController(Controller):
@@ -438,6 +449,12 @@ class PACTLinearController(Controller):
             self.log("Got a bad state_dict - ignoring!")
             self.verbose = vo
 
+    @staticmethod
+    def get_modules(net : nn.Module):
+        filter_all_linops = SubTypeFilter(_PACTLinOp)
+        net_nodes = LightweightGraph.build_nodes_list(net)
+        return [n.module for n in filter_all_linops(net_nodes)]
+
 
 class PACTIntegerModulesController(Controller):
     # a very simple controller which keeps the epsilons of PACTIntegerXXX nodes
@@ -462,3 +479,63 @@ class PACTIntegerModulesController(Controller):
     def step_pre_validation_epoch(self, *args, **kwargs):
         # we need to sync the epsilons also after the last batch of a training epoch
         self.step_pre_training_batch(self, *args, **kwargs)
+
+    @staticmethod
+    def get_modules(net : nn.Module):
+        net_nodes_intmodules_intact = LightweightGraph.build_nodes_list(net, leaf_types=(PACTIntegerAdd, PACTIntegerConcat))
+        filter_intmodules = TypeFilter(PACTIntegerAdd) | TypeFilter(PACTIntegerConcat)
+        return [n.module for n in filter_intmodules(net_nodes_intmodules_intact)]
+
+class PACTDynamicPrecController(Controller):
+
+    def __init__(self, module_spec_list : list):
+        # module_spec_list is a list of tuples with each entry taking the form:
+        # (m : nn.Module, levels : list[int], select_levels_trn : callable, select_levels_val : callable)
+        # m is a PACT op module with an n_levels member
+        # levels is a list of permissible n_levels parameters
+        # select_levels_trn is a callable which takes 2 parameters:
+        #  - l : list   -- the `levels` list
+        #  - e : epoch  -- the current epoch; this allows us to e.g. implement
+        #                  some type of annealing
+        #   it is called in step_pre_training_batch and should return ann
+        #   element of `l` to be used for training the current batch. Most
+        #   commonly, this will be an implementation of the uniform distribution.
+        # select_levels_val is expected to be the same type as
+        # select_levels_trn but is used for validation - most commonly this
+        # will be a constant function.
+        self.module_spec_list = module_spec_list
+        self.epoch = 0
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict):
+        pass
+
+    def step_pre_training_epoch(self, e : int, *args, **kwargs):
+        self.epoch = e
+
+    def step_pre_training_batch(self, *args, **kwargs):
+        # all we need to do here is call the selection function for each module
+        # and set the module's `n_levels` parameter to the result
+        for modules, l, sel, _  in self.module_spec_list:
+            # if "modules" is a list, we can apply the same (random)
+            # quantization policy to multiple modules
+            if not isinstance(modules, list):
+                modules = [modules]
+            nl = sel(l, self.epoch)
+            # to constrain low-p weights to be the MSBs of high-p weights, we
+            # only use rounded weights if we are using the highest available
+            # precision.
+
+            for m in modules:
+                m.n_levels = nl
+
+    def step_pre_validation_epoch(self, e : int, *args, **kwargs):
+        # same as pre_training_batch but with the select_levels_val function
+        for modules, l, _, sel in self.module_spec_list:
+            if not isinstance(modules, list):
+                modules = [modules]
+            nl = sel(l, self.epoch)
+            for m in modules:
+                m.n_levels = nl

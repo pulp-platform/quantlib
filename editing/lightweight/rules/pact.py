@@ -1,24 +1,27 @@
+# 
 # pact.py
-#
+# 
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
-#
-# Copyright (c) 2020-2021 ETH Zurich. All rights reserved.
-#
+# 
+# Copyright (c) 2020-2021 ETH Zurich.
+# 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-#
+# 
 # http://www.apache.org/licenses/LICENSE-2.0
-#
+# 
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
 
 from typing import Union
 from functools import partial
+from copy import deepcopy
 
 from torch import nn
 
@@ -57,6 +60,53 @@ def replace_pact_act(module : nn.Module,
     else:
         return PACTUnsignedAct(**kwargs)
 
+def replace_pact_hard_act(module : nn.Module,
+                          hact_kwargs : dict,
+                          quant_act_kwargs : dict):
+    if isinstance(module, nn.Hardsigmoid):
+        layers = [
+            PACTHardsigmoid(**hact_kwargs),
+            PACTUnsignedAct(**quant_act_kwargs)
+        ]
+    elif isinstance(module, nn.Hardswish):
+        layers = [
+            PACTHardswish(**hact_kwargs),
+            PACTAsymmetricAct(**quant_act_kwargs)
+        ]
+    return nn.Sequential(*layers)
+
+
+def pact_quant_hard_act(module : nn.Module,
+                        quant_act_kwargs : dict):
+    if isinstance(module, nn.Hardsigmoid):
+        layers = [
+            nn.Hardsigmoid(),
+            PACTUnsignedAct(**quant_act_kwargs)
+        ]
+    elif isinstance(module, nn.Hardswish):
+        layers = [
+            nn.Hardswish(),
+            PACTAsymmetricAct(**quant_act_kwargs)
+        ]
+    return nn.Sequential(*layers)
+
+def quantize_pool_pact(module : nn.Module,
+                       signed : bool,
+                       **quant_act_kwargs):
+    if signed:
+        act = PACTAsymmetricAct(**quant_act_kwargs)
+    else:
+        act = PACTUnsignedAct(**quant_act_kwargs)
+
+    return nn.Sequential(module, act)
+
+class QuantizePoolingLayers(LightweightRule):
+    def __init__(self,
+                 filter_: Filter,
+                 **kwargs):
+        replacement_fun = partial(quantize_pool_pact, **kwargs)
+        super(QuantizePoolingLayers, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
+
 
 class ReplaceConvLinearPACTRule(LightweightRule):
     def __init__(self,
@@ -74,3 +124,14 @@ class ReplaceActPACTRule(LightweightRule):
         super(ReplaceActPACTRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)
 
 
+class ReplaceHardActPACTRule(LightweightRule):
+    def __init__(self,
+                 filter_: Filter,
+                 hact_kwargs : dict = {},
+                 quant_act_kwargs : dict = {},
+                 use_pact_hact : bool = True):
+        if use_pact_hact:
+            replacement_fun = partial(replace_pact_hard_act, hact_kwargs=hact_kwargs, quant_act_kwargs=quant_act_kwargs)
+        else:
+            replacement_fun = partial(pact_quant_hard_act, quant_act_kwargs=quant_act_kwargs)
+        super(ReplaceHardActPACTRule, self).__init__(filter_=filter_, replacement_fun=replacement_fun)

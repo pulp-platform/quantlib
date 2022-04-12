@@ -1,3 +1,25 @@
+# 
+# general.py
+# 
+# Author(s):
+# Georg Rutishauser <georgr@iis.ee.ethz.ch>
+# Moritz Scherer <scheremo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2021 ETH Zurich.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 import unittest
 from unittest import TestCase
 
@@ -9,7 +31,6 @@ from torchvision.models import MobileNetV2
 from quantlib.editing.fx.passes.pact.canonicalize import *
 from quantlib.editing.fx.passes.pact.pact_util import *
 
-import ipdb
 
 
 class NastyAdder(nn.Module):
@@ -95,7 +116,6 @@ class TestCanonicalize(TestCase):
         out_golden_cat = cat_tree(dummy_in)
         cat_pass = ConcatTreeReplacementPass()
         tree_traced_cat = fx.symbolic_trace(cat_tree)
-        ipdb.set_trace()
         tree_passed_cat = cat_pass(tree_traced_cat)
         out_test_cat = tree_passed_cat(dummy_in)
         self.assertTrue(bool(torch.all(out_test_cat==out_golden_cat)))

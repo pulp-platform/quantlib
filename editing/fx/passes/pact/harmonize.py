@@ -19,6 +19,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+#
+
+>>>>>>> georgr/bayesian_bits:editing/fx/passes/pact/harmonize.py
 from typing import Optional, Union
 import operator
 
@@ -27,10 +30,18 @@ from torch import nn, fx
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
+from quantlib.algorithms.generic.generic_ops import *
+
+
 from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
 from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, ReplaceSequentialPatternPass
 from ...util import gm_modules, get_qualified_prefix
 from ...util.tracing import LeafTracer, custom_symbolic_trace
+
+
+
+from .pact_util import PACT_symbolic_trace
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
@@ -102,7 +113,7 @@ class OpTreeReplacementPass(FxPass):
         return node.op == node_spec[0] and node.target in node_spec[1]
 
     @staticmethod
-    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : Optional[set], always_terminate : bool = False):
+    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : set, always_terminate : bool = False):
         if node in seen_nodes:
             # if we have already seen this node, it is either already part of a
             # tree or it will never be, so if we exited a tree, terminate the
@@ -145,17 +156,18 @@ class OpTreeReplacementPass(FxPass):
 
         for i, tree in enumerate(op_trees):
             # then add the submodule
-            module = self.replacement_fn(tree)
-            new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper()}{'_' if self.name != '' else ''}{i}"
-            gm.add_submodule(new_target, module)
-            # add a node for the submodule call
-            with gm.graph.inserting_before(tree.end_node):
-                new_node = gm.graph.call_module(new_target, args=tree.args)
-            # attach the module to the previous users of the tree's end node
-            tree.end_node.replace_all_uses_with(new_node)
-            # finally, delete the nodes in the tree
-            for node in tree.nodes:
-                gm.graph.erase_node(node)
+            module = self.replacement_fn(gm, tree)
+            if module is not None:
+                new_target = f"_QL_OP_TREE_REPLACE_{self.name.upper()}{'_' if self.name != '' else ''}{i}"
+                gm.add_submodule(new_target, module)
+                # add a node for the submodule call
+                with gm.graph.inserting_before(tree.end_node):
+                    new_node = gm.graph.call_module(new_target, args=tree.args)
+                # attach the module to the previous users of the tree's end node
+                tree.end_node.replace_all_uses_with(new_node)
+                # finally, delete the nodes in the tree
+                for node in tree.nodes:
+                    gm.graph.erase_node(node)
 
         # and we're done...
         return gm
@@ -168,7 +180,7 @@ class MatmulReplacementPass(OpTreeReplacementPass):
         self.kwargs = kwargs
         super().__init__(node_specs=self.matmul_node_specs, replacement_fn=self.matmul_replacement_fn, name="MATMUL")
 
-    def matmul_replacement_fn(self, tree):
+    def matmul_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerMatmul(**self.kwargs)
 
 
@@ -177,12 +189,27 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
                       ('call_method', ('add',))]
 
     def __init__(self, **kwargs):
-        self.kwargs = kwargs
+        default_kwargs = {'learn_clip': True, 'init_clip': 'max', 'act_kind': 'identity'}
+        # overwrite defaults with supplied kwargs
+        default_kwargs.update(kwargs)
+        self.kwargs = default_kwargs
         super(AddTreeReplacementPass, self).__init__(node_specs=self.add_node_specs, replacement_fn=self.add_replacement_fn, name="ADDITION")
 
 
-    def add_replacement_fn(self, tree):
-        return PACTIntegerAdd(num_args=len(tree.args), act_kind='identity', **self.kwargs)
+    def add_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+
+        return PACTIntegerAdd(num_args=len(tree.args),  **self.kwargs)
+
+class MulReplacementPass(OpTreeReplacementPass):
+    mul_node_specs = [('call_function', (torch.mul, operator.mul)),
+                      ('call_method', ('mul',))]
+
+    def __init__(self):
+        super(MulReplacementPass, self).__init__(node_specs=self.mul_node_specs, replacement_fn=self.mul_replacement_fn, name="MULTIPLICATION", always_terminate=True)
+
+    def mul_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+        # multiply takes no args
+        return Multiply()
 
 
 class ConcatTreeReplacementPass(SequentialPass):
@@ -198,10 +225,10 @@ class ConcatTreeReplacementPass(SequentialPass):
         passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
         super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
-    def cat_replacement_fn(self, tree):
+    def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
 
-    def stack_replacement_fn(self, tree):
+    def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
 
 class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
@@ -211,17 +238,21 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
                       nn.BatchNorm1d,
                       nn.BatchNorm2d,
                       nn.BatchNorm3d,
-                      nn.Linear)
-    after_modules = (nn.Conv1d,
-                      nn.Conv2d,
-                      nn.Conv3d,
                       nn.Linear,
-                     PACTIntegerMatmul)
+                      Multiply)
+    after_modules = (nn.Conv1d,
+                     PACTIntegerMatmul,
+                     nn.Conv2d,
+                     nn.Conv3d,
+                     nn.Linear,
+                     Multiply)
 
     def __init__(self, signed : bool = True, **kwargs):
         name = "PACT_LINEAR_ACTIVATIONS"
         self.signed = signed
-        self.kwargs = kwargs
+        default_kwargs = {'learn_clip' : True, 'tqt' : True, 'init_clip' : 'max', 'act_kind' : 'identity'}
+        default_kwargs.update(kwargs)
+        self.kwargs = default_kwargs
         super(InsertActivationsBetweenLinearsPass, self).__init__(modules_before=self.before_modules,
                                                                   modules_after=self.after_modules,
                                                                   make_module_fn=self.inserted_module,
@@ -235,13 +266,48 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
             module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
             return PACTUnsignedAct(**module_kwargs)
 
-class CanonicalizePACTNetPass(SequentialPass):
+
+class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
+    before_modules = (PACTConv1d,
+                      PACTConv2d)
+    after_modules = (PACTUnsignedAct,
+                     PACTAsymmetricAct,
+                     PACTHardswish,
+                     PACTHardsigmoid)
+    @staticmethod
+    def make_dummy_bn(m : nn.Module, act : nn.Module):
+        if m.bias is None:
+            return None
+        if isinstance(m, PACTConv1d):
+            bn = nn.BatchNorm1d(m.out_channels)
+        else:
+            assert isinstance(m, PACTConv2d), f"InsertBNBetweenBiasedConvAndActsPass: Got bad module - expected PACTConv1/2d, got {type(m)}"
+            bn = nn.BatchNorm2d(m.out_channels)
+        bn.weight.data.copy_(torch.ones([m.out_channels]))
+        bn.bias.data.copy_(m.bias)
+        bn.running_mean.copy_(torch.zeros([m.out_channels]))
+        bn.running_var.copy_(torch.ones([m.out_channels])-bn.eps)
+        # Hacky: we are editing the source module...
+        m.bias = None
+        return bn
+
+    def __init__(self):
+        super(InsertBNBetweenBiasedConvAndActsPass, self).__init__(modules_before=self.before_modules,
+                                                                   modules_after=self.after_modules,
+                                                                   make_module_fn=self.make_dummy_bn,
+                                                                   name="BIASED_CONV_AND_ACT")
+
+
+
+class HarmonizePACTNetPass(SequentialPass):
     def __init__(self, **kwargs):
         passes = []
+        passes.append(RetracePass(PACT_symbolic_trace))
         passes.append(AddTreeReplacementPass(**kwargs))
+        passes.append(MulReplacementPass())
         actpass_kwargs = {k:v for k,v in kwargs.items() if k != 'force_out_eps'}
         passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
-        super(CanonicalizePACTNetPass, self).__init__(*passes, name_prefix='_CANONICALIZE_PACT_NET_PASS')
+        super(HarmonizePACTNetPass, self).__init__(*passes, name_prefix='_HARMONIZE_PACT_NET_PASS')
 
 def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -329,7 +395,7 @@ def insert_final_activation(fx_model, n_levels):
         if type(target_prefix) == str and target_prefix != '':
             new_node_target = '.'.join([target_prefix, new_node_target])
 
-        fx_model.add_submodule(new_node_target, PACTAsymmetricAct(n_levels, leaky=0, act_kind='identity', symm=True))
+        fx_model.add_submodule(new_node_target, PACTAsymmetricAct(n_levels, leaky=0, act_kind='identity', symm=True, init_clip='max', learn_clip=True))
         #fx_model.add_submodule(new_node_target, qa.pact.PACTUnsignedAct(n_levels, leaky=0, act_kind='relu'))
         new_node = fx_model.graph.call_module(new_node_target, args=tuple([node]))
         totidx = totidx + 1

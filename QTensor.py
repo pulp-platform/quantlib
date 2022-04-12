@@ -2,8 +2,8 @@
 #
 # File: QTensor.py
 #
-# Last edited: 06.01.2022        
-# 
+# Last edited: 06.01.2022
+#
 # Copyright (C) 2022, ETH Zurich and University of Bologna.
 #
 # Author: Moritz Scherer, ETH Zurich
@@ -31,12 +31,12 @@ from torch.overrides import (
 class QTensor(torch.Tensor):
     @staticmethod
     def __new__(cls, x, eps=None, *args, **kwargs):
-        
+
         if isinstance(x, torch.Tensor):
             inst = x.__deepcopy__(memo={}).as_subclass(cls)
         else:
             inst = super().__new__(cls, x, *args, **kwargs)
-        
+
         return inst
 
     def __init__(self, x, eps=None, *args, **kwargs):
@@ -53,7 +53,7 @@ class QTensor(torch.Tensor):
             return self._eps
         else:
             return None
-                
+
     @classmethod
     def getOverriddenMethods(cls):
         parent_attrs = set()
@@ -65,7 +65,7 @@ class QTensor(torch.Tensor):
 
         # return the intersection of both
         return parent_attrs.intersection(methods)
-        
+
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         #import IPython; IPython.embed()
@@ -75,13 +75,13 @@ class QTensor(torch.Tensor):
             ret = super().__torch_function__(func,types,args,kwargs)
             c = _convert(ret, cls)
             return c
-        
+
     def clone(self, *args, **kwargs):
         if hasattr(self, '_eps'):
             return QTensor(super().clone(*args, **kwargs), self._eps)
         else:
             return QTensor(super().clone(*args, **kwargs), None)
-        
+
     def to(self, *args, **kwargs):
         if hasattr(self, '_eps'):
             new_obj=QTensor([], self._eps)
@@ -94,7 +94,7 @@ class QTensor(torch.Tensor):
             new_obj.__init__(tempTensor, self._eps)
         else:
             new_obj.__init__(tempTensor, None)
-        return(new_obj)            
+        return(new_obj)
 
 def _convert(ret, cls):
     if isinstance(ret, torch.Tensor) and not isinstance(ret, cls):
