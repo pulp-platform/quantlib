@@ -5,7 +5,7 @@ from typing import List
 
 from quantlib.newediting.editing.editors.editors import ApplicationPoint, Rewriter
 from quantlib.newediting.editing.matching.lineargraphs import LinearGraphMatcher
-from quantlib.newediting.graphs import qmodule_symbolic_trace
+from quantlib.newediting.graphs import quantlib_fine_symbolic_trace
 from quantlib.newediting.graphs import FXOPCODE_CALL_MODULE, nnmodule_from_fxnode
 from quantlib.newutils import quantlib_err_header
 
@@ -23,7 +23,7 @@ class LinearBNBiasFolder(Rewriter):
         name = 'LinearBNBiasFolder'
         super(LinearBNBiasFolder, self).__init__(name)
 
-        self._matcher = LinearGraphMatcher(symbolic_trace_fn=qmodule_symbolic_trace, pattern_module=nn.Sequential(linearbn_pattern))
+        self._matcher = LinearGraphMatcher(symbolic_trace_fn=quantlib_fine_symbolic_trace, pattern_module=nn.Sequential(linearbn_pattern))
         self._patternname_2_patternnode = {n.target: n for n in filter(lambda n: (n.op in FXOPCODE_CALL_MODULE) and (n.target in linearbn_pattern.keys()), self._matcher.pattern_gm.graph.nodes)}
 
         self._linear_node = self._patternname_2_patternnode['linear']
