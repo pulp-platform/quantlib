@@ -3,7 +3,9 @@ import torch.nn as nn
 import torch.fx as fx
 from typing import Tuple, Dict, Any, Union, Callable, Type
 
+from quantlib.newediting.graphs.nn.harmoniser import AddTreeHarmoniser
 from quantlib.newediting.graphs.nn.epstunnel import EpsTunnel
+from quantlib.newediting.graphs.nn.requant import Requant
 from quantlib.newalgorithms.qmodules.qmodules.qmodules import _QModule
 from quantlib.newutils import quantlib_err_header
 
@@ -33,10 +35,25 @@ class CustomTracer(fx.Tracer):
         return fxtracer_cond or custom_cond
 
 
-class QModuleTracer(CustomTracer):
+class QuantLibTracer(CustomTracer):
+
+    def __init__(self, trace_through_harmonisers: bool, *args, **kwargs):
+        base_leaf_types       = (_QModule, EpsTunnel, Requant)
+        harmoniser_leaf_types = (AddTreeHarmoniser,)
+        leaf_types = base_leaf_types if trace_through_harmonisers else (*base_leaf_types, *harmoniser_leaf_types)  # do not trace through `Harmoniser`s
+        super().__init__(leaf_types=leaf_types, *args, **kwargs)
+
+
+class QuantLibFineTracer(QuantLibTracer):
 
     def __init__(self, *args, **kwargs):
-        super().__init__(leaf_types=(_QModule, EpsTunnel), *args, **kwargs)
+        super(QuantLibFineTracer, self).__init__(trace_through_harmonisers=True)
+
+
+class QuantLibCoarseTracer(QuantLibTracer):
+
+    def __init__(self, *args, **kwargs):
+        super(QuantLibCoarseTracer, self).__init__(trace_through_harmonisers=False)
 
 
 def custom_symbolic_trace(tracer: CustomTracer,
@@ -50,4 +67,5 @@ def custom_symbolic_trace(tracer: CustomTracer,
     return gm
 
 
-qmodule_symbolic_trace = partial(custom_symbolic_trace, tracer=QModuleTracer())
+quantlib_fine_symbolic_trace   = partial(custom_symbolic_trace, tracer=QuantLibFineTracer())
+quantlib_coarse_symbolic_trace = partial(custom_symbolic_trace, tracer=QuantLibCoarseTracer())
