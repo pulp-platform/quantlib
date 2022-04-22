@@ -39,7 +39,7 @@ class Annotator(Editor):
 
     def __init__(self, name: str):
         super(Annotator, self).__init__()
-        # we use the following parameter to identify the annotations made by the `Annotator`
+        # we use the following attribute to identify the annotations made by the `Annotator`
         self._name: str = '_'.join([_QL_EDITOR_PREFIX, name, str(id(self))])
 
     def apply(self, g: fx.GraphModule) -> fx.GraphModule:
@@ -66,14 +66,14 @@ class Rewriter(Editor):
 
         super(Rewriter, self).__init__()
 
-        # we use the following two parameters to annotate all the transformations made by the `Rewriter`
+        # we use the following two attributes to annotate all the transformations made by the `Rewriter`
         self._name:    str = '_'.join([_QL_EDITOR_PREFIX, name, str(id(self))])
         self._counter: int = 0
 
     def find(self, g: fx.GraphModule) -> List[ApplicationPoint]:
         # Perform the following:
         #   - find the `ApplicationPointCore`s;
-        #   - bind the cores to the `Rewriter` instance that found them and to the `fx.GraphModule` used as a data graph.
+        #   - bind the cores to the `Rewriter` instance that found them, and to the `fx.GraphModule` used as a data graph.
         raise NotImplementedError
 
     def _check_aps(self, g: fx.GraphModule, aps: List[ApplicationPoint]) -> None:
@@ -107,7 +107,7 @@ class Rewriter(Editor):
         elif isinstance(aps, list) and all(map(lambda ap: isinstance(ap, ApplicationPoint), aps)):
             pass
         else:
-            raise TypeError()
+            raise TypeError
 
         # ensure that application all the application points can be rewritten independently of each other, so that the associated rewritings commute (e.g., their supports do not intersect)
         self._check_aps(g, aps)
