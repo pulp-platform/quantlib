@@ -7,7 +7,7 @@ from typing import List
 from quantlib.newediting.graphs.nn.epstunnel import EpsTunnel
 from ...editors.editors import ApplicationPoint, Rewriter
 from ...matching import LinearGraphMatcher
-from ....graphs import qmodule_symbolic_trace
+from ....graphs import quantlib_fine_symbolic_trace
 from ....graphs import FXOPCODE_CALL_MODULE, nnmodule_from_fxnode
 from quantlib.newalgorithms.qmodules import QConv2d
 from quantlib.newutils import quantlib_err_header
@@ -26,7 +26,7 @@ class LinearOpsIntegeriser(Rewriter):
         name = 'LinearOpsIntegeriser'
         super(LinearOpsIntegeriser, self).__init__(name)
 
-        self._matcher = LinearGraphMatcher(symbolic_trace_fn=qmodule_symbolic_trace, pattern_module=nn.Sequential(epsqconv2deps_pattern))
+        self._matcher = LinearGraphMatcher(symbolic_trace_fn=quantlib_fine_symbolic_trace, pattern_module=nn.Sequential(epsqconv2deps_pattern))
 
         self._patternname_2_patternnode = {n.target: n for n in filter(lambda n: (n.op in FXOPCODE_CALL_MODULE) and (n.target in epsqconv2deps_pattern.keys()), self._matcher.pattern_gm.graph.nodes)}
         self._in_tunnel_node  = self._patternname_2_patternnode['in_tunnel']

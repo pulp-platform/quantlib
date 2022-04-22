@@ -6,7 +6,7 @@ from typing import List
 
 from ...editors.editors import ApplicationPoint, Rewriter
 from ...matching import LinearGraphMatcher
-from ....graphs import qmodule_symbolic_trace
+from ....graphs import quantlib_fine_symbolic_trace
 from ....graphs import FXOPCODE_CALL_MODULE, nnmodule_from_fxnode
 from ....graphs import EpsTunnel, Requant
 from quantlib.newalgorithms.qmodules import QReLU
@@ -29,7 +29,7 @@ class Requantiser(Rewriter):
 
         self._D = torch.Tensor([2 ** B])
 
-        self._matcher = LinearGraphMatcher(symbolic_trace_fn=qmodule_symbolic_trace, pattern_module=nn.Sequential(epsbn2drelueps_pattern))
+        self._matcher = LinearGraphMatcher(symbolic_trace_fn=quantlib_fine_symbolic_trace, pattern_module=nn.Sequential(epsbn2drelueps_pattern))
 
         self._patternname_2_patternnode = {n.target: n for n in filter(lambda n: (n.op in FXOPCODE_CALL_MODULE) and (n.target in epsbn2drelueps_pattern.keys()), self._matcher.pattern_gm.graph.nodes)}
         self._in_tunnel_node  = self._patternname_2_patternnode['in_tunnel']
