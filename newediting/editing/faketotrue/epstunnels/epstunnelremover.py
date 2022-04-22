@@ -1,3 +1,4 @@
+import itertools
 import torch
 import torch.fx as fx
 from typing import List
@@ -10,22 +11,15 @@ from ....graphs import FXOPCODE_CALL_MODULE, nnmodule_from_fxnode
 
 class EpsTunnelRemover(Rewriter):
 
-    def __init__(self, force: bool = True):
+    def __init__(self):
         name = 'EpsTunnelRemover'
         super(EpsTunnelRemover, self).__init__(name)
-        self._force = force
 
     def find(self, g: fx.GraphModule) -> List[ApplicationPoint]:
-        if self._force:
-            apcores = list(filter(lambda n:
-                                  (n.op in FXOPCODE_CALL_MODULE) and
-                                  isinstance(nnmodule_from_fxnode(n, g), EpsTunnel), g.graph.nodes))
-        else:
-            apcores = list(filter(lambda n:
-                                  (n.op in FXOPCODE_CALL_MODULE) and
-                                  isinstance(nnmodule_from_fxnode(n, g), EpsTunnel) and
-                                  torch.all(nnmodule_from_fxnode(n, g)._eps_in == nnmodule_from_fxnode(n, g)._eps_out), g.graph.nodes))
-
+        apcores = list(filter(lambda n:
+                              (n.op in FXOPCODE_CALL_MODULE) and
+                              isinstance(nnmodule_from_fxnode(n, g), EpsTunnel) and
+                              torch.all(nnmodule_from_fxnode(n, g).eps_in == nnmodule_from_fxnode(n, g).eps_out), g.graph.nodes))
         aps = [ApplicationPoint(rewriter=self, graph=g, apcore=a) for a in apcores]
         return aps
 
@@ -38,13 +32,14 @@ class EpsTunnelRemover(Rewriter):
 
         upstream_nodes = {p for p in n.all_input_nodes}
         assert len(upstream_nodes) == 1
-        un = next(iter(upstream_nodes))
+        # un = next(iter(upstream_nodes))
 
         downstream_nodes = {s for s in n.users}
-        assert len(downstream_nodes) == 1
-        dn = next(iter(downstream_nodes))
+        # assert len(downstream_nodes) == 1
+        # dn = next(iter(downstream_nodes))
 
-        dn.replace_input_with(n, un)
+        for dn, un in itertools.product(downstream_nodes, upstream_nodes):
+            dn.replace_input_with(n, un)
 
         g.delete_submodule(n.target)
         g.graph.erase_node(n)
