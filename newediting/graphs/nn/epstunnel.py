@@ -13,6 +13,14 @@ class EpsTunnel(nn.Module):
         self._eps_in  = eps
         self._eps_out = eps
 
+    @property
+    def eps_in(self) -> torch.Tensor:
+        return self._eps_in
+
+    @property
+    def eps_out(self) -> torch.Tensor:
+        return self._eps_out
+
     def set_eps_in(self, eps: torch.Tensor) -> None:
         if not isinstance(eps, torch.Tensor):
             raise TypeError

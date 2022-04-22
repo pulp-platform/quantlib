@@ -7,6 +7,7 @@ from typing import Dict, Union
 from .propagationrules import UNDEFINED_EPS, is_eps_annotated
 from .propagationrules import _module_2_epspec
 from .propagationrules import _method_2_epspec
+from .propagationrules import _function_2_epspec
 from ...editors.editors import Annotator
 from ....graphs import FXOPCODE_PLACEHOLDER, FXOPCODE_OUTPUT, FXOPCODE_CALL_MODULE, FXOPCODE_CALL_METHOD
 from quantlib.newalgorithms.qmodules.qmodules.qmodules import _QModule
@@ -95,6 +96,12 @@ class EpsPropagator(Annotator):
                 n.meta['eps'] = next(iter(n.args)).meta['eps']
 
             else:
-                raise ValueError("[QuantLab] Epsilon-annotation of `fx.Node`s with opcode {} is not supported.".format(n.op))
+                try:
+                    epspec = _method_2_epspec[n.target.__name__]
+                    epspec.function(n, None, *copy.copy(epspec.args), **copy.copy(epspec.kwargs))
+                except KeyError:
+                    # TODO: decide which is the correct behaviour in this case!
+                    continue
+                    #raise ValueError("[QuantLab] Epsilon-annotation of `fx.Node`s with opcode {} is not supported.".format(n.op))
 
         return g
