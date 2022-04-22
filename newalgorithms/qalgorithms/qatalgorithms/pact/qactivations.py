@@ -57,10 +57,12 @@ class PACTReLU6(_PACTActivation, QReLU6):
                  qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
                  inplace:                  bool = False):
 
-        super(PACTReLU6, self).__init__(qrangespec,
-                                        qgranularityspec,
-                                        qhparamsinitstrategyspec,
-                                        inplace=inplace)
+        super(_PACTModule, self).__init__(qrangespec,
+                                          qgranularityspec,
+                                          qhparamsinitstrategyspec,
+                                          inplace=inplace)
+
+        _PACTActivation.__init__(self)
 
     def _register_qop(self):
         super(PACTReLU6, self).register_qop()
@@ -78,11 +80,13 @@ class PACTLeakyReLU(_PACTActivation, QLeakyReLU):
                  negative_slope:           float = 1e-2,
                  inplace:                  bool = False):
 
-        super(PACTLeakyReLU, self).__init__(qrangespec,
-                                            qgranularityspec,
-                                            qhparamsinitstrategyspec,
-                                            negative_slope=negative_slope,
-                                            inplace=inplace)
+        super(_PACTModule, self).__init__(qrangespec,
+                                          qgranularityspec,
+                                          qhparamsinitstrategyspec,
+                                          negative_slope=negative_slope,
+                                          inplace=inplace)
+
+        _PACTActivation.__init__(self)
 
     def _register_qop(self):
         super(PACTLeakyReLU, self).register_qop()
