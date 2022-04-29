@@ -4,7 +4,7 @@
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
 # 
-# Copyright (c) 2020-2021 ETH Zurich.
+# Copyright (c) 2020-2022 ETH Zurich.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,8 +19,20 @@
 # limitations under the License.
 # 
 
-from . import editing
-from . import algorithms
-# from . import backends
+"""QuantLib: a package to quantise deep neural networks.
 
-from . import newutils
+The QuantLib package partitions its abstractions into three namespaces:
+* the ``algorithms`` sub-package implements the extensions to PyTorch's ``nn``
+  namespace required to build networks supporting **quantisation-aware
+  training (QAT)**;
+* the ``editing`` sub-package implements the abstractions required to
+  transform floating-point deep neural networks into fake-quantised networks,
+  and fake-quantised networks into true-quantised (i.e., integerised) ones;
+* the ``backend`` sub-package implements the abstractions required to export
+  trained and integerised quantised neural networks (QNNs) to ONNX formats
+  compatible with different platforms.
+
+There is also a ``utils`` sub-package, but since it is meant for developers I
+do not include in the canonical QuantLib triad.
+
+"""
