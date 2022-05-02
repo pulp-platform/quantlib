@@ -93,29 +93,31 @@ class DORYAdder(nn.Module):
 
         @staticmethod
         def symbolic(g, x1, rq1, x2, rq2, rq_out):
+
             params = {}
             params_list = []
             for module, name in [(rq1, "in1"), (rq2, "in2"), (rq_out, "out")]:
                 if module:
-                    mul = module.mul
-                    add = module.add
+                    mul = int(module.mul.item())
+                    add = int(module.add.item())
                     shift = int(np.log2(module.div.item()))
                     n_l = int(module.n_levels_out.item())
                     requant = 1
                 else:
-                    mul = torch.ones(1)
-                    add = torch.zeros(1)
+                    mul = 1
+                    add = 0
                     shift = 0
                     n_l = 256
                     requant = 0
 
-                params[f"{name}_mul_t"] = mul
-                params[f"{name}_add_t"] = add
+                params[f"{name}_mul_i"] = mul
+                params[f"{name}_add_i"] = add
                 params[f"{name}_shift_i"] = shift
                 params[f"{name}_n_levels_i"] = n_l
                 params[f"{name}_rq_i"] = requant
-
-            return g.op("DORYOps::QuantAdd", x1, x2, **params)
+            ret = g.op("Add", x1, x2, **params)
+            ret.setType(x1.type())
+            return ret
 
 
     def __init__(self, in1_requant : Optional[nn.Module], in2_requant : Optional[nn.Module], out_requant : Optional[nn.Module]):
