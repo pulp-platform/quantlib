@@ -169,7 +169,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
             # expect a (C, H, W) tensor - DORY expects (H, W, C)
             try: # for the output, this step is not applicable
-                t = t.squeeze().permute(1,2,0)
+                t = t.permute(1,2,0)
             except RuntimeError:
                 print(f"Not permuting output of layer {layer_name}...")
 
@@ -179,7 +179,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                 for el in t.flatten():
                     fp.write(f"{int(el)},\n")
 
-        save_beautiful_text(im_tensor, "input", "input")
+        save_beautiful_text(im_tensor.squeeze(), "input", "input")
         save_beautiful_text(output, "output", "output")
         for i, (name, t) in enumerate(acts):
             save_beautiful_text(t, name, f"out_layer{i}")
