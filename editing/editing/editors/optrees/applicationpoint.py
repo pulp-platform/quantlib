@@ -135,24 +135,4 @@ class OpSpec(OrderedDict):
         super(OpSpec, self).__setitem__(opcode, targets)
 
     def matches_opspec(self, dn: fx.Node) -> bool:
-        return (dn.op in self.keys()) and (dn.target in self[dn])
-
-
-# class AddTreeMatcher(OpTreeMatcher):
-#
-#     def __init__(self):
-#         node_specs = [
-#             NodeSpec('call_function', (torch.add, operator.add)),
-#             NodeSpec('call_method',   ('add',)),
-#         ]
-#         super(AddTreeMatcher, self).__init__(node_specs=node_specs)
-
-
-# class ConcatTreeMatcher(OpTreeMatcher):
-#
-#     def __init__(self):
-#         node_specs = [
-#             NodeSpec('call_function', (torch.cat,)),
-#             NodeSpec('call_function', (torch.stack,))
-#         ]
-#         super(ConcatTreeMatcher, self).__init__(node_specs=node_specs)
+        return (dn.op in self.keys()) and (dn.target in self[dn.op])

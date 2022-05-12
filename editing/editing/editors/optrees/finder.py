@@ -75,4 +75,4 @@ class OpTreeFinder(Finder):
         return optrees
 
     def check_aps_commutativity(self, aps: List[OpTree]) -> bool:
-        pass  # TODO: implement the check!
+        return True  # TODO: implement the check!
