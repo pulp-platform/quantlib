@@ -2,14 +2,14 @@ from functools import partial
 import torch.nn as nn
 from typing import Type, Tuple
 
-from .node import LightweightNode, LightweigthNodeList
+from .node import LightweightNode, LightweightNodeList
 from ..nn import EpsTunnel, Requantisation
 from quantlib.algorithms.qmodules.qmodules.qmodules import _QModule
 
 
 def custom_traverse(root:           nn.Module,
                     qualified_name: str = '',
-                    leaf_types:     Tuple[Type[nn.Module], ...] = tuple()) -> LightweigthNodeList:
+                    leaf_types:     Tuple[Type[nn.Module], ...] = tuple()) -> LightweightNodeList:
     """Traverse the ``nn.Module`` tree rooted at ``root`` down to
     user-specified atoms.
 
@@ -19,7 +19,7 @@ def custom_traverse(root:           nn.Module,
 
     """
 
-    nodes = LightweigthNodeList()
+    nodes = LightweightNodeList()
 
     if isinstance(root, leaf_types) or len(list(root.named_children())) == 0:
         nodes.append(LightweightNode(name=qualified_name, module=root))

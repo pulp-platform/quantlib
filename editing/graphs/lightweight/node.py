@@ -21,28 +21,28 @@ class LightweightNode(NamedTuple):
         return cond_type and cond_name and cond_obj
 
 
-class LightweigthNodeList(list):  # https://stackoverflow.com/a/24160909
+class LightweightNodeList(list):  # https://stackoverflow.com/a/24160909
     """A list sub-class accepting only ``LightweightNode`` items."""
 
     def append(self, item):
         if not isinstance(item, LightweightNode):
             raise TypeError
-        super(LightweigthNodeList, self).append(item)
+        super(LightweightNodeList, self).append(item)
 
     def insert(self, index, item):
         if not isinstance(item, LightweightNode):
             raise TypeError
-        super(LightweigthNodeList, self).insert(index, item)
+        super(LightweightNodeList, self).insert(index, item)
 
     def __add__(self, item):
         if not isinstance(item, LightweightNode):
             raise TypeError
-        super(LightweigthNodeList, self).__add__(item)
+        super(LightweightNodeList, self).__add__(item)
 
     def __iadd__(self, item):
         if not isinstance(item, LightweightNode):
             raise TypeError
-        super(LightweigthNodeList, self).__iadd__(item)
+        super(LightweightNodeList, self).__iadd__(item)
 
     def __str__(self) -> str:
         """When printed, this string shows a nicely formatted list of named
@@ -64,7 +64,7 @@ class LightweigthNodeList(list):  # https://stackoverflow.com/a/24160909
         str_ = f""
         for node in self:
             str_ += f"\n"
-            name = '.'.join(reversed(node.qualified_path)).rjust(max_chars)
+            name = ".".join(reversed(node.qualified_path)).rjust(max_chars)
             str_ += f"{name}\t{node.module}"
 
         return str_

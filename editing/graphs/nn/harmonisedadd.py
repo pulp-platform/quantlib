@@ -1,8 +1,9 @@
+import copy
 import torch
 import torch.nn as nn
-from typing import Tuple
+from typing import Tuple, Dict, Any
 
-from quantlib.algorithms.qalgorithms import ptqqat_index
+from quantlib.algorithms.qalgorithms import ModuleMapping
 from quantlib.algorithms.qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 
 from quantlib.algorithms.qmodules.qmodules.qmodules import _QModule
@@ -11,33 +12,39 @@ from quantlib.algorithms.qmodules.qmodules.qmodules import _QModule
 class HarmonisedAdd(nn.Module):
 
     def __init__(self,
-                 ap,  #: OpTree,
-                 algorithm: str,
-                 qrangespec: QRangeSpecType,
-                 qgranularityspec: QGranularitySpecType,
+                 n_inputs:                 int,
+                 qgranularityspec:         QGranularitySpecType,
+                 qrangespec:               QRangeSpecType,
                  qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                 force_output_scale: bool = False):
-        # TODO: add `kwargs` for the constructor of the harmonising ``_QModule``s
+                 mapping:                  ModuleMapping,
+                 kwargs:                   Dict[str, Any],
+                 use_output_scale:         bool):
 
         super(HarmonisedAdd, self).__init__()
 
-        self._input_qmodules = torch.nn.ModuleList(list(map(lambda n: HarmonisedAdd.get_qmodule(algorithm, qrangespec, qgranularityspec, qhparamsinitstrategyspec), ap.inbound_frontier)))
-        self._output_qmodule = HarmonisedAdd.get_qmodule(algorithm, qrangespec, qgranularityspec, qhparamsinitstrategyspec)
+        self._input_qmodules: nn.ModuleList = nn.ModuleList(list(HarmonisedAdd.get_qmodule(qgranularityspec, qrangespec, qhparamsinitstrategyspec, mapping, kwargs) for i in range(0, n_inputs)))
+        self._output_qmodule: _QModule = HarmonisedAdd.get_qmodule(qgranularityspec, qrangespec, qhparamsinitstrategyspec, mapping, kwargs)
 
-        self._force_output_scale = force_output_scale
+        self._use_output_scale: bool = use_output_scale
 
     @staticmethod
-    def get_qmodule(algorithm: str,
-                    qrangespec: QRangeSpecType,
-                    qgranularityspec: QGranularitySpecType,
+    def get_qmodule(qgranularityspec:         QGranularitySpecType,
+                    qrangespec:               QRangeSpecType,
                     qhparamsinitstrategyspec: QHParamsInitStrategySpecType,
-                    **kwargs) -> _QModule:
+                    mapping:                  ModuleMapping,
+                    kwargs:                   Dict[str, Any]) -> _QModule:
 
-        qclass = ptqqat_index.register[algorithm][nn.Identity]
-        qmodule = qclass(qrangespec=qrangespec,
-                         qgranularityspec=qgranularityspec,
-                         qhparamsinitstrategyspec=qhparamsinitstrategyspec,
-                         **kwargs)
+        qgranularityspec = copy.deepcopy(qgranularityspec)
+        qrangespec = copy.deepcopy(qrangespec)
+        qhparamsinitstrategyspec = copy.deepcopy(qhparamsinitstrategyspec)
+        kwargs = copy.deepcopy(kwargs)
+
+        qmodule_class = mapping[nn.Identity]
+
+        qmodule = qmodule_class(qrangespec=qrangespec,
+                                qgranularityspec=qgranularityspec,
+                                qhparamsinitstrategyspec=qhparamsinitstrategyspec,
+                                **kwargs)
 
         return qmodule
 
@@ -70,7 +77,7 @@ class HarmonisedAdd(nn.Module):
 
     def _harmonise(self) -> None:
 
-        if self._force_output_scale:
+        if self._use_output_scale:
             ref_module = self._output_qmodule
         else:
             raise NotImplementedError
