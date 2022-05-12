@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Tuple
 
 from .qmodules import _PACTModule, _PACTLinear
-from ...utils import ModuleMapping
+from quantlib.algorithms.qalgorithms import ModuleMapping
 from quantlib.algorithms.qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 from quantlib.algorithms.qmodules import QLinear, QConv1d, QConv2d, QConv3d
 
@@ -142,9 +142,9 @@ class PACTConv3d(_PACTLinear, QConv3d):
         return super(PACTConv3d, self).call_qop(x)
 
 
-NNMODULE_TO_PACTLINEAR: ModuleMapping = {
-    nn.Linear: PACTLinear,
-    nn.Conv1d: PACTConv1d,
-    nn.Conv2d: PACTConv2d,
-    nn.Conv3d: PACTConv3d,
-}
+NNMODULE_TO_PACTLINEAR = ModuleMapping([
+    (nn.Linear, PACTLinear),
+    (nn.Conv1d, PACTConv1d),
+    (nn.Conv2d, PACTConv2d),
+    (nn.Conv3d, PACTConv3d),
+])

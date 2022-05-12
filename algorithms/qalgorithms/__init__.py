@@ -1,32 +1,37 @@
 from collections import OrderedDict
-from typing import Dict
 
-from .utils import ModuleMapping
-
+from .modulemapping import ModuleMapping
 from quantlib.algorithms.qalgorithms.qatalgorithms.pact import NNMODULE_TO_PACTMODULE
 from quantlib.algorithms.qalgorithms.qatalgorithms.pact import PACTIdentity, PACTReLU, PACTReLU6, PACTLeakyReLU
 from quantlib.algorithms.qalgorithms.qatalgorithms.pact import PACTLinear, PACTConv1d, PACTConv2d, PACTConv3d
 
 
-class PTQQATIndex(object):
+class PTQQATRegister(OrderedDict):
     """This object is supposed to be unique (i.e., a singleton)."""
-    def __init__(self):
-        object.__init__(self)
-        self._register: Dict[str, ModuleMapping] = OrderedDict()
 
-    @property
-    def register(self) -> Dict[str, ModuleMapping]:
-        return self._register
+    def __setitem__(self,
+                    acronym:  str,
+                    fp_to_fq: ModuleMapping):  # floating-point to fake-quantised
 
-    def register_algorithm(self,
-                           name: str,
-                           fp_to_fq: ModuleMapping):
+        # validate input type
+        if not isinstance(acronym, str):
+            raise TypeError  # the acronym for a PTQ/QAT algorithm should be a string
+        if not isinstance(fp_to_fq, ModuleMapping):
+            raise TypeError
 
-        name = name.upper()
-        self._register[name] = fp_to_fq
+        # canonicalise
+        acronym = acronym.upper()
+
+        # validate input value
+        if acronym in self.keys():
+            raise ValueError  # the acronym has already be used for another PTQ/QAT algorithm
+
+        super(PTQQATRegister, self).__setitem__(acronym, fp_to_fq)
 
 
 # create indices
-ptqqat_index = PTQQATIndex()
+register = PTQQATRegister()
+
+# -- TO BE EXPANDED BY IMPLEMENTERS OF PTQ/QAT ALGORITHMS -- #
 # register PACT
-ptqqat_index.register_algorithm('PACT', NNMODULE_TO_PACTMODULE)
+register['PACT'] = NNMODULE_TO_PACTMODULE

@@ -6,6 +6,14 @@ from .qmodules import _QModule, _QActivation
 from ...qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 
 
+SUPPORTED_ACTIVATION_FPMODULES = (
+    nn.Identity,
+    nn.ReLU,
+    nn.ReLU6,
+    nn.LeakyReLU,
+)
+
+
 class QIdentity(_QActivation, nn.Identity):
 
     def __init__(self,

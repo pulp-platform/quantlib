@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from .qmodules import _PACTModule, _PACTActivation
-from ...utils import ModuleMapping
+from quantlib.algorithms.qalgorithms import ModuleMapping
 from quantlib.algorithms.qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 from quantlib.algorithms.qmodules import QIdentity, QReLU, QReLU6, QLeakyReLU
 
@@ -95,9 +95,9 @@ class PACTLeakyReLU(_PACTActivation, QLeakyReLU):
         return super(PACTLeakyReLU, self).call_qop(x)
 
 
-NNMODULE_TO_PACTACTIVATION: ModuleMapping = {
-    nn.Identity:  PACTIdentity,
-    nn.ReLU:      PACTReLU,
-    nn.ReLU6:     PACTReLU6,
-    nn.LeakyReLU: PACTLeakyReLU,
-}
+NNMODULE_TO_PACTACTIVATION = ModuleMapping([
+    (nn.Identity,  PACTIdentity),
+    (nn.ReLU,      PACTReLU),
+    (nn.ReLU6,     PACTReLU6),
+    (nn.LeakyReLU, PACTLeakyReLU),
+])

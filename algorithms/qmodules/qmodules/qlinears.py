@@ -8,6 +8,14 @@ from .qmodules import _QModule, _QLinear
 from ...qbase import QRangeSpecType, QGranularitySpecType, QHParamsInitStrategySpecType
 
 
+SUPPORTED_LINEAR_FPMODULES = (
+    nn.Linear,
+    nn.Conv1d,
+    nn.Conv2d,
+    nn.Conv3d,
+)
+
+
 class QLinear(_QLinear, nn.Linear):
 
     def __init__(self,

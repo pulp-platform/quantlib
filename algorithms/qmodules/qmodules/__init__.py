@@ -1,2 +1,4 @@
-from .qactivations import QIdentity, QReLU, QReLU6, QLeakyReLU
-from .qlinears import QLinear, QConv1d, QConv2d, QConv3d
+from .qactivations import SUPPORTED_ACTIVATION_FPMODULES, QIdentity, QReLU, QReLU6, QLeakyReLU
+from .qlinears import SUPPORTED_LINEAR_FPMODULES, QLinear, QConv1d, QConv2d, QConv3d
+
+SUPPORTED_FPMODULES = (*SUPPORTED_ACTIVATION_FPMODULES, *SUPPORTED_LINEAR_FPMODULES)
