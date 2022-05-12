@@ -2,17 +2,19 @@ from functools import partial
 import torch.fx as fx
 from typing import Callable, Dict
 
+from ..base import NNModuleWithCheckers
+from ..base import NNModulePattern
 from .nxfxgraph import NXFXGraph
-from ..base import NNModulePattern, SymbolicTraceFnType, NNModuleWithCheckers
+from .....graphs.fx import SymbolicTraceFnType
 
 
 class GenericNNModulePattern(NNModulePattern):
 
     def __init__(self,
-                 module_with_checkers:    NNModuleWithCheckers,
-                 symbolic_trace_fn:       SymbolicTraceFnType):
+                 symbolic_trace_fn:    SymbolicTraceFnType,
+                 module_with_checkers: NNModuleWithCheckers):
 
-        super(GenericNNModulePattern, self).__init__(module_with_checkers, symbolic_trace_fn)
+        super(GenericNNModulePattern, self).__init__(symbolic_trace_fn, module_with_checkers)
         self._nxg: NXFXGraph = NXFXGraph.from_fx_graph(self.fxg)
 
     @property

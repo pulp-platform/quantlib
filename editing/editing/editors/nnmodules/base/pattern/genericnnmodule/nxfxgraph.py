@@ -7,6 +7,8 @@ import torch.fx as fx
 
 class NXFXGraph(nx.DiGraph):
 
+    # TODO: accept as nodes only those objects that have an `"fx"` attribute which is an `fx.Node` object
+
     def __init__(self):
         super(NXFXGraph, self).__init__()
 

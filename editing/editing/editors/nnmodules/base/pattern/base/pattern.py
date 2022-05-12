@@ -4,8 +4,8 @@ import torch.nn as nn
 import torch.fx as fx
 from typing import Tuple, List, Dict
 
-from .nnmodulewithcheckers import NNModuleChecker, NNModuleWithCheckersSpecType, resolve_nnmodulewithcheckersspec, NNModuleWithCheckers
-from .applicationpoint import NodesMap
+from ....base.applicationpoint import NodesMap
+from .nnmodulewithcheckers import Checker, NNModuleWithCheckers, NNModuleWithCheckersSpecType, resolve_nnmodulewithcheckersspec
 from quantlib.editing.graphs.fx import SymbolicTraceFnType
 from quantlib.editing.graphs.fx import FXOpcodeClasses
 
@@ -14,14 +14,23 @@ class NNModulePattern(object):
     """Base class abstracting a traced ``nn.Module`` with rich semantic checks."""
 
     def __init__(self,
-                 modulewithcheckersspec: NNModuleWithCheckersSpecType,
-                 symbolic_trace_fn:      SymbolicTraceFnType):
+                 symbolic_trace_fn:      SymbolicTraceFnType,
+                 modulewithcheckersspec: NNModuleWithCheckersSpecType):
 
+        self._symbolic_trace_fn = symbolic_trace_fn  # `Rewriter`s built around this pattern should assume that their data graphs have been traced with this function
+
+        # trace the `nn.Module`
         module_with_checkers: NNModuleWithCheckers = resolve_nnmodulewithcheckersspec(modulewithcheckersspec)
+        module_with_checkers.module.eval()  # Note that we trace the validation version of the computational graph: keep this in mind when running pattern matching on data graphs that are in training state.
+        self._gm = self._symbolic_trace_fn(root=module_with_checkers.module)
 
-        self._gm = symbolic_trace_fn(root=module_with_checkers.module)
+        # pull-back the map from `nn.Module`s to `ModuleChecker`s to a map from `fx.Node`s to `ModuleChecker`s
         name_to_pattern_node = self._name_to_pattern_node()
-        self._node_to_checkers: Dict[fx.Node, Tuple[NNModuleChecker, ...]] = {name_to_pattern_node[name]: checkers for name, checkers in module_with_checkers.name_to_checkers.items() if (name_to_pattern_node[name] in self.fxg_module_nodes)}
+        self._node_to_checkers: Dict[fx.Node, Tuple[Checker, ...]] = {name_to_pattern_node[name]: checkers for name, checkers in module_with_checkers.name_to_checkers.items() if (name_to_pattern_node[name] in self.fxg_module_nodes)}
+
+    @property
+    def symbolic_trace_fn(self) -> SymbolicTraceFnType:
+        return self._symbolic_trace_fn
 
     @property
     def gm(self) -> fx.GraphModule:
@@ -36,7 +45,7 @@ class NNModulePattern(object):
         return list(filter(lambda n: (n.op in FXOpcodeClasses.CALL_MODULE.value) and (n.target in set(dict(self.gm.named_children()).keys())), self.fxg.nodes))
 
     @property
-    def node_to_checkers(self) -> Dict[fx.Node, Tuple[NNModuleChecker, ...]]:
+    def node_to_checkers(self) -> Dict[fx.Node, Tuple[Checker, ...]]:
         return self._node_to_checkers
 
     def _name_to_pattern_node(self) -> Dict[str, fx.Node]:

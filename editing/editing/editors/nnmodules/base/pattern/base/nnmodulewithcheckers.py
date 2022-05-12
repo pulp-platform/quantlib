@@ -13,13 +13,16 @@ implementations is exposing these two (immutable) components as attributes:
   * ``name_to_checkers``.
 
 Users of this Python module can describe ``NNModuleWithCheckers`` objects in
-three ways:
-  * An ``NNModuleChecker``.
-  * As a list of ``NNModuleDescription``s (an ``NNModuleDescription`` is a
-    tuple describing how to assemble a named ``nn.Module``). Since a list
+three ways.
+  * An an ``NNModuleChecker``. The solver method is the identity function.
+  * As a list of ``NamedNNModuleDescription``s. A ``NamedNNModuleDescription``
+    is a pair coupling a symbolic name with an ``NNModuleDescription``; an
+    ``NNModuleDescription`` describes how to construct an ``nn.Module``: it
+    is a triad consisting of an ``nn.Module`` class, the arguments to its
+    constructor, and optionally one or more ``NNModuleChecker``s. Since a list
     implicitly describes a chain relationship amongst its items, this
     description is syntactic sugar to create ``nn.Sequential`` objects. A
-    single ``NNModuleDescription`` is also a valid description.
+    single ``NamedNNModuleDescription`` is also a valid description.
   * As an ``nn.Module``. The solver function will silently attach to each
     named sub-module a type checker, i.e., an ``NNModuleChecker`` verifying
     whether a given ``nn.Module`` is of the same type as the sub-module.
@@ -31,8 +34,10 @@ them through the ``resolve_nnmodulewithcheckersspec`` canonicaliser.
 from collections import OrderedDict
 from enum import Enum
 import torch.nn as nn
-from typing import NamedTuple, Tuple, List, Dict, Any, Union, Optional, Callable, Type
+from typing import NamedTuple, Tuple, List, Dict, Union, Optional, Callable, Type, Any
 
+
+# -- DATA STRUCTURE: NNMODULEWITHCHECKERS -- #
 
 NNModuleChecker = Callable[[nn.Module], bool]
 
@@ -41,6 +46,7 @@ CheckersMapType = Dict[str, Union[NNModuleChecker, Tuple[NNModuleChecker, ...]]]
 
 
 class NNModuleWithCheckers(object):
+    # TODO: make this a sub-class of `NamedTuple` with checks in the constructor
 
     def __init__(self,
                  module:           nn.Module,
@@ -63,7 +69,7 @@ class NNModuleWithCheckers(object):
 
         # canonicalise checker tuples
         name_to_checkers = {name: checkers if (isinstance(checkers, tuple) and all(map(lambda c: callable(c), checkers))) else (checkers,) for name, checkers in name_to_checkers.items()}
-        name_to_checkers = {name: (NNModuleWithCheckers._get_type_checker(type(pm)), *name_to_checkers.get(name, tuple())) for name, pm in name_to_module.items()}
+        name_to_checkers = {name: (NNModuleWithCheckers._get_type_checker(type(pm)), *name_to_checkers.get(name, tuple())) for name, pm in name_to_module.items()}  # the first check should always be a type check
 
         # verify whether the argument module satisfies the checkers
         for name, checkers in name_to_checkers.items():
@@ -88,16 +94,20 @@ class NNModuleWithCheckers(object):
         return lambda m: isinstance(m, module_class)
 
 
-# -- SOLVER METHODS -- #
+# -- CANONICALISATION FLOW -- #
 
 class NNModuleDescription(NamedTuple):
-    name:     str
     class_:   Type[nn.Module]
     kwargs:   Dict[str, Any]
     checkers: Optional[Union[NNModuleChecker, Tuple[NNModuleChecker, ...]]] = None
 
 
-NNSequentialDescription = Union[NNModuleDescription, List[NNModuleDescription]]
+class NamedNNModuleDescription(NamedTuple):
+    name:        str
+    description: NNModuleDescription
+
+
+NNSequentialDescription = Union[NamedNNModuleDescription, List[NamedNNModuleDescription]]
 
 
 NNModuleWithCheckersSpecType = Union[NNModuleWithCheckers, NNSequentialDescription, nn.Module]
@@ -110,17 +120,17 @@ def resolve_nnmodulewithcheckers_nnmodulewithcheckersspec(nnmodulewithcheckerssp
 def resolve_nnsequentialdescription_nnmodulewithcheckersspec(nnmodulewithcheckersspec: NNSequentialDescription) -> NNModuleWithCheckers:
 
     # validate input type
-    if not (isinstance(nnmodulewithcheckersspec, NNModuleDescription) or (isinstance(nnmodulewithcheckersspec, list) and all(isinstance(item_, NNModuleDescription) for item_ in nnmodulewithcheckersspec))):
+    if not (isinstance(nnmodulewithcheckersspec, NamedNNModuleDescription) or (isinstance(nnmodulewithcheckersspec, list) and all(isinstance(item_, NamedNNModuleDescription) for item_ in nnmodulewithcheckersspec))):
         raise TypeError
 
     # canonicalise
-    if isinstance(nnmodulewithcheckersspec, NNModuleDescription):
+    if isinstance(nnmodulewithcheckersspec, NamedNNModuleDescription):
         nnmodulewithcheckersspec = [nnmodulewithcheckersspec]
 
     # create the object
-    name_to_module = OrderedDict([(desc.name, desc.class_(**desc.kwargs)) for desc in nnmodulewithcheckersspec])
+    name_to_module = OrderedDict([(name, description.class_(**description.kwargs)) for name, description in nnmodulewithcheckersspec])
     module = nn.Sequential(name_to_module)
-    name_to_checkers = {desc.name: desc.checkers for desc in nnmodulewithcheckersspec if desc.checkers is not None}
+    name_to_checkers = {name: description.checkers for name, description in nnmodulewithcheckersspec if description.checkers is not None}
     module_with_checkers = NNModuleWithCheckers(module=module, name_to_checkers=name_to_checkers)
 
     return module_with_checkers
@@ -132,10 +142,10 @@ def resolve_nnmodule_nnmodulewithcheckersspec(nnmodulewithcheckersspec: nn.Modul
 
 ModuleWithCheckersSpecSolvers = Enum('ModuleWithCheckersSpec',
                                      [
-                                         ('NNMODULEWITHCHECKERS', resolve_nnmodulewithcheckers_nnmodulewithcheckersspec),
-                                         ('NNMODULEDESCRIPTION',  resolve_nnsequentialdescription_nnmodulewithcheckersspec),
-                                         ('LIST',                 resolve_nnsequentialdescription_nnmodulewithcheckersspec),
-                                         ('NN.MODULE',            resolve_nnmodule_nnmodulewithcheckersspec),
+                                         ('NNMODULEWITHCHECKERS',     resolve_nnmodulewithcheckers_nnmodulewithcheckersspec),
+                                         ('NAMEDNNMODULEDESCRIPTION', resolve_nnsequentialdescription_nnmodulewithcheckersspec),
+                                         ('LIST',                     resolve_nnsequentialdescription_nnmodulewithcheckersspec),
+                                         ('NN.MODULE',                resolve_nnmodule_nnmodulewithcheckersspec),
                                      ])
 
 
