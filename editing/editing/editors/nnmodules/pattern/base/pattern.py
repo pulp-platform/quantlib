@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.fx as fx
 from typing import Tuple, List, Dict
 
-from ....base.applicationpoint import NodesMap
+from ...applicationpoint import NodesMap
 from .nnmodulewithcheckers import Checker, NNModuleWithCheckers, NNModuleWithCheckersSpecType, resolve_nnmodulewithcheckersspec
 from quantlib.editing.graphs.fx import SymbolicTraceFnType
 from quantlib.editing.graphs.fx import FXOpcodeClasses
@@ -25,8 +25,9 @@ class NNModulePattern(object):
         self._gm = self._symbolic_trace_fn(root=module_with_checkers.module)
 
         # pull-back the map from `nn.Module`s to `ModuleChecker`s to a map from `fx.Node`s to `ModuleChecker`s
-        name_to_pattern_node = self._name_to_pattern_node()
-        self._node_to_checkers: Dict[fx.Node, Tuple[Checker, ...]] = {name_to_pattern_node[name]: checkers for name, checkers in module_with_checkers.name_to_checkers.items() if (name_to_pattern_node[name] in self.fxg_module_nodes)}
+        name_to_pattern_node = self.name_to_pattern_node()
+        assert set(name_to_pattern_node.keys()).issubset(set(module_with_checkers.name_to_checkers.keys()))
+        self._node_to_checkers: Dict[fx.Node, Tuple[Checker, ...]] = {node: module_with_checkers.name_to_checkers[name] for name, node in name_to_pattern_node.items()}
 
     @property
     def symbolic_trace_fn(self) -> SymbolicTraceFnType:
@@ -48,11 +49,11 @@ class NNModulePattern(object):
     def node_to_checkers(self) -> Dict[fx.Node, Tuple[Checker, ...]]:
         return self._node_to_checkers
 
-    def _name_to_pattern_node(self) -> Dict[str, fx.Node]:
+    def name_to_pattern_node(self) -> Dict[str, fx.Node]:
         return {n.target: n for n in self.fxg_module_nodes}
 
     def name_to_match_node(self, nodes_map: NodesMap) -> Dict[str, fx.Node]:
-        name_to_pattern_node = self._name_to_pattern_node()
+        name_to_pattern_node = self.name_to_pattern_node()
         if not set(name_to_pattern_node.values()).issubset(set(nodes_map.keys())):
             raise RuntimeError  # I assume that each `fx.Node` in the pattern has been mapped to a corresponding data `fx.Node` during matching.
         return {k: nodes_map[v] for k, v in name_to_pattern_node.items()}
@@ -86,7 +87,7 @@ class NNModulePattern(object):
         * solving the sub-graph isomorphism problem returns candidate
           sub-graphs :math:`H \subseteq G` which are isomorphic to :math:`L`;
         * performing signature matching over the attributes of :math:`H` and
-          the attributes of :math:`L` filters the candidate matches to return
+          the attributes of :math:`L` nametomodule the candidate matches to return
           those which have attributes compatible with the prescriptions of the
           pattern :math:`L`.
 

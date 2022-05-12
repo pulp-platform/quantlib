@@ -2,29 +2,31 @@ import torch.nn as nn
 import torch.fx as fx
 from typing import Set, Union
 
-from ..base import NNModuleWithCheckersSpecType, resolve_nnmodulewithcheckersspec
-from ..base import NNModulePattern, SymbolicTraceFnType
+from ..base import NNModuleWithCheckersSpecType
+from ..base.nnmodulewithcheckers import resolve_nnmodulewithcheckersspec
+from ..base import NNModulePattern
+from quantlib.editing.graphs.fx import SymbolicTraceFnType
 
 
 class NNSequentialPattern(NNModulePattern):
 
     def __init__(self,
-                 nnmodulewithcheckersspec: NNModuleWithCheckersSpecType,
-                 symbolic_trace_fn: SymbolicTraceFnType):
+                 symbolic_trace_fn:        SymbolicTraceFnType,
+                 nnmodulewithcheckersspec: NNModuleWithCheckersSpecType):
 
-        # verify that the pattern is an `nn.Sequential` object
         module_with_checkers = resolve_nnmodulewithcheckersspec(nnmodulewithcheckersspec)
         if not isinstance(module_with_checkers.module, nn.Sequential):
             raise TypeError
 
-        super(NNSequentialPattern, self).__init__(module_with_checkers, symbolic_trace_fn)
+        super(NNSequentialPattern, self).__init__(symbolic_trace_fn, nnmodulewithcheckersspec)
+
         self._leakable_nodes: Set[fx.Node] = set()
 
     @property
     def leakable_nodes(self) -> Set[fx.Node]:
         return self._leakable_nodes
 
-    def _set_leakable_nodes(self, nodes: Union[fx.Node, Set[fx.Node]]) -> None:
+    def set_leakable_nodes(self, nodes: Union[fx.Node, Set[fx.Node]]) -> None:
         """It might be not relevant that some target nodes in the match are
         read by downstream ``fx.Node``s outside the match, since one of the
         following conditions will be satisfied:
@@ -33,11 +35,7 @@ class NNSequentialPattern(NNModulePattern):
           * all the users of the target nodes will read the same value after
             the rewriting.
 
-        This function is intended to be called at most once from the
-        constructor method of children classes, after calling the constructor
-        of the parent (i.e., this) class; in this way, the sub-class developer
-        can specify whether certain nodes are to be treated differently during
-        the pattern matching performed by ``PathGraphMatcher``s.
+        This function is intended to be called at most once.
 
         """
 

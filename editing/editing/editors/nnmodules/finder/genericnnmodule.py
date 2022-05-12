@@ -2,20 +2,18 @@ import networkx as nx
 import torch.fx as fx
 from typing import List
 
-from .nxfxgraph import NXFXGraph
-from .pattern import GenericNNModulePattern
-from ..base import NodesMap
-from ...base import Finder
+from ..applicationpoint import NodesMap
+from ..pattern.genericnnmodule.nxfxgraph import NXFXGraph
+from ..pattern import GenericNNModulePattern
+from .base import NNModuleMatcher
 
 
-class GenericGraphMatcher(Finder):
+class GenericGraphMatcher(NNModuleMatcher):
 
     def __init__(self, pattern: GenericNNModulePattern):
-        self._pattern = pattern
-
-    @property
-    def pattern(self) -> GenericNNModulePattern:
-        return self._pattern
+        if not isinstance(pattern, GenericNNModulePattern):
+            raise TypeError
+        super(GenericGraphMatcher, self).__init__(pattern)
 
     def find(self, data_gm: fx.GraphModule) -> List[NodesMap]:
 
@@ -32,4 +30,4 @@ class GenericGraphMatcher(Finder):
         return fx2fx_matches
 
     def check_aps_commutativity(self, aps: List[NodesMap]) -> bool:
-        pass  # TODO: implement the check!
+        return True  # TODO: implement the check!

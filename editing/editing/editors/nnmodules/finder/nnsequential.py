@@ -1,14 +1,16 @@
 import warnings
+from collections import OrderedDict
 import torch.fx as fx
-from typing import List, Set
+from typing import List, Set, Dict
 
-from .pattern import NNSequentialPattern
-from ..base import NodesMap
+from ..applicationpoint import NodesMap
+from ..pattern import NNSequentialPattern
+from .base import NNModuleMatcher
 from quantlib.editing.graphs.fx import FXOpcodeClasses
 from quantlib.utils.messages import quantlib_wng_header
 
 
-class PathGraphMatcher(object):
+class PathGraphMatcher(NNModuleMatcher):
 
     def __init__(self, pattern: NNSequentialPattern):
         """An object to identify path sub-graphs into a target graph.
@@ -43,19 +45,18 @@ class PathGraphMatcher(object):
 
         """
 
-        self._pattern = pattern
-        if not PathGraphMatcher.is_path_graph(self.pattern.fxg):
+        if not isinstance(pattern, NNSequentialPattern):
+            raise TypeError
+        if not PathGraphMatcher.is_path_graph(pattern.fxg):
             raise ValueError
+
+        super(PathGraphMatcher, self).__init__(pattern)
         self._pattern_anchor = next(iter(reversed(self.pattern.fxg.nodes)))
 
         # # decompose the nodes of the pattern/template part (L-term) of the graph rewriting rule
         # self._Kterm_entry = tuple(filter(lambda pn: pn.op in FXOPCODE_PLACEHOLDER, self.pattern.pattern_g.nodes))
         # self._Kterm_exit  = tuple(filter(lambda pn: pn.op in FXOPCODE_OUTPUT, self.pattern.pattern_g.nodes))
         # self._Lterm_body  = tuple(filter(lambda pn: (pn not in self._Kterm_entry) and (pn not in self._Kterm_exit), self.pattern.pattern_g.nodes))
-
-    @property
-    def pattern(self) -> NNSequentialPattern:
-        return self._pattern
 
     # -- TOPOLOGICAL CHECKERS -- #
 
@@ -152,7 +153,7 @@ class PathGraphMatcher(object):
 
             else:  # we are matching the "core" nodes of the pattern
 
-                if not PathGraphMatcher.is_body_node(dn) and not (pn in pattern.leakable_nodes):  # this node can't be modified, since it might be used in scopes other than the one defined by the pattern: back-track
+                if not (PathGraphMatcher.is_body_node(dn) or (pn in pattern.leakable_nodes)):  # this node can't be modified, since it might be used in scopes other than the one defined by the pattern: back-track
                     pass
 
                 else:
@@ -162,10 +163,21 @@ class PathGraphMatcher(object):
 
         return matches
 
+    # @staticmethod
+    # def _overlaps_with_previous_matches(matched_nodes: Set[fx.Node], match: NodesMap) -> bool:
+    #     body_nodes = set(dn for pn, dn in match.items() if (pn.op not in FXOpcodeClasses.IO.value))
+    #     return any(n in matched_nodes for n in body_nodes)
+
     @staticmethod
-    def _overlaps_with_previous_matches(matched_nodes: Set[fx.Node], match: NodesMap) -> bool:
-        body_nodes = set(dn for pn, dn in match.items() if (pn.op not in FXOpcodeClasses.IO.value))
-        return any(n in matched_nodes for n in body_nodes)
+    def _overlaps_with_previous_matches(matched_nodes: Dict[fx.Node, Set[fx.Node]], match: NodesMap) -> bool:
+        temp = OrderedDict([(pn, {dn}) for pn, dn in match.items() if (pn in matched_nodes.keys())])
+        if all((len(matched_nodes[pn].intersection(temp[pn])) == 0) for pn in matched_nodes.keys()):
+            state = False
+            for pn in matched_nodes.keys():
+                matched_nodes[pn] = matched_nodes[pn].union(temp[pn])
+        else:
+            state = True
+        return state
 
     def find(self, data_gm: fx.GraphModule) -> List[NodesMap]:
         """Find the sub-graphs of the data graph matching the pattern graph.
@@ -183,7 +195,8 @@ class PathGraphMatcher(object):
 
         matches: List[NodesMap] = []
 
-        matched_nodes: Set[fx.Node] = set()
+        # matched_nodes: Set[fx.Node] = set()
+        matched_nodes: Dict[fx.Node, Set[fx.Node]] = OrderedDict([(pn, set()) for pn in self.pattern.fxg.nodes if not ((pn.op in FXOpcodeClasses.IO.value) or (pn in self.pattern.leakable_nodes))])
 
         for data_anchor in reversed(data_gm.graph.nodes):
 
@@ -196,9 +209,12 @@ class PathGraphMatcher(object):
                 if not PathGraphMatcher._overlaps_with_previous_matches(matched_nodes, candidate_match):
                     match = candidate_match
                     matches.append(match)
-                    body_nodes    = set(dn for pn, dn in match.items() if (pn.op not in FXOpcodeClasses.IO.value))
-                    matched_nodes = matched_nodes.union(body_nodes)
+                    # body_nodes    = set(dn for pn, dn in match.items() if (pn.op not in FXOpcodeClasses.IO.value))
+                    # matched_nodes = matched_nodes.union(body_nodes)
                 else:
                     warnings.warn(quantlib_wng_header(obj_name=self.__class__.__name__) + "two matches with non-zero overlap were found; the most recently discovered will be discarded.")
 
         return matches
+
+    def check_aps_commutativity(self, aps: List[NodesMap]) -> bool:
+        return True  # TODO: implement the check!

@@ -5,7 +5,7 @@ from typing import Callable, Dict
 from ..base import NNModuleWithCheckers
 from ..base import NNModulePattern
 from .nxfxgraph import NXFXGraph
-from .....graphs.fx import SymbolicTraceFnType
+from quantlib.editing.graphs.fx import SymbolicTraceFnType
 
 
 class GenericNNModulePattern(NNModulePattern):

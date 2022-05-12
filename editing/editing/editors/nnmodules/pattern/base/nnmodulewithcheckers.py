@@ -1,5 +1,5 @@
 """This module implements an abstraction to describe an ``nn.Module`` and
-descriptive checks on its composing sub-modules.
+rich semantic checks on its composing sub-modules.
 
 This abstraction, named ``NNModuleWithCheckers``, pairs:
   * an ``nn.Module``;
@@ -13,16 +13,8 @@ implementations is exposing these two (immutable) components as attributes:
   * ``name_to_checkers``.
 
 Users of this Python module can describe ``NNModuleWithCheckers`` objects in
-three ways.
+two ways.
   * An an ``NNModuleChecker``. The solver method is the identity function.
-  * As a list of ``NamedNNModuleDescription``s. A ``NamedNNModuleDescription``
-    is a pair coupling a symbolic name with an ``NNModuleDescription``; an
-    ``NNModuleDescription`` describes how to construct an ``nn.Module``: it
-    is a triad consisting of an ``nn.Module`` class, the arguments to its
-    constructor, and optionally one or more ``NNModuleChecker``s. Since a list
-    implicitly describes a chain relationship amongst its items, this
-    description is syntactic sugar to create ``nn.Sequential`` objects. A
-    single ``NamedNNModuleDescription`` is also a valid description.
   * As an ``nn.Module``. The solver function will silently attach to each
     named sub-module a type checker, i.e., an ``NNModuleChecker`` verifying
     whether a given ``nn.Module`` is of the same type as the sub-module.
@@ -31,18 +23,17 @@ them through the ``resolve_nnmodulewithcheckersspec`` canonicaliser.
 
 """
 
-from collections import OrderedDict
 from enum import Enum
 import torch.nn as nn
-from typing import NamedTuple, Tuple, List, Dict, Union, Optional, Callable, Type, Any
+from typing import Tuple, Dict, Union, Callable, Type
 
 
-# -- DATA STRUCTURE: NNMODULEWITHCHECKERS -- #
+# -- CANONICAL DATA STRUCTURE -- #
 
-NNModuleChecker = Callable[[nn.Module], bool]
+Checker = Callable[[nn.Module], bool]
 
 
-CheckersMapType = Dict[str, Union[NNModuleChecker, Tuple[NNModuleChecker, ...]]]
+CheckersMapType = Dict[str, Tuple[Checker, ...]]
 
 
 class NNModuleWithCheckers(object):
@@ -50,36 +41,35 @@ class NNModuleWithCheckers(object):
 
     def __init__(self,
                  module:           nn.Module,
-                 name_to_checkers: CheckersMapType):
+                 name_to_checkers: Dict[str, Union[Checker, Tuple[Checker, ...]]]):
 
-        # validate module
+        # validate `module` argument
         if not isinstance(module, nn.Module):
             raise TypeError
-        name_to_module = dict(module.named_children())
+        name_to_module = dict(module.named_modules())
 
-        # validate checker keys
+        # validate `name_to_checkers` argument
+        # keys (type)
         if not all(isinstance(name, str) for name in name_to_checkers.keys()):
             raise TypeError
+        # keys (value)
         if not set(name_to_checkers.keys()).issubset(set(name_to_module.keys())):
             raise ValueError
-
-        # (partially) validate checker tuples
+        # values (type)
         if not all(callable(checkers) or (isinstance(checkers, tuple) and all(callable(c) for c in checkers)) for checkers in name_to_checkers.values()):
             raise TypeError
-
-        # canonicalise checker tuples
+        # values (canonicalise)
         name_to_checkers = {name: checkers if (isinstance(checkers, tuple) and all(map(lambda c: callable(c), checkers))) else (checkers,) for name, checkers in name_to_checkers.items()}
         name_to_checkers = {name: (NNModuleWithCheckers._get_type_checker(type(pm)), *name_to_checkers.get(name, tuple())) for name, pm in name_to_module.items()}  # the first check should always be a type check
-
-        # verify whether the argument module satisfies the checkers
+        # values (value - verify whether the target `nn.Module`s satisfy the conditions set by the checkers)
         for name, checkers in name_to_checkers.items():
             m = module.get_submodule(target=name)
             if not all(c(m) for c in checkers):
                 raise ValueError
 
         # initialise components
-        self._module = module
-        self._name_to_checkers = name_to_checkers
+        self._module: nn.Module = module
+        self._name_to_checkers: CheckersMapType = name_to_checkers
 
     @property
     def module(self) -> nn.Module:
@@ -96,44 +86,11 @@ class NNModuleWithCheckers(object):
 
 # -- CANONICALISATION FLOW -- #
 
-class NNModuleDescription(NamedTuple):
-    class_:   Type[nn.Module]
-    kwargs:   Dict[str, Any]
-    checkers: Optional[Union[NNModuleChecker, Tuple[NNModuleChecker, ...]]] = None
-
-
-class NamedNNModuleDescription(NamedTuple):
-    name:        str
-    description: NNModuleDescription
-
-
-NNSequentialDescription = Union[NamedNNModuleDescription, List[NamedNNModuleDescription]]
-
-
-NNModuleWithCheckersSpecType = Union[NNModuleWithCheckers, NNSequentialDescription, nn.Module]
+NNModuleWithCheckersSpecType = Union[NNModuleWithCheckers, nn.Module]
 
 
 def resolve_nnmodulewithcheckers_nnmodulewithcheckersspec(nnmodulewithcheckersspec: NNModuleWithCheckers) -> NNModuleWithCheckers:
     return nnmodulewithcheckersspec
-
-
-def resolve_nnsequentialdescription_nnmodulewithcheckersspec(nnmodulewithcheckersspec: NNSequentialDescription) -> NNModuleWithCheckers:
-
-    # validate input type
-    if not (isinstance(nnmodulewithcheckersspec, NamedNNModuleDescription) or (isinstance(nnmodulewithcheckersspec, list) and all(isinstance(item_, NamedNNModuleDescription) for item_ in nnmodulewithcheckersspec))):
-        raise TypeError
-
-    # canonicalise
-    if isinstance(nnmodulewithcheckersspec, NamedNNModuleDescription):
-        nnmodulewithcheckersspec = [nnmodulewithcheckersspec]
-
-    # create the object
-    name_to_module = OrderedDict([(name, description.class_(**description.kwargs)) for name, description in nnmodulewithcheckersspec])
-    module = nn.Sequential(name_to_module)
-    name_to_checkers = {name: description.checkers for name, description in nnmodulewithcheckersspec if description.checkers is not None}
-    module_with_checkers = NNModuleWithCheckers(module=module, name_to_checkers=name_to_checkers)
-
-    return module_with_checkers
 
 
 def resolve_nnmodule_nnmodulewithcheckersspec(nnmodulewithcheckersspec: nn.Module) -> NNModuleWithCheckers:
@@ -142,10 +99,8 @@ def resolve_nnmodule_nnmodulewithcheckersspec(nnmodulewithcheckersspec: nn.Modul
 
 ModuleWithCheckersSpecSolvers = Enum('ModuleWithCheckersSpec',
                                      [
-                                         ('NNMODULEWITHCHECKERS',     resolve_nnmodulewithcheckers_nnmodulewithcheckersspec),
-                                         ('NAMEDNNMODULEDESCRIPTION', resolve_nnsequentialdescription_nnmodulewithcheckersspec),
-                                         ('LIST',                     resolve_nnsequentialdescription_nnmodulewithcheckersspec),
-                                         ('NN.MODULE',                resolve_nnmodule_nnmodulewithcheckersspec),
+                                         ('NNMODULEWITHCHECKERS', resolve_nnmodulewithcheckers_nnmodulewithcheckersspec),
+                                         ('NN.MODULE',            resolve_nnmodule_nnmodulewithcheckersspec),
                                      ])
 
 
