@@ -6,8 +6,8 @@ from typing import Optional
 from .onnxannotator import ONNXAnnotator
 
 
-class ONNXExporter:
-    """Base class to export QuantLab-trained networks to ONNX."""
+class ONNXExporter(object):
+    """Base class to export QuantLib-trained networks to ONNX models."""
 
     def __init__(self, annotator: ONNXAnnotator):
         super(ONNXExporter, self).__init__()
@@ -33,5 +33,5 @@ class ONNXExporter:
                           do_constant_folding=True,
                           opset_version=opset_version)
 
-        # annotate the network with backend-specific information
+        # annotate the ONNX model with backend-specific information
         self._annotator.annotate(network, onnxfilepath)

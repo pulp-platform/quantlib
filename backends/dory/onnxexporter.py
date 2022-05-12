@@ -5,11 +5,11 @@ import torch.nn as nn
 from typing import List, NamedTuple
 
 from .onnxannotator import DORYAnnotator
-import quantlib.editing.editing as qle
-import quantlib.editing.graphs as qlg
+from quantlib.backends.base import ONNXExporter
+import quantlib.editing.graphs as qg
 
 
-class DORYExporter(qle.onnxexport.ONNXExporter):
+class DORYExporter(ONNXExporter):
 
     def __init__(self):
         annotator = DORYAnnotator()
@@ -23,18 +23,16 @@ class DORYExporter(qle.onnxexport.ONNXExporter):
 
         To verify the correctness of an ONNX export, DORY requires text files
         containing the values of the features for each layer in the target
-        network.
+        network. The format of these text files is exemplified here:
+
+        https://github.com/pulp-platform/dory_examples/tree/master/examples/Quantlab_examples .
+
         """
 
         class Features(NamedTuple):
             module_name: str
             features:    torch.Tensor
 
-        # To validate the correctness of ONNX exports, DORY requires to dump
-        # text files in a specific format:
-        #
-        #     https://github.com/pulp-platform/dory_examples/tree/master/examples/Quantlab_examples
-        #
         def export_to_txt(module_name: str, filename: str, t: torch.Tensor):
 
             try:  # for the output, this step is not applicable
@@ -62,7 +60,7 @@ class DORYExporter(qle.onnxexport.ONNXExporter):
 
         # 1. set up hooks to intercept features
         for n, m in network.named_modules():
-            if isinstance(m, qlg.Requantisation):  # TODO: we are tacitly assuming that these layers will always output 4D feature arrays
+            if isinstance(m, qg.nn.Requantisation):  # TODO: we are tacitly assuming that these layers will always output 4D feature arrays
                 hook = partial(hook_fn, module_name=n)
                 m.register_forward_hook(hook)
 

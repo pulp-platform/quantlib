@@ -2,24 +2,24 @@ import numpy as np
 import torch.nn as nn
 import onnx
 
-import quantlib.editing.editing as qle
+from quantlib.backends.base import ONNXAnnotator
 
 
-class DORYAnnotator(qle.onnxexport.ONNXAnnotator):
+class DORYAnnotator(ONNXAnnotator):
 
-    def __init__(self, requant_bits: int = 32):
+    def __init__(self, requantisation_bits: int = 32):
 
-        backendname = 'DORY'
-        super(DORYAnnotator, self).__init__(backendname)
+        backend_name = 'DORY'
+        super(DORYAnnotator, self).__init__(backend_name)
 
-        self._requant_bits = requant_bits
+        self._requantisation_bits = requantisation_bits
 
     def _annotate(self,
                   network:      nn.Module,
                   onnxproto:    onnx.ModelProto):
 
         def get_onnxnode_attr_by_name(node: onnx.NodeProto, name: str) -> onnx.AttributeProto:
-            return next(iter([a for a in node.attribute if a.name == name]))
+            return next(iter(filter(lambda a: (a.name == name), node.attribute)))
 
         # Define backend-specific supported ONNX nodes. The nodes belonging to
         # different node classes will be annotated using a class-specific logic.
@@ -40,18 +40,18 @@ class DORYAnnotator(qle.onnxexport.ONNXAnnotator):
                 pytorch_module = network.get_submodule(op_name)
                 if isinstance(pytorch_module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
                     weight_bits = 8   # TODO: VERIFY THAT THE MODULE IS INDEED QUANTISED, and find a way to retrieve the number of levels
-                    bias_bits   = 32  # TODO: document this choice
+                    bias_bits = 32  # TODO: document this choice
                     annotations.append(onnx.helper.make_attribute(key='weight_bits', value=weight_bits))
                     annotations.append(onnx.helper.make_attribute(key='bias_bits',   value=bias_bits))
 
             elif op_type in dory_onnxnode_op_types['mul']:
-                mul_bits = self._requant_bits
+                mul_bits = self._requantisation_bits
                 annotations.append(onnx.helper.make_attribute(key='mult_bits', value=mul_bits))
 
             elif op_type in dory_onnxnode_op_types['add']:
                 is_requant_add = all(i.isnumeric() for i in n.input)
                 if is_requant_add:
-                    add_bits = self._requant_bits
+                    add_bits = self._requantisation_bits
                 else:
                     add_bits = 8  # TODO: document this choice
                 annotations.append(onnx.helper.make_attribute(key='add_bits', value=add_bits))
@@ -67,6 +67,7 @@ class DORYAnnotator(qle.onnxexport.ONNXAnnotator):
             else:  # the backend does not require special handling for this node type
                 pass
 
+            # flush attributes to the ONNX node
             n.attribute.extend(annotations)
 
         # # partition the nodes of the ONNX graph according to the singleton partition over the ONNX node types
