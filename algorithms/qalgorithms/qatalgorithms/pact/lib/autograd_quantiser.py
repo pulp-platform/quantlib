@@ -75,7 +75,7 @@ class _PACTQuantiser(torch.autograd.Function):
         # `eps / 4` is arbitrary: any value between zero and `eps / 2` can
         # guarantee proper saturation both with the flooring and the rounding
         # operations.
-        x_scaled_and_clipped = torch.clamp(x - clip_lo, torch.tensor(0.0), clip_hi + (scale / 4) - clip_lo) / (step * scale)
+        x_scaled_and_clipped = torch.clamp(x - clip_lo, torch.tensor(0.0).to(device=clip_lo.device), clip_hi + (scale / 4) - clip_lo) / (step * scale)  # TODO: is `clip_lo` a reasonably reliable reference to move a newly-generated tensor to a specific device?
 
         # integerise (fused binning and re-mapping)
         x_int = (x_scaled_and_clipped + 0.5).floor() if round else x_scaled_and_clipped.floor()

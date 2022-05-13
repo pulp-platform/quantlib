@@ -22,7 +22,7 @@ class EpsTunnel(nn.Module):
 
         """
         super(EpsTunnel, self).__init__()
-        self._eps_in  = eps
+        self._eps_in  = eps  # TODO: make these attributes "buffers" (so that moving the enclosing `nn.Module` to GPU also affects them)
         self._eps_out = eps
 
     @property

@@ -13,11 +13,11 @@ class Requantisation(nn.Module):
 
         super(Requantisation, self).__init__()
 
-        self.register_buffer('mul', mul)
-        self.register_buffer('add', add)
-        self.register_buffer('div', D)
-        self.zero     = zero
-        self.n_levels = n_levels
+        self.register_buffer('mul',      mul)
+        self.register_buffer('add',      add)
+        self.register_buffer('div',      D)
+        self.register_buffer('zero',     zero)
+        self.register_buffer('n_levels', n_levels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
