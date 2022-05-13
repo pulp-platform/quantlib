@@ -428,16 +428,18 @@ class ModularizeNodePass(FxPass):
 
     def run_pass(self, gm : fx.GraphModule):
         submodule_names = [m[0] for m in gm.named_modules()]
-        if node not in gm.graph.nodes or self.new_target in submodule_names:
+        if self.node not in gm.graph.nodes or self.new_target in submodule_names:
             # either the pass has already been run or we were passed the wrong
             # graphmodule. in either case, quit.
             return gm
 
         gm.add_submodule(self.new_target, self.module)
         with gm.graph.inserting_before(self.node):
-            new_node = gm.graph.call_module(self.new_target, args=self.node_args, kwargs=self.node_kwargs)
+            new_node = gm.graph.call_module(self.new_target, args=self.node.args, kwargs=self.node_kwargs)
 
         self.node.replace_all_uses_with(new_node)
+
+        return gm
 
 class ModularizePass(SequentialPass):
     # replace all nodes with the same op and same target with a module.
@@ -446,6 +448,7 @@ class ModularizePass(SequentialPass):
     # callable which must take the node as an argument
     # replacement_fn(node)
     def __init__(self, op : str, target : Union[list, tuple, str, callable], replacement_fn : callable, name : str):
+        super(SequentialPass, self).__init__()
         self.op = op
         if not isinstance(target, (list, tuple)):
             target = (target,)
@@ -453,7 +456,9 @@ class ModularizePass(SequentialPass):
             target = tuple(target)
         self.target = target
         self.op = op
+        self.name = name
         self.replacement_fn = replacement_fn
+        self.name_prefix = "_MODULARIZE_PASS"
 
     def retarget(self, gm : fx.GraphModule):
         for k in self.named_subpasses().keys():
@@ -463,6 +468,6 @@ class ModularizePass(SequentialPass):
         for node in gm.graph.nodes:
             if node.op == self.op and node.target in self.target:
                 replaced_fn = f"_{node.target.__name__.upper()}" if node.op == 'call_function' else ''
-                passes.append(ModularizeNodePass(node, f"_QL_{self.name.upper()}_MODULARIZED{replaced_fn}_{i}", replacement_fn))
-
-        super(ModularizePass, self).setup_passes(passes)
+                passes.append(ModularizeNodePass(node, f"_QL_{self.name.upper()}_MODULARIZED{replaced_fn}_{i}", self.replacement_fn))
+                i += 1
+        self.setup_passes(passes)

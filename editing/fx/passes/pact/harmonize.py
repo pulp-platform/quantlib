@@ -40,7 +40,7 @@ from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 
 from .pact_util import PACT_symbolic_trace
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass, ModularizePass
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
@@ -171,17 +171,35 @@ class OpTreeReplacementPass(FxPass):
         # and we're done...
         return gm
 
-class MatmulReplacementPass(OpTreeReplacementPass):
-    matmul_node_specs = [('call_function', (torch.bmm, torch.matmul)),
-                      ('call_method', ('matmul',))]
+class ConcatTreeReplacementPass(SequentialPass):
+    cat_node_specs = [('call_function', (torch.cat,))]
+    stack_node_specs = [('call_function', (torch.stack,))]
+
+    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3.):
+        self.n_levels = n_levels
+        self.init_clip = init_clip
+        self.nb_std = nb_std
+        passes = []
+        passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT", always_terminate=True))
+        passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
+        super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
+
+    def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
+
+    def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
+
+class MatmulReplacementPass(ModularizePass):
+
+    @staticmethod
+    def matmul_replacement_fn(node):
+        return (PACTIntegerMatmul(), node.args, node.kwargs)
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        super().__init__(node_specs=self.matmul_node_specs, replacement_fn=self.matmul_replacement_fn, name="MATMUL")
-
-    def matmul_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerMatmul(**self.kwargs)
-
+        target = [torch.matmul, torch.bmm]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = self.matmul_replacement_fn, name="MATMUL_REPLACEMENT_PASS")
 
 class AddTreeReplacementPass(OpTreeReplacementPass):
     add_node_specs = [('call_function', (torch.add, operator.add)),
