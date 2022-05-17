@@ -42,7 +42,7 @@ class F2FQuantiser(ComposedEditor):
                 addtreeqdescriptionspec,
                 addtreeforceoutputeps
             ),
-            QuantLibRetracer(),
+            # QuantLibRetracer(),  # TODO: if we retrace now, calls to `gm.graph.recompile()` executed downstream will remove the control structure defined by the `forward` method of `HarmonisedAdd`, since these container `nn.Module`s have become "invisible"
             QuantiserInterposer(
                 qinterposerqdescriptionspec
             ),
