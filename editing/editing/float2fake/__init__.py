@@ -79,7 +79,7 @@ class F2F8bitPACTConverter(F2FConverter):
         addtreeforceoutputeps = True
 
         # `QuantiserInterposer` argument
-        qinterposerqdescriptionspec = ('per-array', {'bitwidth': 8, 'signed': True},  'minmax', 'PACT')
+        qinterposerqdescriptionspec = ('per-array', {'bitwidth': 8, 'signed': True}, 'minmax', 'PACT')
 
         super(F2F8bitPACTConverter, self).__init__(
             modulewisedescriptionspec,

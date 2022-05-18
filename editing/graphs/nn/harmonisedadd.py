@@ -75,7 +75,7 @@ class HarmonisedAdd(nn.Module):
             qm.stop_observing()
         self._output_qmodule.stop_observing()
 
-    def _harmonise(self) -> None:
+    def harmonise(self) -> None:
 
         if self._use_output_scale:
             ref_module = self._output_qmodule
@@ -93,8 +93,8 @@ class HarmonisedAdd(nn.Module):
 
     def forward(self, *args: Tuple[torch.Tensor]) -> torch.Tensor:
 
-        if self.is_training and self.is_quantised:
-            self._harmonise()
+        if self.is_training and self.is_quantised:  # TODO: this should happen also during the validation, but if we do then `torch.fx` `Tracer`s also track all the operations in the `harmonise` method!
+            self.harmonise()
 
         sum_ = self._input_qmodules[0](args[0])
         for i, (qm, x) in enumerate(zip(self._input_qmodules[1:], args[1:])):
