@@ -196,6 +196,12 @@ class PACTActController(Controller):
             except AttributeError:
                 pass
 
+        for k, b in m.clipping_params.items():
+            if k == 'high':
+                b.data = max_val
+            elif k == 'low':
+                b.data = min_val
+
         if m.tqt:
             # initialize the log_t parameter correctly
             if isinstance(m, PACTUnsignedAct):
@@ -204,11 +210,6 @@ class PACTActController(Controller):
                 log_t = torch.log2(-m.clip_lo)
             m.log_t.data.copy_(log_t.reshape(m.log_t.shape))
 
-        for k, b in m.clipping_params.items():
-            if k == 'high':
-                b.data = max_val
-            elif k == 'low':
-                b.data = min_val
 
     def step_pre_validation_epoch(self, *args, **kwargs):
         self.step_pre_training_batch()
