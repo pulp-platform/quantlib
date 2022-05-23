@@ -40,7 +40,7 @@ from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBN
 from ...util import gm_modules, module_of_node, get_ordered_active_nodes
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift
+from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold1d, ChannelwiseThreshold2d
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
@@ -149,7 +149,6 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     conv = matched_modules[0]
     assert isinstance(conv, (PACTConv1d, PACTConv2d)), f"integerize_pact_conv_fun got bad match - expected PACTConv, got {type(conv)}"
     assert conv.bias is None, "integerize_pact_conv_fun: Conv layer has bias"
-
     conv_type = nn.Conv2d if isinstance(conv, PACTConv2d) else nn.Conv1d
     new_conv = conv_type(in_channels=conv.in_channels,
                          out_channels=conv.out_channels,
@@ -365,6 +364,109 @@ class IntegerizeBNActPass(SequentialPass):
             passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node))
 
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
+
+
+def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_style_threshs=False):
+    modules = dict(gm.named_modules())
+    matched_nodes = [n for n in match.nodes_map.values()][-2:0:-1]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    assert len(matched_nodes) == len(matched_modules), "conv_bn_act_to_conv_threshold_fun got unexpected non-'call_module' nodes!"
+    conv = matched_modules[0]
+    conv_node = matched_nodes[0]
+    assert isinstance(conv, (nn.Conv1d, nn.Conv2d)), f"conv_bn_act_to_conv_threshold_fun called on incompatible Conv layer {type(conv)}"
+    if len(matched_modules) == 2:
+        act = matched_modules[1]
+        act_node = matched_nodes[1]
+        bn = None
+    else:
+        assert len(matched_modules) == 3, "conv_bn_act_to_conv_threshold_fun expected match of length 1 or 2!"
+        act = matched_modules[2]
+        act_node = matched_nodes[2]
+        bn = matched_modules[1]
+        bn_node = matched_nodes[1]
+        assert isinstance(bn, (nn.BatchNorm1d, nn.BatchNorm2d)), f"conv_bn_act_to_conv_threshold_fun called on incompatible BN layer {type(bn)}"
+    assert isinstance(act, (PACTUnsignedAct)), f"conv_bn_act_to_conv_threshold_fun called on incompatible activation {type(act)}"
+
+    eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze() # todo: ist this correct for the first activation (eps_in=1*eps_w)?
+    eps_out = act_node.meta['quant'].eps_out.cpu().clone().detach().squeeze()
+    prev_eps_out = eps_in[0] / conv.get_eps_w()[0].squeeze() # TODO: is this correct?
+    # TODO: what should I do if there is no BN and/or an identity operation?
+    ## if the requant node would perform an identity operation, don't insert it.
+    #if eps_in.numel() == eps_out.numel() == 1 and eps_in == eps_out and bn is None:
+    #    return None
+
+    if conv.bias is None:
+        bias = torch.zeros(conv.out_channels)
+    else:
+        bias = conv.bias.data
+
+    for pos, node in enumerate(gm.graph.nodes):
+        if node == conv_node or pos > 1:
+            break
+    assert node.op == 'call_module'
+
+    # TODO: Is this too hacky?
+    if pos == 1: # if the position of the node in the graph is 1, then it is the first node
+        bias_hat = bias
+    else:
+        bias_add = conv.weight_q.sum(dim=(1,2,3)) \
+            if len(conv.weight_q.shape)==4 else conv.weight_q.sum(dim=(1,2))
+        bias_add *= prev_eps_out
+        bias_hat = bias + bias_add
+
+    beta_hat = (bias_hat - bn.running_mean.data)/torch.sqrt(bn.running_var.data+bn.eps)
+    gamma_hat = 1/torch.sqrt(bn.running_var.data+bn.eps)
+    if bn.affine:
+        beta_hat *= bn.weight.data
+        beta_hat += bn.bias.data
+        gamma_hat *= bn.weight.data
+
+    thresh_lo = (0.5*eps_out-beta_hat)/(gamma_hat*eps_in)
+    thresh_hi = (1.5*eps_out-beta_hat)/(gamma_hat*eps_in)
+    # if some gamma_hats/gammas are negative, the smaller than/larger than relationships are flipped there.
+    # the weights in the convolution preceding the BN will be flipped for those channels, so we can simply flip the
+    # thresholds. Important: flip BEFORE rounding otherwise they will be off by one :)
+    if bn.affine:
+        flip_idxs = bn.weight.data < 0
+        thresh_hi[flip_idxs] *= -1
+        thresh_lo[flip_idxs] *= -1
+
+    thresh_hi = torch.ceil(thresh_hi)
+    # CUTIE's upper thresholding condition is:
+    # th(x) = 1 if x > thresh_hi
+    # so we need to reduce the threshold by 1
+    if cutie_style_threshs:
+        thresh_hi = thresh_hi - 1
+    thresh_lo = torch.ceil(thresh_lo)
+
+    assert torch.all(thresh_lo <= thresh_hi), 'All thresh_lo need to be <= thresh_hi'
+
+    new_conv = deepcopy(conv)
+    if isinstance(conv, nn.Conv1d):
+        threshold_module = ChannelwiseThreshold1d(thresh_lo, thresh_hi)
+    else:
+        threshold_module = ChannelwiseThreshold2d(thresh_lo, thresh_hi)
+    replacement_sequence = nn.Sequential(new_conv, threshold_module)
+
+    return replacement_sequence
+
+
+class ReplaceConvBNActWithConvThresholdPass(SequentialPass):
+    def __init__(self):
+        passes = []
+        # replace all combinations of BN + PACT activation with Threshold layers
+        for conv_name, conv_type in [('CONV1D', nn.Conv1d), ('CONV2D', nn.Conv2d)]:
+            for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
+                for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d)]:
+                    pattern = nn.Sequential(conv_type(1,1,1), bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
+                    passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, conv_bn_act_to_conv_threshold_fun, f"_{bn_name}_{act_name}_TO_THRESHOLD_PASS"))
+
+            #also replace "freestanding" activations AFTER replacing the BN+Act stacks
+            pattern = nn.Sequential(conv_type(1,1,1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, conv_bn_act_to_conv_threshold_fun, f"_{act_name}_TO_THRESHOLD_PASS"))
+
+        super(ReplaceConvBNActWithConvThresholdPass, self).__init__(*passes, name_prefix="_BN_ACT_TO_THRESHOLD_PASS")
+
 
 def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -643,6 +745,10 @@ class IntegerizePACTNetPass(SequentialPass):
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
             passes.append(FixChannelNumbersPass())
+        # Look for Conv-BN-Acts and replace the BN-Act with Threshold layers. Convs are not modified
+        passes.append(ReplaceConvBNActWithConvThresholdPass())
+        # Separate the Sequential generated by the previous pass
+        passes.append(RetracePass(PACT_symbolic_trace))
         # with epsilons annotated everywhere, we can integerize linear
         # functions (conv and FC)
         passes.append(IntegerizePACTConvPass())
@@ -651,6 +757,5 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeSoftmaxPass())
         passes.append(IntegerizeLayerNormPass())
         passes.append(IntegerizeGELUPass())
-        passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
         passes.append(IntegerizeEmbeddingsPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")
