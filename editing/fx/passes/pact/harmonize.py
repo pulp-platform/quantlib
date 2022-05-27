@@ -38,7 +38,6 @@ from ...util import gm_modules, get_qualified_prefix
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 
-
 from .pact_util import PACT_symbolic_trace
 from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass, ModularizePass
 
@@ -190,6 +189,18 @@ class ConcatTreeReplacementPass(SequentialPass):
     def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
 
+class TruedivReplacementPass(ModularizePass):
+
+    @staticmethod
+    def truediv_replacement_fn(node, Delta):
+        return (PACTDiv(Delta), node.args, node.kwargs)
+
+    def __init__(self, Delta=2**14, **kwargs):
+        self.kwargs = kwargs
+        target = [operator.truediv]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, Delta=Delta), name="MATMUL_REPLACEMENT_PASS")
+
+
 class MatmulReplacementPass(ModularizePass):
 
     @staticmethod
@@ -198,7 +209,7 @@ class MatmulReplacementPass(ModularizePass):
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        target = [torch.matmul, torch.bmm]
+        target = [torch.matmul]
         super().__init__(op='call_function', target=tuple(target), replacement_fn = self.matmul_replacement_fn, name="MATMUL_REPLACEMENT_PASS")
 
 class AddTreeReplacementPass(OpTreeReplacementPass):
@@ -214,7 +225,6 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
 
 
     def add_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-
         return PACTIntegerAdd(num_args=len(tree.args),  **self.kwargs)
 
 class MulReplacementPass(OpTreeReplacementPass):
@@ -369,142 +379,60 @@ class LayerNormDisassemblePass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
         super().__init__(*passes, name_prefix='_LAYERNORM_DISASSEMBLE_PASS')
 
-def apply_pass_to_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, _tracer = None):
+def apply_wrap_module_fun(node, _pass, _tracer):
 
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    wrap_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    wrap_module = matched_modules[0]
-    n_levels = wrap_module.n_levels
-    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+    module = dict(node.graph._owning_module.named_modules())[node.target]
 
-    cloneModule = copy.deepcopy(wrap_module.module)
+    cloneModule = copy.deepcopy(module.module)
     fx_graph = _tracer.trace(cloneModule)
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
-
     fx_model = _pass.apply(fx_model)
-    node = PACTWrapModule(fx_model, n_levels, wrap_module._dict)
 
-    return node
+    returnNode = PACTWrapModule(fx_model, module.n_levels, None, module.quantize)
+    return returnNode, node.args, node.kwargs
 
-
-class ApplyPassToWrapModule(SequentialPass):
+class ApplyPassToWrapModule(ModularizePass):
     def __init__(self, _pass, name=''):
-        passes = []
-        pattern = nn.Sequential(PACTWrapModule(nn.Identity(), n_levels=256))
-
+        pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
         tracer = LeafTracer(PACT_OPS_INCLUSIVE)
         trace = partial(custom_symbolic_trace, tracer=tracer)
 
-        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(apply_pass_to_wrap_module, _pass=_pass, _tracer=tracer), f'_WRAP_PASS_{name}_subpass'))
-        super().__init__(*passes, name_prefix='_WRAP_PASS_{name}_subpass')
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(apply_wrap_module_fun, _pass=_pass, _tracer=tracer), name=f"APPLY_TO_WRAP_PASS_{name}")
 
-def insert_final_activation(fx_model, n_levels):
+def integerize_wrap_module_fun(node, _pass, _tracer, _shape_fun: lambda node: node.meta['tensor_meta'].shape):
 
-    #     SCHEREMO: That's a hack
-    node = list(fx_model.graph.nodes.__reversed__())[1]
-    totidx = 0
-    with fx_model.graph.inserting_after(node):
+    shape_in = _shape_fun(node)
+    eps_in = node.meta['quant'].eps_in[0]
+    runnablePass = _pass(shape_in, eps_in)
+    module = dict(node.graph._owning_module.named_modules())[node.target]
 
-        new_node_target = f'__QL__WRAPPASS__PACTAct_{totidx}'
-        target_prefix = get_qualified_prefix(node.target)
-        if type(target_prefix) == str and target_prefix != '':
-            new_node_target = '.'.join([target_prefix, new_node_target])
-
-        fx_model.add_submodule(new_node_target, PACTAsymmetricAct(n_levels, leaky=0, act_kind='identity', symm=True, init_clip='max', learn_clip=True))
-        #fx_model.add_submodule(new_node_target, qa.pact.PACTUnsignedAct(n_levels, leaky=0, act_kind='relu'))
-        new_node = fx_model.graph.call_module(new_node_target, args=tuple([node]))
-        totidx = totidx + 1
-
-    for output_node in list(node.users):
-        helperList = list(output_node.args)
-        for idx, arg in enumerate(helperList):
-            if arg == node:
-                helperList[idx] = new_node
-
-        output_node.args = tuple(helperList)
-
-    new_node.args = tuple([node])
-
-    # re-route the input of the second linop to the output of the asymmetric quant
-    # X ---> Y                X ---> PACTAct ---> Y
-    #    |             ====>
-    #    |--> PACTAct
-
-    fx_model.graph.lint()
-    fx_model.recompile()
-    return fx_model
-
-
-def integerize_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, _tracer = None):
-
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    wrap_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    wrap_module = matched_modules[0]
-    n_levels = wrap_module.n_levels
-    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
-
-    # SCHEREMO: Workaround SPECIFICALLY for MultiHead Self-Attention
-    eps_in = torch.tensor(wrap_node.meta['quant'].eps_in[0])[0]
-    shapes_in = [wrap_node.meta['tensor_meta'].shape]*3
-    cloneModule = copy.deepcopy(wrap_module.module)
-
+    cloneModule = copy.deepcopy(module.module)
     fx_graph = _tracer.trace(cloneModule)
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
+    fx_model = runnablePass.apply(fx_model)
 
-    # fx_model = insert_final_activation(fx_model, n_levels)
+    returnNode = PACTWrapModule(fx_model, module.n_levels, None, False)
+    return returnNode, node.args, node.kwargs
 
-    IntegerizePass = _pass(shapes_in, eps_in = eps_in)
-    fx_model = IntegerizePass.apply(fx_model)
-    node = PACTWrapModule(fx_model, n_levels, wrap_module._dict)
-
-    return node
-
-
-class IntegerizeWrapModules(SequentialPass):
-    def __init__(self, _pass, name=''):
-        passes = []
-        pattern = nn.Sequential(PACTWrapModule(nn.Identity(), 256))
-
+class IntegerizeWrapModule(ModularizePass):
+    def __init__(self, _pass, name='', shape_fun = None):
+        pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
         tracer = LeafTracer(PACT_OPS_INCLUSIVE)
         trace = partial(custom_symbolic_trace, tracer=tracer)
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(integerize_wrap_module_fun, _pass=_pass, _tracer=tracer, _shape_fun=shape_fun), name=f"APPLY_TO_WRAP_PASS_{name}")
 
-        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(integerize_wrap_module, _pass=_pass, _tracer=tracer), f'_WRAP_PASS_INTEGERIZE_subpass'))
-        super().__init__(*passes, name_prefix='_WRAP_PASS_INTEGERIZE_subpass')
 
-def wrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None, n_levels=256, _tracer=None, **kwargs):
+def wrap_module_fun(node, n_levels, kwargs, quantize):
 
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    wrap_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    wrap_module = matched_modules[0]
-    assert isinstance(wrap_module, wrapClass), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+    module = dict(node.graph._owning_module.named_modules())[node.target]
+    returnNode = PACTWrapModule(module, n_levels, node.kwargs, quantize = quantize)
+    return returnNode, node.args, node.kwargs
 
-    cloneModule = copy.deepcopy(wrap_module)
-
-    fx_graph = _tracer.trace(cloneModule)
-    fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
-
-    x_model = insert_final_activation(fx_model, n_levels)
-
-    node = PACTWrapModule(fx_model, n_levels, wrap_module.__dict__)
-
-    return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
-
-class WrapModulePass(SequentialPass):
-    def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, **kwargs):
-        passes = []
-        pattern = nn.Sequential(wrapClassCallable())
-
-        tracer = LeafTracer(PACT_OPS | set([wrapClass]))
-        trace = partial(custom_symbolic_trace, tracer=tracer)
-
-        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(wrap_module_fun, wrapClass=wrapClass, n_levels=n_levels, _tracer=tracer), f'_WRAP_{name}_PASS'))
-        super().__init__(*passes, name_prefix='_WRAP_{name}_PASS')
+class WrapModulePass(ModularizePass):
+    def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, quantize = False, **kwargs):
+        self.kwargs = kwargs
+        pattern = [wrapClassCallable()]
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, kwargs=self.kwargs, quantize=quantize), name="MATMUL_REPLACEMENT_PASS")
 
 def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
 

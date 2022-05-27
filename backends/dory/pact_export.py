@@ -1,23 +1,23 @@
 #
 # pact_export.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from functools import partial
 from pathlib import Path
@@ -172,9 +172,9 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
 
     # open the supplied input image
     if in_data is not None:
-        im_tensor = in_data.clone()
+        im_tensor = in_data.clone().to(dtype=torch.float64)
         net_integerized = net_integerized.to(dtype=torch.float64)
-        output = net_integerized(im_tensor.to(dtype=torch.float64))
+        output = net_integerized(im_tensor)
 
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):

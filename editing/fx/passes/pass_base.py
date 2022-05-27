@@ -431,14 +431,18 @@ class ModularizeNodePass(FxPass):
         if self.node not in gm.graph.nodes or self.new_target in submodule_names:
             # either the pass has already been run or we were passed the wrong
             # graphmodule. in either case, quit.
+            import IPython; IPython.embed()
             return gm
 
         gm.add_submodule(self.new_target, self.module)
         with gm.graph.inserting_before(self.node):
             new_node = gm.graph.call_module(self.new_target, args=self.node.args, kwargs=self.node_kwargs)
 
-        self.node.replace_all_uses_with(new_node)
+        if self.node.op == 'call_module':
+            gm.delete_submodule(self.node.target)
 
+        self.node.replace_all_uses_with(new_node)
+        gm.graph.erase_node(self.node)
         return gm
 
 class ModularizePass(SequentialPass):
@@ -466,8 +470,20 @@ class ModularizePass(SequentialPass):
         i = 0
         passes = []
         for node in gm.graph.nodes:
-            if node.op == self.op and node.target in self.target:
+
+            if self.op == 'call_module' and node.op == self.op:
+                # Match on the class of the target
+                targetClass = type(dict(gm.named_modules())[node.target])
+                for _target in self.target:
+                    ownClass = type(_target)
+                    if targetClass == ownClass:
+                        replaced_fn = f"_{node.target.__name__.upper()}" if node.op == 'call_function' else ''
+                        passes.append(ModularizeNodePass(node, f"_QL_{self.name.upper()}_MODULARIZED{replaced_fn}_{i}", self.replacement_fn))
+                        i += 1
+
+            elif node.op == self.op and node.target in self.target:
                 replaced_fn = f"_{node.target.__name__.upper()}" if node.op == 'call_function' else ''
                 passes.append(ModularizeNodePass(node, f"_QL_{self.name.upper()}_MODULARIZED{replaced_fn}_{i}", self.replacement_fn))
                 i += 1
+
         self.setup_passes(passes)

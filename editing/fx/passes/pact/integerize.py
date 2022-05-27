@@ -32,7 +32,7 @@ from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
 
-from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
+from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass, ModularizePass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
 from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBNBetweenBiasedConvAndActsPass
@@ -97,6 +97,31 @@ def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True):
         new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)
 
     return new_layernorm
+
+def integerize_truediv_fun(gm : fx.GraphModule, match : Match, affine = True):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    layernorm_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(layernorm_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTDiv), f"integerize_layernorm_fun got bad match - expected PACTDiv, got {type(module)}"
+
+    new_div = PACTIntegerDiv(module.Delta)
+
+    return new_div
+
+
+class IntegerizeTrueDivPass(ModularizePass):
+    @staticmethod
+    def truediv_replacement_fn(node):
+        module = dict(node.graph._owning_module.named_modules())[node.target]
+        return (PACTIntegerDiv(module.Delta), node.args, node.kwargs)
+
+    def __init__(self, Delta=2**14, **kwargs):
+        self.kwargs = kwargs
+        target = [PACTDiv(Delta)]
+        super().__init__(op='call_module', target=tuple(target), replacement_fn = self.truediv_replacement_fn, name="TRUEDIV_REPLACEMENT_PASS")
 
 class IntegerizeLayerNormPass(SequentialPass):
     def __init__(self, affine = True, **kwargs):
@@ -571,4 +596,5 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeGELUPass())
         passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
         passes.append(IntegerizeEmbeddingsPass())
+        passes.append(IntegerizeTrueDivPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")

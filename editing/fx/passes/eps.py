@@ -24,6 +24,8 @@ import copy
 from typing import Union, Optional
 from dataclasses import dataclass
 
+from collections.abc import Iterable
+
 import numpy as np
 
 import torch
@@ -69,9 +71,9 @@ def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
 def eps_conversion_identity(*eps_ins):
     return eps_ins[0]
 
-def eps_conversion_truediv(*eps_ins, **kwargs):
-    import IPython; IPython.embed()
-    return eps_ins[0]
+def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
+
+    return eps_ins[0]/(eps_ins[1]*m.Delta)
 
 # def eps_conversion_mul(*eps_ins):
 #     try:
@@ -115,12 +117,13 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTLayerNorm : eps_conversion_pact_layernorm,
                     PACTIntegerMatmul: eps_conversion_matmul,
 
+                    f'_CALL_FUNCTION_{repr(operator.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
                     '_CALL_METHOD_reshape' : eps_conversion_identity,
 #                     f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
-                    f'_CALL_FUNCTION_{repr(operator.truediv)}' : eps_conversion_truediv,
+                    PACTDiv : eps_conversion_truediv,
                     Multiply : eps_conversion_mul
 }
 
@@ -131,6 +134,9 @@ def n_levels_out_invalid(m : nn.Module, in_levels : list, accumulator_levels : i
     assert False, f"Module class: {type(m)} does not have a valid n_levels_out getter!"
 
 def n_levels_out_pact_linears(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    return accumulator_levels
+
+def n_levels_out_truediv(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
     return accumulator_levels
 
 def n_levels_out_pact_acts(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
@@ -153,6 +159,8 @@ _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
                       PACTIntegerMatmul : n_levels_out_pact_linears,
                       PACTSoftmax : n_levels_out_pact_acts,
                       PACTIntegerSoftmax : n_levels_out_pact_acts,
+                      f'_CALL_FUNCTION_{repr(operator.truediv)}' : n_levels_out_truediv,
+                      f'_CALL_FUNCTION_{repr(operator.matmul)}' : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(torch.matmul)}' : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(torch.bmm)}' : n_levels_out_pact_linears,}
 
@@ -166,14 +174,18 @@ class QuantInfo:
 class AnnotateEpsPass(FxPass):
     def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32):
         super(AnnotateEpsPass, self).__init__()
-        if not isinstance(eps_in, torch.Tensor) and eps_in is not None:
-            self.eps_in = torch.tensor(eps_in).reshape(-1)
+
+        if isinstance(eps_in, Iterable):
+            self.eps_in = eps_in
+            self.noeps = False
+        elif not isinstance(eps_in, torch.Tensor) and eps_in is not None:
+            self.eps_in = [torch.tensor(eps_in).reshape(-1)]
             self.noeps = False
         elif eps_in is None:
-            self.eps_in = torch.tensor(1.0).reshape(1)
+            self.eps_in = [torch.tensor(1.0).reshape(1)]
             self.noeps = True
         else:
-            self.eps_in = eps_in.reshape(-1)
+            self.eps_in = [eps_in.reshape(-1)]
             self.noeps = False
 
         if n_levels_in is None:
@@ -182,13 +194,14 @@ class AnnotateEpsPass(FxPass):
         self.n_levels_in = n_levels_in
 
         self.accumulator_levels = accumulator_levels
-
+        self.placeHolderIdx = 0
 
     def run_pass(self, gm : fx.GraphModule):
         modules = gm_modules(gm)
         for node in gm.graph.nodes:
             if node.op == 'placeholder':
-                node.meta['quant'] = QuantInfo(eps_in=self.eps_in, eps_out=self.eps_in, n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in)
+                node.meta['quant'] = QuantInfo(eps_in=self.eps_in[self.placeHolderIdx], eps_out=self.eps_in[self.placeHolderIdx], n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in)
+                self.placeHolderIdx += 1
                 for u in node.users:
                     if self.noeps:
                         assert u.op == 'call_module' and isinstance(module_of_node(gm, u), _ORIGINAL_EPS_MODULES), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
@@ -225,7 +238,7 @@ class AnnotateEpsPass(FxPass):
                     node_out_levels = _N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
                 except KeyError:
                     print(f"key {k} not found in _N_LEVELS_OUT_PROP!")
-                    assert node_in_levels[1:] == node_in_levels[:-1], "Mismatching input n_levels in node with no n_levels_out propagation function! "
+                    #assert node_in_levels[1:] == node_in_levels[:-1], "Mismatching input n_levels in node with no n_levels_out propagation function! "
                     node_out_levels = node_in_levels[0]
 
                 node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels)
