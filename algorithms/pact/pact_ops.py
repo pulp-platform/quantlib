@@ -65,7 +65,9 @@ __all__ = [
     'PACTHardswish',
     'PACTHardsigmoid',
     'PACTIntegerHardswish',
-    'PACTIntegerHardsigmoid'
+    'PACTIntegerHardsigmoid',
+    'ChannelwiseThreshold2d',
+    'ChannelwiseThreshold1d'
 ]
 
 
@@ -345,55 +347,59 @@ class HardActRequantShift(nn.Module):
         x1 = torch.clip(x1, clip_lo, clip_hi)
         return x1
 
-class _ChannelwiseThreshold(nn.Module):
+class ChannelwiseThreshold2d(nn.Module):
 
     class MyChannelwiseThreshold(torch.autograd.Function):
 
         @staticmethod
         def forward(ctx, x, thresh_lo, thresh_hi):
-            tmp1 = -1*(x < thresh_lo).float()
-            tmp2 = (x >= thresh_hi).float()
+            tmp1 = -1*(x < thresh_lo).type_as(x)
+            tmp2 = (x >= thresh_hi).type_as(x)
 
             return tmp1 + tmp2
 
         @staticmethod
         @parse_args('v', 't', 't')
         def symbolic(g, x, thresh_lo, thresh_hi):
-            pass
+            thresh_lo_ = g.op("Constant", value_t=thresh_lo)
+            thresh_hi_ = g.op("Constant", value_t=thresh_hi)
+            return g.op("PACTOps::ChannelwiseThreshold2d", x, thresh_lo_t=thresh_lo, thresh_hi_t=thresh_hi)
 
-    def __init__(self):
-        super(_ChannelwiseThreshold, self).__init__()
+    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor):
+        super(ChannelwiseThreshold2d, self).__init__()
+        self.register_buffer('thresh_lo', thresh_lo.reshape(-1, 1, 1).clone().detach())
+        self.register_buffer('thresh_hi', thresh_hi.reshape(-1, 1, 1).clone().detach())
 
     def forward(self, x):
-        return self.MyChannelwiseThreshold.apply(x, self.thresh_lo.type_as(x), self.thresh_hi.type_as(x))
+        return self.MyChannelwiseThreshold.apply(x, self.thresh_lo.data.type_as(x), self.thresh_hi.data.type_as(x))
 
-class ChannelwiseThreshold1d(_ChannelwiseThreshold):
 
-    @staticmethod
-    @parse_args('v', 't', 't')
-    def symbolic(g, x, thresh_lo, thresh_hi):
-        thresh_lo_ = g.op("Constant", value_t=thresh_lo)
-        thresh_hi_ = g.op("Constant", value_t=thresh_hi)
-        return g.op("PACTOps::ChannelwiseThreshold1d", x, thresh_lo_t=thresh_lo_, thresh_hi_t=thresh_hi_)
+class ChannelwiseThreshold1d(nn.Module):
+
+    class MyChannelwiseThreshold(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, thresh_lo, thresh_hi):
+            tmp1 = -1*(x < thresh_lo).type_as(x)
+            tmp2 = (x >= thresh_hi).type_as(x)
+
+            return tmp1 + tmp2
+
+        @staticmethod
+        @parse_args('v', 't', 't')
+        def symbolic(g, x, thresh_lo, thresh_hi):
+            thresh_lo_ = g.op("Constant", value_t=thresh_lo)
+            thresh_hi_ = g.op("Constant", value_t=thresh_hi)
+            return g.op("PACTOps::ChannelwiseThreshold1d", x, thresh_lo_t=thresh_lo, thresh_hi_t=thresh_hi)
 
     def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor):
         super(ChannelwiseThreshold1d, self).__init__()
         self.register_buffer('thresh_lo', thresh_lo.reshape(-1, 1).clone().detach())
         self.register_buffer('thresh_hi', thresh_hi.reshape(-1, 1).clone().detach())
 
-class ChannelwiseThreshold2d(_ChannelwiseThreshold):
+    def forward(self, x):
+        return self.MyChannelwiseThreshold.apply(x, self.thresh_lo.data.type_as(x), self.thresh_hi.data.type_as(x))
 
-    @staticmethod
-    @parse_args('v', 't', 't')
-    def symbolic(g, x, thresh_lo, thresh_hi):
-        thresh_lo_ = g.op("Constant", value_t=thresh_lo)
-        thresh_hi_ = g.op("Constant", value_t=thresh_hi)
-        return g.op("PACTOps::ChannelwiseThreshold2d", x, thresh_lo_t=thresh_lo_, thresh_hi_t=thresh_hi_)
-
-    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor):
-        super(ChannelwiseThreshold2d, self).__init__()
-        self.register_buffer('thresh_lo', thresh_lo.reshape(-1, 1, 1).clone().detach())
-        self.register_buffer('thresh_hi', thresh_hi.reshape(-1, 1, 1).clone().detach())
 
 class PACTEmbedding(torch.nn.Module):
 
