@@ -210,6 +210,47 @@ class IntegerizePACTLinearPass(ReplaceSequentialPatternPass):
         name = "_INTEGERIZE_PACT_LIN_PASS"
         super(IntegerizePACTLinearPass, self).__init__(pattern, PACT_symbolic_trace, integerize_pact_linear_fun, name)
 
+def swap_maxpool_act_fun(gm : fx.GraphModule, match : Match):
+    modules = gm_modules(gm)
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    maxpool = matched_modules[0]
+    act = matched_modules[1]
+    assert isinstance(maxpool, (nn.MaxPool2d)), f"swap_maxpool_act_fun got bad match - expected torch.nn.MaxPool2d, got {type(maxpool)}"
+    assert isinstance(act, (PACTUnsignedAct, PACTAsymmetricAct)), f"swap_maxpool_act_fun got bad match - expected 'PACTUnsignedAct' or 'PACTAsymmetricAct', got {type(act)}"
+
+    maxpool_type = nn.MaxPool2d
+    act_type = PACTUnsignedAct if isinstance(act, PACTUnsignedAct) else PACTAsymmetricAct
+
+    replacement_sequence = nn.Sequential(
+        act_type(n_levels=act.n_levels,
+                init_clip=act.init_clip,
+                learn_clip=act.learn_clip,
+                act_kind=act.act_kind,
+                leaky=act.leaky,
+                nb_std=act.nb_std,
+                tqt=act.tqt,
+                tqt_beta=act.tqt_beta,
+                tqt_clip_grad=act.tqt_clip_grad),
+        maxpool_type(kernel_size=maxpool.kernel_size,
+                    stride=maxpool.stride,
+                    padding=maxpool.padding,
+                    dilation=maxpool.dilation,
+                    ceil_mode=maxpool.ceil_mode)
+    )
+    return replacement_sequence
+
+class SwapMaxPoolActPass(SequentialPass):
+    def __init__(self):
+        passes = []
+        # Whenever there is a MaxPool-Act sequence, switch their positions to Act-MaxPool
+        for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
+            for mp_name, mp_type in [("MP2D", nn.MaxPool2d)]:
+                pattern = nn.Sequential(mp_type(kernel_size=2), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
+                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, swap_maxpool_act_fun, f"_SWAP_{mp_name}_{act_name}_PASS"))
+        super(SwapMaxPoolActPass, self).__init__(*passes, name_prefix="_SWAP_MAXPOOL_ACT_PASS")
+
+
+
 def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_requant=False, requant_node=False):
     modules = dict(gm.named_modules())
     if not isinstance(D, torch.Tensor):
@@ -543,6 +584,13 @@ class IntegerizePACTNetPass(SequentialPass):
     def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False, convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12):
         passes = []
         # start by retracing the network to dissolve any integer ops
+        passes.append(RetracePass(PACT_symbolic_trace))
+        # if there's a MaxPool followed directly by an PACT Activation, swap their positions
+        # (will be needed later for the IntegerizeBNActPass)
+        passes.append(SwapMaxPoolActPass())
+        # SwapMaxPoolActPass swapped consecutive MaxPools and Activations with a nn.Sequential
+        # module containing an Activation and a MaxPool. Retrace the network again to dissolve
+        # the nn.Sequential in two separate modules
         passes.append(RetracePass(PACT_symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
