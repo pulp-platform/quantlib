@@ -33,7 +33,7 @@ import numpy as np
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
 from quantlib.algorithms.pact import RequantShift
-from .dory_passes import AvgPoolWrap, DORYHarmonizePass
+from .dory_passes import AvgPoolWrap, DORYAdder, DORYHarmonizePass
 
 # annotate:
 #   conv, FC nodes:
@@ -127,7 +127,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         align_avgpool_pass = DORYHarmonizePass(in_shape=shape_in)
         net_integerized = align_avgpool_pass(net_integerized)
 
-    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap,))
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap, DORYAdder))
 
     # the integerization pass annotates the conv layers with the number of
     # weight levels. from this information we can make a dictionary of the number of
@@ -166,7 +166,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         acts.append((name, torch.floor(outp[0])))
 
     for n in integerized_nodes:
-        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap)):
+        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
 

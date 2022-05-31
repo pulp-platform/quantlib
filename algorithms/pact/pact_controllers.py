@@ -140,6 +140,11 @@ class PACTActController(Controller):
 
                     self.log("Started activation quantization!")
 
+                elif cmd == 'start_no_init':
+                    for m in self.modules:
+                        m.started |= True
+                    self.log("Started activation quantization!")
+
                 elif cmd == 'freeze':
                     for m in self.modules:
                         for p in m.clipping_params.values():
@@ -319,6 +324,12 @@ class PACTLinearController(Controller):
                         m.started |= True
 
                     self.log("Started quantization!")
+                    do_update = False
+
+                elif cmd == 'start_no_init':
+                    self.log("Started quantization!")
+                    for m in self.modules:
+                        m.started |= True
                     do_update = False
 
                 elif cmd == 'freeze':
