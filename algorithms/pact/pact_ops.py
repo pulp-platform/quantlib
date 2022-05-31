@@ -27,6 +27,7 @@ from torch import nn
 import numpy as np
 
 from .pact_functions import PACTQuantize, TQTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
+from quantlib.algorithms.generic import CausalConv1d
 from .util import assert_param_valid, almost_symm_quant
 import math
 import copy
@@ -42,6 +43,7 @@ __all__ = [
     'PACTAsymmetricAct',
     'PACTConv2d',
     'PACTConv1d',
+    'PACTCausalConv1d',
     'PACTLinear',
     'PACTQuantize',
     'TQTQuantize',
@@ -850,6 +852,8 @@ The QuantLab project contains an example (MobileNetV2) of how to achieve this
 easily and cleanly.
 """
 
+
+
 class _PACTActivation(nn.Module):
     # base class to provide common code for PACT Activations
     r"""PACT/TQT activation base class. Before it is 'started', this layer will
@@ -1517,6 +1521,85 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         return pact_conv
 
 
+class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
+    def __init__(
+            self,
+            in_channels,
+            out_channels,
+            kernel_size,
+            n_levels = 256,
+            quantize = 'per_layer',
+            init_clip = 'sawb_asymm',
+            learn_clip = False,
+            symm_wts = True,
+            nb_std = 3,
+            tqt = False,
+            tqt_beta = 0.9,
+            tqt_clip_grad = True,
+            **kwargs
+    ):
+        if isinstance(kernel_size, tuple):
+            assert len(kernel_size) == 1, "Invalid Kernel Size in PACTCausalConv1d: {}".format(kernel_size)
+            k = kernel_size[0]
+        else:
+            k = kernel_size
+
+        if 'dilation' in kwargs.keys():
+            dilation = kwargs['dilation']
+            if isinstance(dilation, tuple):
+                assert len(dilation) == 1, "Invalid Dilation in PACTCausalConv1d: {}".format(dilation)
+                dil = dilation[0]
+            else:
+                dil = dilation
+        else:
+            dil = 1
+
+        self.__padding = (k-1) * dil
+
+        if 'padding_mode' in kwargs:
+            self.padding_mode = kwargs['padding_mode']
+        else:
+            self.padding_mode = 'zeros'
+
+        super(PACTCausalConv1d, self).__init__(
+            in_channels,
+            out_channels,
+            kernel_size,
+            n_levels,
+            quantize,
+            init_clip,
+            learn_clip,
+            symm_wts,
+            nb_std,
+            tqt,
+            tqt_beta,
+            tqt_clip_grad,
+            **kwargs)
+
+    def extra_repr(self):
+        # done veryy ugly, but I was getting a recursion error all the time and couldn't figure it out
+        return f"{self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
+
+    def forward(self, input):
+        pad_mode = 'constant' if self.padding_mode == 'zeros' else self.padding_mode
+        x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode)
+        result = super(PACTCausalConv1d, self).forward(x)
+        return result
+
+    @classmethod
+    def from_causalconv1d(cls, c : CausalConv1d, **kwargs):
+        # kwargs should be arguments to PACTCausalConv1d
+        pact_causalconv = cls(
+            in_channels=c.in_channels,
+            out_channels=c.out_channels,
+            kernel_size=c.kernel_size,
+            **kwargs)
+        # initialize parameters from the nn.Conv1d
+        pact_causalconv.weight.data.copy_(c.weight.data)
+        if c.bias is not None:
+            pact_causalconv.bias.data.copy_(c.bias.data)
+
+        return pact_causalconv
 
 
 class PACTLinear(nn.Linear, _PACTLinOp):

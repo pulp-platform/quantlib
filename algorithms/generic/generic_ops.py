@@ -1,6 +1,7 @@
 from torch import nn
 
 __all__ = [
+    "CausalConv1d",
     "Multiply"
 ]
 
@@ -11,3 +12,32 @@ class Multiply(nn.Module):
 
     def forward(self, x, y):
         return x*y
+
+
+class CausalConv1d(torch.nn.Conv1d):
+    def __init__(self,
+             in_channels,
+             out_channels,
+             kernel_size,
+             stride=1,
+             dilation=1,
+             groups=1,
+                 bias=True,
+                 padding_mode='zeros'):
+        self.__padding = (kernel_size - 1) * dilation
+
+        super(CausalConv1d, self).__init__(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=0,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+            padding_mode=padding_mode)
+    def forward(self, input):
+        pad_mode = 'constant' if self.padding_mode == 'zeros' else self.padding_mode
+        x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode)
+        result = super(CausalConv1d, self).forward(x)
+        return result

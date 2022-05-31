@@ -1,17 +1,17 @@
-# 
+#
 # pact.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,12 +26,15 @@ from copy import deepcopy
 from torch import nn
 
 from quantlib.algorithms.pact.pact_ops import *
+from quanlib.algorithms.generic import CausalConv1d
 from .rules import LightweightRule
 from .filters import Filter
 
-def replace_pact_conv_linear(module : Union[nn.Conv1d, nn.Conv2d, nn.Linear],
+def replace_pact_conv_linear(module : Union[nn.Conv1d, nn.Conv2d, nn.Linear, CausalConv1d],
                              **kwargs):
-    if isinstance(module, nn.Conv1d):
+    if isinstance(module, CausalConv1d):
+        return PACTCausalConv1d.from_causalconv1d(module, **kwargs)
+    elif isinstance(module, nn.Conv1d):
         return PACTConv1d.from_conv1d(module, **kwargs)
     elif isinstance(module, nn.Conv2d):
         return PACTConv2d.from_conv2d(module, **kwargs)

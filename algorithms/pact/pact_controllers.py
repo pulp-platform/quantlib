@@ -1,23 +1,23 @@
-# 
+#
 # pact_controllers.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from typing import Union
 
@@ -29,7 +29,7 @@ from quantlib.editing.lightweight import LightweightGraph
 from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, SubTypeFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat
+from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d
 from .util import assert_param_valid, almost_symm_quant
 
 
@@ -255,6 +255,7 @@ class PACTLinearController(Controller):
     Controller for PACT Linear classes:
       - PACTConv2d
       - PACTConv1d
+      - PACTCausalConv1d
       - PACTLinear
     """
 
@@ -369,7 +370,7 @@ class PACTLinearController(Controller):
         self.step_pre_training_batch()
 
     # resetting clip bounds is almost identical between the different convolutions
-    def reset_clip_bounds(self, m: Union[PACTConv2d, PACTConv1d, PACTLinear], method: str = None, init : bool = False):
+    def reset_clip_bounds(self, m: Union[PACTConv2d, PACTConv1d, PACTLinear, PACTCausalConv1d], method: str = None, init : bool = False):
         if method is None:
             method = m.init_clip
         w = m.weight.data
