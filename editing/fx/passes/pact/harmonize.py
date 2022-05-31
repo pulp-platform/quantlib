@@ -388,7 +388,7 @@ def apply_wrap_module_fun(node, _pass, _tracer):
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
     fx_model = _pass.apply(fx_model)
 
-    returnNode = PACTWrapModule(fx_model, module.n_levels, None, module.quantize)
+    returnNode = PACTWrapModule(fx_model, module.n_levels, module._dict, module.quantize, **module.actArgs)
     return returnNode, node.args, node.kwargs
 
 class ApplyPassToWrapModule(ModularizePass):
@@ -411,7 +411,7 @@ def integerize_wrap_module_fun(node, _pass, _tracer, _shape_fun: lambda node: no
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
     fx_model = runnablePass.apply(fx_model)
 
-    returnNode = PACTWrapModule(fx_model, module.n_levels, None, False)
+    returnNode = PACTWrapModule(fx_model, module.n_levels, module._dict, False, **module.actArgs)
     return returnNode, node.args, node.kwargs
 
 class IntegerizeWrapModule(ModularizePass):
@@ -422,17 +422,17 @@ class IntegerizeWrapModule(ModularizePass):
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(integerize_wrap_module_fun, _pass=_pass, _tracer=tracer, _shape_fun=shape_fun), name=f"APPLY_TO_WRAP_PASS_{name}")
 
 
-def wrap_module_fun(node, n_levels, kwargs, quantize):
+def wrap_module_fun(node, n_levels, quantize, **actArgs):
 
     module = dict(node.graph._owning_module.named_modules())[node.target]
-    returnNode = PACTWrapModule(module, n_levels, node.kwargs, quantize = quantize)
+    returnNode = PACTWrapModule(module, n_levels, module.__dict__, quantize = quantize, **actArgs)
     return returnNode, node.args, node.kwargs
 
 class WrapModulePass(ModularizePass):
     def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, quantize = False, **kwargs):
         self.kwargs = kwargs
         pattern = [wrapClassCallable()]
-        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, kwargs=self.kwargs, quantize=quantize), name="MATMUL_REPLACEMENT_PASS")
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, **self.kwargs, quantize=quantize), name="MATMUL_REPLACEMENT_PASS")
 
 def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
 

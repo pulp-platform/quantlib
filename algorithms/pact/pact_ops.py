@@ -221,16 +221,19 @@ class PACTWrapMHSA(nn.Module):
                                  self.n_levels.type_as(q))
 
 class PACTDiv(nn.Module):
-    def __init__(self, Delta, y_n_levels:int=2**32):
+    def __init__(self, Delta, y_n_levels:int=2**16):
         super().__init__()
         self.Delta = Delta
         self.register_buffer('eps', torch.Tensor((1.,)))
         self.y_n_levels = y_n_levels
 
     def forward(self,x,y):
-        self.eps = torch.abs(x * self.Delta / (y)).max() / (self.y_n_levels/2-1)
 
-        return torch.floor(x * self.Delta / (y+self.eps)) / self.Delta
+        eps = (torch.abs(y).max() / (self.y_n_levels-1))
+        y = y+eps
+        self.eps.data.copy_(eps)
+
+        return torch.floor(x * self.Delta / (y)) / self.Delta
 
 class PACTIntegerDiv(nn.Module):
     def __init__(self, Delta):
@@ -242,15 +245,19 @@ class PACTIntegerDiv(nn.Module):
 
 class PACTWrapModule(nn.Module):
 
-    def __init__(self, module, n_levels, _dict = {}, quantize : bool = False):
+    def __init__(self, module, n_levels, _dict = {}, quantize : bool = False, **actArgs):
         super().__init__()
+
+        default_kwargs = {'learn_clip': True, 'init_clip': 'max', 'act_kind': 'identity'}
+        default_kwargs.update(actArgs)
 
         self.n_levels = n_levels
         self._dict = _dict
         self.quantize = quantize
+        self.actArgs = actArgs
 
         self.module = copy.deepcopy(module)
-        self.statTracker = PACTAsymmetricAct(n_levels=n_levels, act_kind='identity', leaky=0., symm=True, init_clip='max', learn_clip=True, tqt=True)
+        self.statTracker = PACTAsymmetricAct(n_levels=n_levels, **default_kwargs)
 
     def forward(self, *x, **kwargs):
         y = self.module.forward(*x, **kwargs)
@@ -905,7 +912,11 @@ class _PACTActivation(nn.Module):
                  tqt : bool = False,
                  tqt_beta : float = 0.9,
                  tqt_clip_grad : bool = True,
-                 signed : bool = True):
+                 signed : bool = True,
+                 percentile_clipping : bool = False,
+                 upper_percentile : float = 99.5,
+                 lower_percentile : float = 0.5
+                 ):
 
         r"""Constructor.
 
@@ -922,12 +933,19 @@ class _PACTActivation(nn.Module):
         :param tqt_beta:  Momentum for gradient normalization of TQT (see TQT paper).
         :param tqt_clip_grad: Whether to apply the :math `tanh` function to the TQT gradients.
         :param signed:    True if this is a signed activation. The classes `PACTUnsignedActivation` and `PACTAsymmetricActivation
+        :param percentile_clipping:    True if the maximum and minimum of a tensor should be determined based on some upper or lower percentile
+        :param upper_percentile:    Upper percentile used for percentile-based clipping if percentile_clipping is True
+        :param lower_percentile:    Lower percentile used for percentile-based clipping if percentile_clipping is True
         """
         super(_PACTActivation, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
         assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
         assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
+
+        self.percentile_clipping = percentile_clipping
+        self.upper_percentile = upper_percentile/100
+        self.lower_percentile = lower_percentile/100
 
         self.tqt = tqt
         self.n_levels = n_levels
@@ -986,8 +1004,26 @@ class _PACTActivation(nn.Module):
         if not self.started:
             x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             with torch.no_grad():
-                self.max[:] = max(self.max.item(), x_stat.max())
-                self.min[:] = min(self.min.item(), x_stat.min())
+                if self.percentile_clipping:
+
+                    # SCHEREMO : Nearest-Rank method
+                    sortedX = torch.sort(x_stat.flatten())[0]
+                    upperPercentileIdx = int(sortedX.shape[0]*self.upper_percentile)
+                    lowerPercentileIdx = int(sortedX.shape[0]*self.lower_percentile)
+
+                    # SCHEREMO : Case 1 : Unsigned act
+                    # Don't use the lower clip; unsigned needs clip_lo to be 0!
+                    if not self.signed:
+                        self.min[:] = min(self.min.item(), x.min())
+                        self.max[:] = max(self.max.item(), sortedX[upperPercentileIdx])
+
+                    # SCHEREMO: Case 2 : Signed act
+                    else:
+                        self.min[:] = min(self.min.item(), sortedX[lowerPercentileIdx])
+                        self.max[:] = max(self.max.item(), sortedX[upperPercentileIdx])
+                else:
+                        self.min[:] = min(self.min.item(), x_stat.min())
+                        self.max[:] = max(self.max.item(), x_stat.max())
                 self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
                 self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
             if self.act_kind == 'identity':
