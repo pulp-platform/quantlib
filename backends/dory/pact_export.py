@@ -145,7 +145,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                       test_input,
                       str(onnx_path),
                       export_params=True,
-                      opset_version=10,
+                      opset_version=opset_version,
                       do_constant_folding=True,
                       enable_onnx_checker=False)
 
