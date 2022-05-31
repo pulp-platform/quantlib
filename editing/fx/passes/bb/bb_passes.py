@@ -1,16 +1,17 @@
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, Literal
 
+import pandas as pd
 import torch
 from torch import nn, fx
 
-from quantlib.editing.fx.util import module_of_node
+from quantlib.editing.fx.util import module_of_node, named_module_nodes
 from quantlib.editing.fx.passes import FxPass, ModifySequentialPatternPass, ShapePropPass, CountMACsPass, SequentialPass, MemoryUsagePass, CollectPropertiesPass, AnnotateEpsPass
 from quantlib.algorithms.pact import PACTIntegerAdd
 from .bb_util import BB_symbolic_trace
 
-from quantlib.algorithms.bb import BBAct, BBConv2d, BBLinear, BBGateController, BBBOPComplexityRegularizer, BBMultiLayerController, BB_attach_gates_individual, BB_attach_gates_shared
+from quantlib.algorithms.bb import BBAct, BBConv2d, BBLinear, BBGateController, BBBOPComplexityRegularizer, BBLatencyRegularizer, BBMultiLayerController, BB_attach_gates_individual, BB_attach_gates_shared, BB_attach_gates_individual_best_latency
 from quantlib.algorithms.bb.bb_ops import _BB_LINOPS
-
+from quantlib.algorithms.bb.generate_bench_spec import import_bench_results, ident_of_layer
 
 __all__ = ["BBAttachControllersPass",
            "BBControllerInitPass",
@@ -150,14 +151,36 @@ class BBControllerInitPass(FxPass):
         self.attach_controllers.set_macs_dict(macs_dict)
         return self.attach_controllers.apply(gm)
 
+class ReadLatencyPass(FxPass):
+    def __init__(self, latency_spec_file : str):
+        self.latency_dict = import_bench_results(latency_spec_file)
+        self.latency_spec_file = latency_spec_file
+
+    def run_pass(self, gm : fx.GraphModule):
+        for layer_name, node, module in named_module_nodes(gm):
+            ident = ident_of_layer(node, module)
+            if ident is not None:
+                try:
+                    prec_dict = self.latency_dict[ident]
+                except KeyError:
+                    print(f"Warning: Layer {layer_name} has identifier, but was not found in latency spec file {self.latency_spec_file}... Something is about to break!")
+                    prec_dict = None
+                node.meta['latency'] = prec_dict
+                node.meta['max_latency'] = self.latency_dict['max_latency']
+        return gm
+
 class BBControllerPrepPass(FxPass):
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], n_levels_in : int = 256):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], n_levels_in : int = 256, latency_spec : Optional[str] = None):
         super(BBControllerPrepPass, self).__init__()
         # to know #MACs for each layer we must first know the input shapes for
         # conv layers
         self.register_subpass("shape_prop", ShapePropPass(shape_in))
         self.register_subpass("count_macs", CountMACsPass())
         self.register_subpass("memory", MemoryUsagePass())
+        if latency_spec is not None:
+            self.register_subpass("latency", ReadLatencyPass(latency_spec))
+        else:
+            self.latency = None
         self.register_subpass("properties", CollectPropertiesPass())
         self.property_dict = None
 
@@ -166,6 +189,8 @@ class BBControllerPrepPass(FxPass):
         gm = self.shape_prop.apply(gm)
         gm = self.count_macs.apply(gm)
         gm = self.memory.apply(gm)
+        if self.latency is not None:
+            gm = self.latency.apply(gm)
         gm = self.properties.apply(gm)
 
         max_macs = max(v['macs'] for v in self.properties.prop_dict.values() if 'macs' in v.keys())
@@ -190,15 +215,25 @@ class BBActConvControllerInitPass(FxPass):
                         nn.Flatten,
                         nn.Dropout)
 
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], gate_init : float = 2., input_prec : int = 8, joint_distribution : bool = False, shared_gates : bool = False):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], gate_init : float = 2., input_prec : int = 8, joint_distribution : bool = False, shared_gates : bool = False, target : Literal["bops", "latency"] = "bops", latency_spec_file : Optional[str] = None, init_best_latency_gates : bool = False):
         super(BBActConvControllerInitPass, self).__init__()
-        self.register_subpass("prep", BBControllerPrepPass(shape_in, 2**input_prec))
+        assert target in ["bops", "latency"], f"BBActConvControllerInitPass expected parameter 'target' with value 'bops' or 'latency', got '{target}'"
+        if target == "latency":
+            assert latency_spec_file is not None, f"For target=={target}, BBActConvControllerInitPass needs a latency spec file!"
+            assert not shared_gates, f"BBActConvControllerInitPass: for target=={target}, shared_gates is not supported!"
+        else:
+            assert not init_best_latency_gates, f"For target=={target}, BBActConvController requires init_best_latency_gates==False!"
+        self.target = target
+        self.register_subpass("prep", BBControllerPrepPass(shape_in, 2**input_prec, latency_spec_file))
         self.input_prec = input_prec
         self.joint_distribution = joint_distribution
         self.gate_init = gate_init
         self.shared_gates = shared_gates
+        self.init_best_latency_gates = init_best_latency_gates
         if shared_gates:
             self.attach_gate_fn = BB_attach_gates_shared
+        elif init_best_latency_gates:
+            self.attach_gate_fn = BB_attach_gates_individual_best_latency
         else:
             self.attach_gate_fn = BB_attach_gates_individual
 
@@ -249,10 +284,15 @@ class BBActConvControllerInitPass(FxPass):
         prop_dicts_partitioned = partition_dict(prop_dict, layer_pairs)
 
         for pd in prop_dicts_partitioned:
-            bop_reg = BBBOPComplexityRegularizer(self.joint_distribution, self.input_prec)
+            if self.target == "bops":
+                t_reg = BBBOPComplexityRegularizer(self.joint_distribution, self.input_prec)
+            else:
+                t_reg = BBLatencyRegularizer(self.input_prec)
             # TODO add memory regularizer
-            ctrl = BBMultiLayerController(pd, [bop_reg], self.attach_gate_fn, {'gate_init':self.gate_init})
+            gate_init_kwargs = {'gate_init':self.gate_init}
+            if self.init_best_latency_gates:
+                gate_init_kwargs.update({'input_prec': self.input_prec})
+            ctrl = BBMultiLayerController(pd, [t_reg], self.attach_gate_fn, gate_init_kwargs)
 
         return gm
-
 
