@@ -728,7 +728,7 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
 
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False, convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False, convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12, ternarize : bool = False):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -757,10 +757,15 @@ class IntegerizePACTNetPass(SequentialPass):
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
             passes.append(FixChannelNumbersPass())
-        # Look for Conv-BN-Acts, integerize the Conv and and replace the BN-Act with Threshold layers
-        passes.append(TernarizeConvBNActPass())
         # with epsilons annotated everywhere, we can integerize linear
         # functions (conv and FC)
+        if ternarize:
+        # Look for Conv-BN-Acts, integerize the Conv and and replace the BN-Act
+        # with Threshold layers
+            passes.append(TernarizeConvBNActPass())
+        else:
+        # simply integerize PACTConvs' convolutional weights
+            passes.append(IntegerizePACTConvPass())
         passes.append(IntegerizePACTLinearPass())
         passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2))
         passes.append(IntegerizeSoftmaxPass())
