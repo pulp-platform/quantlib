@@ -66,8 +66,7 @@ __all__ = [
     'PACTHardsigmoid',
     'PACTIntegerHardswish',
     'PACTIntegerHardsigmoid',
-    'ChannelwiseThreshold2d',
-    'ChannelwiseThreshold1d'
+    'ChannelwiseThreshold'
 ]
 
 
@@ -347,7 +346,7 @@ class HardActRequantShift(nn.Module):
         x1 = torch.clip(x1, clip_lo, clip_hi)
         return x1
 
-class ChannelwiseThreshold2d(nn.Module):
+class ChannelwiseThreshold(nn.Module):
 
     class MyChannelwiseThreshold(torch.autograd.Function):
 
@@ -365,37 +364,16 @@ class ChannelwiseThreshold2d(nn.Module):
             thresh_hi_ = g.op("Constant", value_t=thresh_hi)
             return g.op("PACTOps::ChannelwiseThreshold2d", x, thresh_lo_t=thresh_lo, thresh_hi_t=thresh_hi)
 
-    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor):
-        super(ChannelwiseThreshold2d, self).__init__()
-        self.register_buffer('thresh_lo', thresh_lo.reshape(-1, 1, 1).clone().detach())
-        self.register_buffer('thresh_hi', thresh_hi.reshape(-1, 1, 1).clone().detach())
-
-    def forward(self, x):
-        return self.MyChannelwiseThreshold.apply(x, self.thresh_lo.data.type_as(x), self.thresh_hi.data.type_as(x))
-
-
-class ChannelwiseThreshold1d(nn.Module):
-
-    class MyChannelwiseThreshold(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, x, thresh_lo, thresh_hi):
-            tmp1 = -1*(x < thresh_lo).type_as(x)
-            tmp2 = (x >= thresh_hi).type_as(x)
-
-            return tmp1 + tmp2
-
-        @staticmethod
-        @parse_args('v', 't', 't')
-        def symbolic(g, x, thresh_lo, thresh_hi):
-            thresh_lo_ = g.op("Constant", value_t=thresh_lo)
-            thresh_hi_ = g.op("Constant", value_t=thresh_hi)
-            return g.op("PACTOps::ChannelwiseThreshold1d", x, thresh_lo_t=thresh_lo, thresh_hi_t=thresh_hi)
-
-    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor):
-        super(ChannelwiseThreshold1d, self).__init__()
-        self.register_buffer('thresh_lo', thresh_lo.reshape(-1, 1).clone().detach())
-        self.register_buffer('thresh_hi', thresh_hi.reshape(-1, 1).clone().detach())
+    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor, n_dim : Literal[1,2] = 2):
+        super(ChannelwiseThreshold, self).__init__()
+        if n_dim == 1:
+            thresh_shape = (-1, 1)
+        elif n_dim == 2:
+            thresh_shape = (-1, 1, 1)
+        else:
+            assert False, f"ChannelwiseThreshold: n_dim must be 1 or 2, got {n_dim}!"
+        self.register_buffer('thresh_lo', thresh_lo.reshape(*thresh_shape).clone().detach())
+        self.register_buffer('thresh_hi', thresh_hi.reshape(*thresh_shape).clone().detach())
 
     def forward(self, x):
         return self.MyChannelwiseThreshold.apply(x, self.thresh_lo.data.type_as(x), self.thresh_hi.data.type_as(x))

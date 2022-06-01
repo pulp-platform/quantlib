@@ -40,7 +40,7 @@ from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBN
 from ...util import gm_modules, module_of_node, get_ordered_active_nodes
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold1d, ChannelwiseThreshold2d
+from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
@@ -455,9 +455,10 @@ def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_
     new_conv.n_levels = conv.n_levels
 
     if conv_type == nn.Conv1d:
-        threshold_module = ChannelwiseThreshold1d(thresh_lo, thresh_hi)
+        n_d = 1
     else:
-        threshold_module = ChannelwiseThreshold2d(thresh_lo, thresh_hi)
+        n_d = 2
+    threshold_module = ChannelwiseThreshold(thresh_lo, thresh_hi, n_dim=n_d)
     replacement_sequence = nn.Sequential(new_conv, threshold_module)
 
     return replacement_sequence

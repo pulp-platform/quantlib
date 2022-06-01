@@ -52,8 +52,7 @@ PACT_OPS = set([_PACTActivation,
                 PACTIntegerHardswish,
                 RequantShift,
                 Multiply,
-                ChannelwiseThreshold2d,
-                ChannelwiseThreshold1d])
+                ChannelwiseThreshold])
 
 #TODO is this still reasonable??
 PACT_OPS_INT = set([PACTIntegerAdd,
