@@ -21,7 +21,7 @@
 # limitations under the License.
 #
 
-from typing import Union, Optional
+from typing import Union, Optional, Literal
 import torch
 from torch import nn
 import numpy as np

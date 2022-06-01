@@ -14,7 +14,7 @@ class Multiply(nn.Module):
         return x*y
 
 
-class CausalConv1d(torch.nn.Conv1d):
+class CausalConv1d(nn.Conv1d):
     def __init__(self,
              in_channels,
              out_channels,

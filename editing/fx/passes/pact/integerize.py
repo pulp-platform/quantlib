@@ -772,5 +772,6 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeSoftmaxPass())
         passes.append(IntegerizeLayerNormPass())
         passes.append(IntegerizeGELUPass())
+        passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
         passes.append(IntegerizeEmbeddingsPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")

@@ -26,7 +26,7 @@ from copy import deepcopy
 from torch import nn
 
 from quantlib.algorithms.pact.pact_ops import *
-from quanlib.algorithms.generic import CausalConv1d
+from quantlib.algorithms.generic import CausalConv1d
 from .rules import LightweightRule
 from .filters import Filter
 
