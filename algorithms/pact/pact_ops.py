@@ -224,14 +224,15 @@ class PACTDiv(nn.Module):
     def __init__(self, Delta, y_n_levels:int=2**16):
         super().__init__()
         self.Delta = Delta
-        self.register_buffer('eps', torch.Tensor((1.,)))
+        self.register_buffer('eps', torch.Tensor((0.,)))
         self.y_n_levels = y_n_levels
 
     def forward(self,x,y):
-
-        eps = (torch.abs(y).max() / (self.y_n_levels-1))
-        y = y+eps
-        self.eps.data.copy_(eps)
+        if self.eps == 0.:
+            eps = (torch.abs(y).max() / (self.y_n_levels-1))
+        else:
+            eps = self.eps
+        y = torch.clip(y,min=eps)
 
         return torch.floor(x * self.Delta / (y)) / self.Delta
 
@@ -241,7 +242,8 @@ class PACTIntegerDiv(nn.Module):
         self.Delta = Delta
 
     def forward(self,x,y):
-        return torch.floor(x * self.Delta / (y+1))
+        y = torch.clip(y,min=1)
+        return torch.floor(x * self.Delta / (y))
 
 class PACTWrapModule(nn.Module):
 
@@ -277,8 +279,9 @@ class RequantShift(nn.Module):
             # division. The rounding in (y / div).round() is folded into the
             # addition.
             if cmsis_requant:
-                y = (x + torch.round(add/mul)) * mul
-                y = torch.round(y / div)
+                y = torch.floor((x + torch.round(add/mul)) * mul)
+                # Avoid round to even behaviour, friggin pytorch
+                y = torch.round((y / div) + 0.0001)
             # PULP-NN performs multiplication first, then addition and
             # division. Division is with flooring.
             else:
@@ -311,6 +314,8 @@ class RequantShift(nn.Module):
 
     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.Tensor((2**16,)), cmsis_requant=False, requant_node=True):
         super(RequantShift, self).__init__()
+        if cmsis_requant:
+            add = torch.round(add / mul) * mul
         self.register_buffer('mul', mul.clone().detach())
         self.register_buffer('add', add.clone().detach())
         self.div = D.clone().type_as(add).detach()
@@ -696,7 +701,7 @@ class PACTIntegerGELU(torch.nn.Module):
 
             return g.op("PACTOps::iGELU", x, b_t=b, one_t=one, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
 
-    def __init__(self, n_levels: int = 256, eps_in = 1., maxval = 1.):
+    def __init__(self, n_levels: int = 256, eps_in = 1., maxval = 1., D=2**14):
         super().__init__()
 
         self.n_levels = torch.Tensor((n_levels,)).detach()
@@ -706,7 +711,7 @@ class PACTIntegerGELU(torch.nn.Module):
         self.one = torch.Tensor((1.,)).detach()
         self.sqrttwo = torch.Tensor((4,)).detach()
 
-        self.D = torch.Tensor((2.**16,)).detach()
+        self.D = torch.Tensor((D,)).detach()
         self.totScaler = torch.Tensor((255.,)).detach()
         self.maxval = torch.Tensor((maxval,)).detach()
 

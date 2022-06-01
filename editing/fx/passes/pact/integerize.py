@@ -69,7 +69,7 @@ def integerize_softmax_fun(gm : fx.GraphModule, match : Match):
 
     return new_softmax
 
-def integerize_gelu_fun(gm : fx.GraphModule, match : Match):
+def integerize_gelu_fun(gm : fx.GraphModule, match : Match, D=2**14):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     lin_node = matched_nodes[0]
@@ -78,11 +78,11 @@ def integerize_gelu_fun(gm : fx.GraphModule, match : Match):
     eps_in = extract_eps(lin_node.meta['quant'].eps_in)
     assert isinstance(module, PACTGELU), f"integerize_gelu_fun got bad match - expected PACTGELU, got {type(lin)}"
 
-    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)
+    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D)
 
     return new_gelu
 
-def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True):
+def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, D=2**12):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     layernorm_node = matched_nodes[0]
@@ -92,9 +92,9 @@ def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True):
     assert isinstance(module, PACTLayerNorm), f"integerize_layernorm_fun got bad match - expected PACTLayerNorm, got {type(module)}"
 
     if affine:
-        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, weight=module.weight, bias=module.bias)
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, weight=module.weight, bias=module.bias, D=D)
     else:
-        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval)
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D)
 
     return new_layernorm
 
@@ -124,10 +124,10 @@ class IntegerizeTrueDivPass(ModularizePass):
         super().__init__(op='call_module', target=tuple(target), replacement_fn = self.truediv_replacement_fn, name="TRUEDIV_REPLACEMENT_PASS")
 
 class IntegerizeLayerNormPass(SequentialPass):
-    def __init__(self, affine = True, **kwargs):
+    def __init__(self, affine = True, D=2**12, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTLayerNorm(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine), f'_INTEGER_LAYERNORM_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D), f'_INTEGER_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
 
 class IntegerizeSoftmaxPass(SequentialPass):
@@ -138,10 +138,10 @@ class IntegerizeSoftmaxPass(SequentialPass):
         super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
 
 class IntegerizeGELUPass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, D=2**14, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTGELU(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_gelu_fun, f'_INTEGER_GELU_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D), f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
 # class RequantShift(nn.Module):
@@ -592,8 +592,8 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizePACTLinearPass())
         passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2))
         passes.append(IntegerizeSoftmaxPass())
-        passes.append(IntegerizeLayerNormPass())
-        passes.append(IntegerizeGELUPass())
+        passes.append(IntegerizeLayerNormPass(D=D))
+        passes.append(IntegerizeGELUPass(D=D))
         passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
         passes.append(IntegerizeEmbeddingsPass())
         passes.append(IntegerizeTrueDivPass())

@@ -143,8 +143,9 @@ def n_levels_out_pact_acts(m : nn.Module, in_levels : list, accumulator_levels :
     return m.n_levels
 
 def n_levels_out_pact_embedding(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
-    act_type = type(m.adder.act_out)
-    return _N_LEVELS_PROP[act_type](m.adder.act_out, in_levels, accumulator_levels)
+    return m.adder.act_out.n_levels
+    #     act_type = type(m.adder.act_out)
+#     return _N_LEVELS_PROP[act_type](m.adder.act_out, in_levels, accumulator_levels)
 
 
 _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
@@ -176,8 +177,13 @@ class AnnotateEpsPass(FxPass):
         super(AnnotateEpsPass, self).__init__()
 
         if isinstance(eps_in, Iterable):
-            self.eps_in = eps_in
-            self.noeps = False
+            try:
+                eps_in.__iter__()
+                self.eps_in = eps_in
+                self.noeps = False
+            except:
+                self.eps_in = [eps_in]
+                self.noeps = False
         elif not isinstance(eps_in, torch.Tensor) and eps_in is not None:
             self.eps_in = [torch.tensor(eps_in).reshape(-1)]
             self.noeps = False
