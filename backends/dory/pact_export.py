@@ -146,10 +146,17 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
     def dump_hook(self, inp, outp, name):
         # DORY wants HWC tensors
         acts.append((name, outp[0]))
+    interms = []
+    def dump_hook_interm(self, inp, outp, name):
+        # DORY wants HWC tensors
+        interms.append((name, outp[0]))
 
     for n, m in net_integerized.named_modules():
         if isinstance(m, RequantShift):
             hook = partial(dump_hook, name=n)
+            m.register_forward_hook(hook)
+        else:
+            hook = partial(dump_hook_interm, name=n)
             m.register_forward_hook(hook)
 
     # open the supplied input image
@@ -162,7 +169,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
             # expect a (C, H, W) tensor - DORY expects (H, W, C)
             try: # for the output, this step is not applicable
-                t = t.squeeze().permute(1,2,0)
+                t = t.permute(1,2,0)
             except RuntimeError:
                 print(f"Not permuting output of layer {layer_name}...")
 
@@ -172,9 +179,11 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                 for el in t.flatten():
                     fp.write(f"{int(el)},\n")
 
-        save_beautiful_text(im_tensor, "input", "input")
+        save_beautiful_text(im_tensor.squeeze(), "input", "input")
         save_beautiful_text(output, "output", "output")
         for i, (name, t) in enumerate(acts):
             save_beautiful_text(t, name, f"out_layer{i}")
+        for i, (name, t) in enumerate(interms):
+            save_beautiful_text(t, name, f"interm_layer{i}")
 
     #done!
