@@ -136,7 +136,7 @@ class _PACTActivation(_PACTModule):
     def call_qop(self, x: torch.Tensor) -> torch.Tensor:
         self._update_qhparams_and_clipping_bounds()
         clip_lo, clip_hi = self._maybe_redirect_clip_hi_grad()
-        x = self._qop(x, clip_lo, clip_hi, self.step, self.scale)
+        x = self._qop(x, clip_lo, clip_hi, self.step, self.scale, True)
         return x
 
 
@@ -157,5 +157,5 @@ class _PACTLinear(_PACTModule):
 
     def call_qop(self, x: torch.Tensor) -> torch.Tensor:
         self._update_qhparams_and_clipping_bounds()
-        x = self._qop(x, self.clip_lo, self.clip_hi, self.step, self.scale)
+        x = self._qop(x, self.clip_lo, self.clip_hi, self.step, self.scale, True)
         return x
