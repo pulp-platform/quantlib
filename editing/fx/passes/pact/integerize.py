@@ -56,7 +56,7 @@ __all__ = ['IntegerizePACTConvPass',
            'PACTTracer',
            'PACT_symbolic_trace',]
 
-def integerize_softmax_fun(gm : fx.GraphModule, match : Match):
+def integerize_softmax_fun(gm : fx.GraphModule, match : Match, export_node=False):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     lin_node = matched_nodes[0]
@@ -65,11 +65,11 @@ def integerize_softmax_fun(gm : fx.GraphModule, match : Match):
     eps_in = extract_eps(lin_node.meta['quant'].eps_in)
     assert isinstance(module, PACTSoftmax), f"integerize_softmax_fun got bad match - expected PACTSoftmax, got {type(module)}"
 
-    new_softmax = PACTIntegerSoftmax(n_levels=module.n_levels, eps_in=eps_in)
+    new_softmax = PACTIntegerSoftmax(n_levels=module.n_levels, eps_in=eps_in, export_node=export_node)
 
     return new_softmax
 
-def integerize_gelu_fun(gm : fx.GraphModule, match : Match, D=2**14):
+def integerize_gelu_fun(gm : fx.GraphModule, match : Match, D=2**14, export_node = False):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     lin_node = matched_nodes[0]
@@ -78,11 +78,11 @@ def integerize_gelu_fun(gm : fx.GraphModule, match : Match, D=2**14):
     eps_in = extract_eps(lin_node.meta['quant'].eps_in)
     assert isinstance(module, PACTGELU), f"integerize_gelu_fun got bad match - expected PACTGELU, got {type(lin)}"
 
-    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D)
+    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D,export_node=export_node)
 
     return new_gelu
 
-def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, D=2**12):
+def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, D=2**12, export_node=False):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     layernorm_node = matched_nodes[0]
@@ -92,9 +92,9 @@ def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, 
     assert isinstance(module, PACTLayerNorm), f"integerize_layernorm_fun got bad match - expected PACTLayerNorm, got {type(module)}"
 
     if affine:
-        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, weight=module.weight, bias=module.bias, D=D)
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, weight=module.weight, bias=module.bias, D=D, export_node=export_node)
     else:
-        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D)
+        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D, export_node=export_node)
 
     return new_layernorm
 
@@ -124,24 +124,24 @@ class IntegerizeTrueDivPass(ModularizePass):
         super().__init__(op='call_module', target=tuple(target), replacement_fn = self.truediv_replacement_fn, name="TRUEDIV_REPLACEMENT_PASS")
 
 class IntegerizeLayerNormPass(SequentialPass):
-    def __init__(self, affine = True, D=2**12, **kwargs):
+    def __init__(self, affine = True, D=2**12, export_layernorm_node = False, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTLayerNorm(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D), f'_INTEGER_LAYERNORM_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D, export_node=export_layernorm_node), f'_INTEGER_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
 
 class IntegerizeSoftmaxPass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, export_softmax_node = False, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTSoftmax(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_softmax_fun, f'_INTEGER_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
 
 class IntegerizeGELUPass(SequentialPass):
-    def __init__(self, D=2**14, **kwargs):
+    def __init__(self, D=2**14, export_gelu_node=False, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTGELU(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D), f'_INTEGER_GELU_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D,export_node=export_gelu_node), f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
 # class RequantShift(nn.Module):
@@ -317,7 +317,7 @@ class IntegerizeBNActPass(SequentialPass):
 
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
-def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
+def embedding_integerize_fun(gm : fx.GraphModule, match : Match, **kwargs):
     modules = gm_modules(gm)
 
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
@@ -327,7 +327,7 @@ def embedding_integerize_fun(gm : fx.GraphModule, match : Match):
     maxval = modules[matched_nodes[0].target].maxval
     eps_in = extract_eps(matched_nodes[0].meta['quant'].eps_in)
 
-    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval, twoStage=True)
+    new_embedding = PACTIntegerEmbedding(n_levels=n_levels, weight=bias, eps_in=eps_in, eps_adder=eps_adder, maxval=maxval, twoStage=True, **kwargs)
 
     return new_embedding
 
@@ -336,7 +336,7 @@ class IntegerizeEmbeddingsPass(SequentialPass):
     def __init__(self, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTEmbedding(torch.Tensor((1.,)), init_clip='max', learn_clip=False, act_kind='identity'))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(embedding_integerize_fun), f'_INTEGERIZE_EMBEDDINGS_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(embedding_integerize_fun, **kwargs), f'_INTEGERIZE_EMBEDDINGS_PASS'))
         super().__init__(*passes, name_prefix='_INTEGERIZE_EMBEDDING_PASS')
 
 
@@ -565,7 +565,12 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
 
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False, requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False, convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12):
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24,
+                 enable_add_first=False, requant_node=False, n_levels_in : int = 256,
+                 fix_channel_numbers=False, convert_input_to_unsigned : bool = False,
+                 D1 : float = 2**18, D2 : float = 2**12,
+                 export_layernorm_node = False, export_softmax_node = False,
+                 export_gelu_node = False):
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(PACT_symbolic_trace))
@@ -591,10 +596,10 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizePACTConvPass())
         passes.append(IntegerizePACTLinearPass())
         passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2))
-        passes.append(IntegerizeSoftmaxPass())
-        passes.append(IntegerizeLayerNormPass(D=D))
-        passes.append(IntegerizeGELUPass(D=D))
+        passes.append(IntegerizeSoftmaxPass(export_softmax_node=export_softmax_node))
+        passes.append(IntegerizeLayerNormPass(D=D, export_layernorm_node=export_layernorm_node))
+        passes.append(IntegerizeGELUPass(D=D, export_gelu_node=export_gelu_node))
         passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
-        passes.append(IntegerizeEmbeddingsPass())
+        passes.append(IntegerizeEmbeddingsPass(cmsis_requant=enable_add_first))
         passes.append(IntegerizeTrueDivPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")

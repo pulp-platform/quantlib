@@ -145,9 +145,8 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                       test_input,
                       str(onnx_path),
                       export_params=True,
-                      opset_version=10,
-                      do_constant_folding=True,
-                      enable_onnx_checker=False)
+                      opset_version=11,
+                      do_constant_folding=True)
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))

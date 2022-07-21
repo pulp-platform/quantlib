@@ -363,7 +363,6 @@ class ShapePropPass(FxPass):
             self.shapes_in = [torch.Size(s) for s in shapes_in]
         except:
             # This case should ONLY be called if the input is a tuple of a list
-            print(shapes_in)
             shapes_in = shapes_in[0]
             self.shapes_in = [torch.Size(s) for s in shapes_in]
 
