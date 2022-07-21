@@ -33,7 +33,7 @@ import numpy as np
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
 from quantlib.algorithms.pact import RequantShift
-from .dory_passes import AvgPoolWrap, DORYHarmonizePass
+from .dory_passes import AvgPoolWrap, DORYAdder, DORYHarmonizePass
 
 # annotate:
 #   conv, FC nodes:
@@ -67,8 +67,6 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
         lower = get_attr_by_name(n, "min").f
         #assert lower == 0.0, "clip node {} has lower clip bound {} not equal to zero!".format(n.name, lower)
         upper = get_attr_by_name(n, "max").f
-
-        #assert np.log2(upper+1.0) % 1.0 < 1e-6
         n_bits = int(np.round(np.log2(upper-lower+1.0)))
         n_bits = n_bits if n_bits <= 8 else 32
         precision_attr = onnx.helper.make_attribute(key='out_bits', value=n_bits)
@@ -127,7 +125,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         align_avgpool_pass = DORYHarmonizePass(in_shape=shape_in)
         net_integerized = align_avgpool_pass(net_integerized)
 
-    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap,))
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap, DORYAdder))
 
     # the integerization pass annotates the conv layers with the number of
     # weight levels. from this information we can make a dictionary of the number of
@@ -145,8 +143,9 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                       test_input,
                       str(onnx_path),
                       export_params=True,
-                      opset_version=11,
-                      do_constant_folding=True)
+                      opset_version=opset_version,
+                      do_constant_folding=True,
+                      enable_onnx_checker=False)
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
@@ -165,7 +164,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         acts.append((name, torch.floor(outp[0])))
 
     for n in integerized_nodes:
-        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap)):
+        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
 
@@ -177,10 +176,14 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
 
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
-            # expect a (C, H, W) tensor - DORY expects (H, W, C)
-            try: # for the output, this step is not applicable
-                t = t.squeeze().permute(1,2,0)
-            except RuntimeError:
+            t = t.squeeze(0)
+            if t.dim()==3:
+                # expect a (C, H, W) tensor - DORY expects (H, W, C)
+                t = t.permute(1,2,0)
+            elif t.dim()==2:
+                # expect a (C, D) tensor - DORY expects (D, C)
+                t = t.permute(1,0)
+            else:
                 print(f"Not permuting output of layer {layer_name}...")
 
             filepath = out_path.joinpath(f"{filename}.txt")

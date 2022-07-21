@@ -22,6 +22,8 @@
 
 from typing import Union, Optional, Tuple, List
 
+from copy import deepcopy
+
 import numpy as np
 
 import torch
@@ -122,16 +124,16 @@ _MEM_CNT_FNS = {
 
 # functions to translate 'call_module' node properties stored in the 'meta'
 # dict
-# should return a (key : str, value : <any>) pair
+# should return a {key1 : str :: value1 : <any>, key2 : str :: value2 : <any>, ...} dict
 _PROPERTY_TRANSL_FNS = {
-    'tensor_meta': lambda v: ('out_shape', v.shape)
+    'tensor_meta': lambda v: {'out_shape': v.shape}
 }
 def translate_property(k : str, v):
     try:
         translate_fn = _PROPERTY_TRANSL_FNS[k]
     except KeyError:
         # if no translate_fn is in the dict, return the same value
-        translate_fn = lambda v_: (k, v_)
+        translate_fn = lambda v_: {k : v_}
     return translate_fn(v)
 
 # functions to extend the property dictionary based on the node being
@@ -381,6 +383,14 @@ class ShapePropPass(FxPass):
             # you really shouldn't be passing over GraphModules in non-eval
             # state, but you do you!
             gm.train()
+
+        for node in gm.graph.nodes:
+            in_shps = [n.meta['tensor_meta'].shape for n in node.all_input_nodes if 'tensor_meta' in n.meta.keys()]
+
+            if len(in_shps) == 1:
+                node.meta['shape_in'] = in_shps[0]
+            else:
+                node.meta['shape_in'] = in_shps
         return gm
 
 class CountMACsPass(FxPass):
@@ -393,13 +403,14 @@ class CountMACsPass(FxPass):
                 m = module_of_node(gm, node)
                 k = type(m)
                 if k in _MAC_CNT_FNS.keys():
-                    if len(node.all_input_nodes) != 1:
-                        print("Multi-input module: double-check result of CountMACsPass")
-                        in_node = node.all_input_nodes
-                        shp = [n.meta['tensor_meta'].shape for n in in_node]
-                    else:
-                        in_node = node.all_input_nodes[0]
-                        shp = in_node.meta['tensor_meta'].shape
+                    shp = node.meta['shape_in']
+                    # if len(node.all_input_nodes) != 1:
+                    #     print("Multi-input module: double-check result of CountMACsPass")
+                    #     in_node = node.all_input_nodes
+                    #     shp = [n.meta['tensor_meta'].shape for n in in_node]
+                    # else:
+                    #     in_node = node.all_input_nodes[0]
+                    #     shp = in_node.meta['tensor_meta'].shape
                     node.meta['macs'] = int(_MAC_CNT_FNS[k](shp, m))
         return gm
 
@@ -434,10 +445,11 @@ class CollectPropertiesPass(FxPass):
                 m = module_of_node(gm, node)
                 pd = {}
                 for k, v in node.meta.items():
-                    tk, tv = translate_property(k, v)
-                    pd[tk] = tv
+                    transl_prop = translate_property(k, v)
+                    pd.update(transl_prop)
 
                 pd['n_users'] = len(node.users)
                 self.prop_dict[node.target] = pd
                 self.prop_dict.update(extend_properties(m, node.target, pd))
+        gm.prop_dict = deepcopy(self.prop_dict)
         return gm
