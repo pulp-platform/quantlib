@@ -186,7 +186,7 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          padding_mode=conv.padding_mode)
     try:
         new_conv.weight.data.copy_(conv.weight_int)
-    except RuntimeError:
+    except RuntimeError as e:
         import ipdb; ipdb.set_trace()
 
     # annotate the new conv with the number of levels
@@ -802,6 +802,6 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeLayerNormPass(D=D, export_layernorm_node=export_layernorm_node))
         passes.append(IntegerizeGELUPass(D=D, export_gelu_node=export_gelu_node))
         passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
-        passes.append(IntegerizeEmbeddingsPass(cmsis_requant=enable_add_first))
+        passes.append(IntegerizeEmbeddingsPass(cmsis_requant=enable_add_first, requant_node=requant_node))
         passes.append(IntegerizeTrueDivPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")

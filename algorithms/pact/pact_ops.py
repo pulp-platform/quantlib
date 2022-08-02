@@ -242,8 +242,8 @@ class PACTWrapMHSA(nn.Module):
                     wo_requant_mul, wo_requant_div,
                     dim, heads, dim_head,
                     isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
-                    n_levels):
-            return q
+                    n_levels, module):
+            return module(q,k,v)
 
 
         @staticmethod
@@ -262,7 +262,7 @@ class PACTWrapMHSA(nn.Module):
 
                     't','t','t',
                     't', 't', 't', 't',
-                    't')
+                    't', 't')
         def symbolic(g,
                      q,k,v,
                      wq_weight, wq_bias,
@@ -279,7 +279,7 @@ class PACTWrapMHSA(nn.Module):
 
                      dim, heads, dim_head,
                      isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
-                     n_levels):
+                     n_levels, module):
 
             wk_requant_mul_ = g.op("Constant", value_t=wk_requant_mul)
             wk_requant_div_ = g.op("Constant", value_t=wk_requant_div)
@@ -327,9 +327,10 @@ class PACTWrapMHSA(nn.Module):
                  postattn_requant_mul, postattn_requant_div,
                  wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
                  dim, heads, dim_head,
-                 isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels):
+                 isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels, module):
 
         super().__init__()
+        self.module = copy.deepcopy(module)
         self.wk_weight = nn.Parameter(torch.clone(wk_weight).detach())
         self.wk_bias = nn.Parameter(torch.clone(wk_bias).detach())
         self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
@@ -373,7 +374,7 @@ class PACTWrapMHSA(nn.Module):
                                  self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
                                  self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
                                  self.isoftmaxA.type_as(q), self.isoftmaxB.type_as(q), self.isoftmaxC.type_as(q), self.isoftmaxlog2.type_as(q),
-                                 self.n_levels.type_as(q))
+                                 self.n_levels.type_as(q), self.module)
 
 class PACTDiv(nn.Module):
     def __init__(self, Delta, y_n_levels:int=2**16):

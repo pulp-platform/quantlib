@@ -196,6 +196,7 @@ class ModularizeActivationsPass(ModularizePass):
                               F.hardswish : nn.Hardswish,
                               F.relu6 : nn.ReLU6,
                               F.elu : nn.ELU,
+                              torch.exp : PACTExp,
                               F.elu_ : nn.ELU,
                               F.selu : nn.SELU,
                               F.celu : nn.CELU,

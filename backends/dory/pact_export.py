@@ -32,7 +32,7 @@ import numpy as np
 
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.algorithms.pact import RequantShift
+from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule
 from .dory_passes import AvgPoolWrap, DORYAdder, DORYHarmonizePass
 
 # annotate:
@@ -102,7 +102,7 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
         mult_attr = onnx.helper.make_attribute(key='mult_bits', value=requant_bits)
         n.attribute.append(mult_attr)
 
-def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False):
+def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False):
     net = net.eval()
 
 
@@ -125,7 +125,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         align_avgpool_pass = DORYHarmonizePass(in_shape=shape_in)
         net_integerized = align_avgpool_pass(net_integerized)
 
-    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap, DORYAdder))
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap, DORYAdder, PACTWrapMHSA))
 
     # the integerization pass annotates the conv layers with the number of
     # weight levels. from this information we can make a dictionary of the number of
@@ -143,9 +143,9 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                       test_input,
                       str(onnx_path),
                       export_params=True,
+                      verbose=False,
                       opset_version=opset_version,
-                      do_constant_folding=True,
-                      enable_onnx_checker=False)
+                      do_constant_folding=True)
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
@@ -164,7 +164,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         acts.append((name, torch.floor(outp[0])))
 
     for n in integerized_nodes:
-        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder)):
+        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
 
@@ -172,7 +172,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
     if in_data is not None:
         im_tensor = in_data.clone().to(dtype=torch.float64)
         net_integerized = net_integerized.to(dtype=torch.float64)
-        output = net_integerized(im_tensor)
+        output = net_integerized(im_tensor).to(dtype=torch.float64)
 
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
