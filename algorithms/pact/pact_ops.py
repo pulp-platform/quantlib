@@ -70,6 +70,8 @@ __all__ = [
     'PACTIntegerHardsigmoid',
     'PACTDiv',
     'PACTIntegerDiv',
+    'PACTExp',
+    'PACTIntegerExp',
     'ChannelwiseThreshold'
 ]
 
@@ -415,8 +417,6 @@ class PACTIntegerDiv(nn.Module):
         else:
             return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps)
 
-
-
 class PACTWrapModule(nn.Module):
 
     def __init__(self, module, n_levels, _dict = {}, quantize : bool = False, **actArgs):
@@ -430,7 +430,7 @@ class PACTWrapModule(nn.Module):
         self.quantize = quantize
         self.actArgs = actArgs
 
-        self.module = copy.deepcopy(module)
+        self.module = copy.copy(module)
         self.statTracker = PACTAsymmetricAct(n_levels=n_levels, **default_kwargs)
 
     def forward(self, *x, **kwargs):
@@ -462,7 +462,8 @@ class RequantShift(nn.Module):
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
-                return torch.clip(y, min=torch.zeros(1).type_as(x), max=(n_levels_out-1).type_as(x))
+                y_tilde =  torch.clip(y, min=torch.zeros(1).type_as(x), max=(n_levels_out-1).type_as(x))
+                return y_tilde
             else:
             # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
                 c = torch.round(n_levels_out/2. + 0.001)
@@ -472,7 +473,9 @@ class RequantShift(nn.Module):
                 # min(max(..)) or some other weirdness
                 lo = (c * -1).type_as(y)
                 hi = (c-1).type_as(y)
-                return torch.clip(y, min=lo, max=hi)
+
+                y_tilde = torch.clip(y, min=lo, max=hi)
+                return y_tilde
 
         @staticmethod
         @parse_args('v', 'v', 'v', 't', 't', 't', 't')
@@ -486,7 +489,6 @@ class RequantShift(nn.Module):
             output = g.op("PACTOps::RequantShift", x, mul, add, div_t=div, signed_t=signed, n_levels_out_t=n_levels_out)
             #output = g.op("com.microsoft::Gelu", x, mul, add, div_t=div, signed_t=signed, n_levels_out_t=n_levels_out)
 
-            #import IPython; IPython.embed()
             x.setType(x.type())
             output.setType(x.type())
 #             output.node().replaceAllUsesWith(g.op("PACTOps::RequantShift", x, mul, add, div_t=div, signed_t=signed, n_levels_out_t=n_levels_out).node())
@@ -628,7 +630,7 @@ class PACTIntegerEmbedding(torch.nn.Module):
         self.register_buffer('twoStage', torch.Tensor((twoStage,)))
 
         eps_out = maxval/(self.n_levels//2-1)
-        self.eps_out = torch.Tensor((eps_out,))
+        self.register_buffer("eps_out",torch.Tensor((eps_out,)))
 
         # Requantize in two steps - the intermediate step allows for the embedding to have a lower quantization error
         if twoStage:
@@ -640,9 +642,11 @@ class PACTIntegerEmbedding(torch.nn.Module):
             eps_bias = eps_weights/eps_adder
             D = 2**16
 
-            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias))
+            self.register_buffer('weight', torch.Tensor(torch.round(PACTQuantize(weight, eps_bias, clip_lo,
+                                                                    clip_hi, self.floor, self.clip_gradient,
+                                                                                 self.noisy) / eps_bias)).detach())
             self.rqs1 = RequantShift(mul=torch.floor(D*eps_in/eps_adder), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
-            #self.rqs1 = RequantShift(mul=torch.floor(D*eps_in/eps_adder), add=D*self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels)
+            #self.rqs1 = Requanl=torch.floor(D*eps_in/eps_adder), add=D*self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels)
             self.rqs2 = RequantShift(mul=torch.floor(D*eps_adder/eps_out), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
 
         # Requantize in one step - Fewer operations, but the quantization error might be larger
@@ -652,7 +656,7 @@ class PACTIntegerEmbedding(torch.nn.Module):
             clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
             D = 2**16
 
-            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_out/D, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / (eps_out/D)))
+            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_out/D, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / (eps_out/D)).detach())
             self.rq = RequantShift(mul=torch.floor(D*eps_in/eps_out), add=self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
 
     def forward(self, x):
@@ -662,6 +666,135 @@ class PACTIntegerEmbedding(torch.nn.Module):
             out = self.rq(x)
 
         return out
+
+class PACTExp(torch.nn.Module):
+
+    def __init__(self, n_levels: int = 256, dim: int = 1):
+        super().__init__()
+        self.n_levels = n_levels
+        self.dim = dim
+        self.coeffA = torch.Tensor((0.35815147,))
+        self.coeffB = torch.Tensor((1.353,))
+        self.coeffC =  torch.Tensor((0.344,))
+        self.log2 =  torch.Tensor((1.,))
+        self.clip_gradient = torch.tensor(True)
+        self.floor = torch.tensor(False)
+
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+
+        p = 0
+        #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def forward(self, x):
+        """Approximate Softmax implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+
+#         clip_lo = -torch.abs(torch.max(x))
+#         clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+#         eps = (clip_hi-clip_lo)/self.n_levels
+
+        xTilde = (x - torch.max(x, -1, keepdim=True)[0])
+        z = torch.floor(-xTilde / math.log(2))
+        p = xTilde + z * math.log(2)
+        y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
+        return y
+
+class PACTIntegerExp(torch.nn.Module):
+
+    def __init__(self, n_levels: int = 256, dim: int = 1):
+        super().__init__()
+        self.n_levels = n_levels
+        self.dim = dim
+        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
+        self.register_buffer('log2',  torch.Tensor((1.,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))
+
+    class MyExp(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
+            z = torch.floor(-xTilde / log2)
+            p = xTilde + z * log2
+            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
+            out = torch.clip(y, zero, n_levels-1)
+
+            return out
+
+        @staticmethod
+        @parse_args('v', 't', 't', 't', 't', 't', 't')
+        def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
+
+            log2_ = g.op("Constant", value_t=log2)
+            coeffA_ = g.op("Constant", value_t=coeffA)
+            coeffB_ = g.op("Constant", value_t=coeffB)
+            coeffC_ = g.op("Constant", value_t=coeffC)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::iExp", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+
+        p = 0
+        #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def forward(self, x):
+        """Approximate Softmax implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+
+        if self.export_node:
+            return self.MyExp.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+        else:
+            return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
 class PACTSoftmax(torch.nn.Module):
 
@@ -719,7 +852,6 @@ class PACTSoftmax(torch.nn.Module):
         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
         out = y/(ysum)
         return out
-
 
 #         self.updateCoeffs(eps)
 
@@ -785,9 +917,6 @@ class PACTIntegerSoftmax(torch.nn.Module):
         :rtype:
 
         """
-
-        p = 0
-        #eps2 = torch.Tensor((0.35815147 / 2**p,))
         eps = eps
         eps2 = torch.Tensor((0.3585,))
 
@@ -851,7 +980,6 @@ class PACTGELU(torch.nn.Module):
 
             self.epsOne = epsOne.detach()
             self.epsOut = epsOut.detach()
-            #import IPython; IPython.embed()
 
             self.a.data[0] = torch.round(-0.288/epsA) * epsA
             self.b.data[0] = torch.round(-1.769/epsB) * epsB
@@ -934,6 +1062,8 @@ class PACTIntegerGELU(torch.nn.Module):
         self.zero = torch.Tensor((0.,)).detach()
         self.export_node = export_node
 
+        self.register_buffer("eps_out",torch.Tensor((0,)).detach())
+
         self.updateCoeffs(eps_in)
 
     def updateCoeffs(self, eps_in):
@@ -944,25 +1074,26 @@ class PACTIntegerGELU(torch.nn.Module):
         :rtype:
 
         """
-        epsX = eps_in * (math.sqrt(2))
+        with torch.no_grad():
+            epsX = eps_in * (math.sqrt(2))
 
-        r = 8
-        p = 0
+            r = 8
+            p = 0
 
-        #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
-        epsB = torch.Tensor((epsX,))
-        epsA = torch.Tensor(((0.288)/2**p,))
-        epsOne = epsB**2*epsA
-        epsOut = epsOne * eps_in
+            #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
+            epsB = torch.Tensor((epsX,))
+            epsA = torch.Tensor(((0.288)/2**p,))
+            epsOne = epsB**2*epsA
+            epsOut = epsOne * eps_in
 
-        self.eps_out = self.maxval/(self.n_levels//2-1) #epsOut
+            self.eps_out[0] = self.maxval/(self.n_levels//2-1) #epsOut
 
-        self.a.data[0] = torch.round(-0.288/epsA)
-        self.b.data[0] = torch.round(-1.769/epsB)
-        self.one.data[0] = torch.round(1./(epsB**2*epsA))
-        self.sqrttwo.data[0] = torch.round(torch.Tensor((2.,)))
+            self.a.data[0] = torch.round(-0.288/epsA)
+            self.b.data[0] = torch.round(-1.769/epsB)
+            self.one.data[0] = torch.round(1./(epsB**2*epsA))
+            self.sqrttwo.data[0] = torch.round(torch.Tensor((2.,)))
 
-        self.totScaler.data[0] = torch.round((self.D * epsOut) / self.eps_out)
+            self.totScaler.data[0] = torch.round((self.D * epsOut) / self.eps_out)
 
     def forward(self, x):
 
@@ -975,7 +1106,7 @@ class PACTIntegerGELU(torch.nn.Module):
 
         """
         if self.export_node:
-            return self.MyGELU.apply(x, self.b.type_as(x), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+            return self.MyGELU.apply(x, self.b.detach(), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
         else:
             return self.MyGELU.forward(None, x, self.b.type_as(x), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
@@ -1037,20 +1168,20 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             eps_weights = (clip_hi-clip_lo)/(n_levels-1)
             eps_bias = eps_weights
 
-            self.eps_weights = eps_weights
+            self.eps_weights =  eps_weights.detach()
 
-            self.weight = nn.Parameter(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach(), requires_grad=False)
-            self.bias = nn.Parameter(torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach(), requires_grad=False)
-            self.totScaler = torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach()
+            self.register_buffer("weight", torch.Tensor(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()))
+            self.register_buffer("bias", torch.Tensor(torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach()))
+            self.register_buffer("totScaler", torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach())
 
             self.weight *= self.totScaler
             self.bias *= self.totScaler
 
         else:
 
-            self.bias = torch.Tensor((0.,)).detach()
-            self.totScaler = torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach()
-            self.weight = self.totScaler
+            self.register_buffer("bias", torch.Tensor((0.,)).detach())
+            self.register_buffer("totScaler",torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach())
+            self.register_buffer("weight",self.totScaler)
 
     def forward(self, x):
         if self.export_node:
@@ -1147,7 +1278,8 @@ class _PACTActivation(nn.Module):
                  signed : bool = True,
                  percentile_clipping : bool = False,
                  upper_percentile : float = 99.5,
-                 lower_percentile : float = 0.5
+                 lower_percentile : float = 0.5,
+                 num_bins : int = 400
                  ):
 
         r"""Constructor.
@@ -1182,7 +1314,10 @@ class _PACTActivation(nn.Module):
         self.tqt = tqt
         self.n_levels = n_levels
 
-        self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=(learn_clip and not symm) and not tqt)
+        if act_kind == 'relu6':
+            self.clip_hi  = torch.nn.Parameter(torch.Tensor((6.,)),  requires_grad=(learn_clip and not symm) and not tqt)
+        else:
+            self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=(learn_clip and not symm) and not tqt)
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'high' : self.clip_hi}
         if signed:
@@ -1224,6 +1359,119 @@ class _PACTActivation(nn.Module):
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
         self.register_buffer('clip_gradient', torch.tensor(True))
 
+        if self.percentile_clipping:
+            self.num_bins = num_bins
+            self.register_buffer("histogram",torch.zeros_like(torch.Tensor(range(self.num_bins))))
+            self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
+            self.truemax          = torch.nn.Parameter(torch.Tensor((0,)), requires_grad=False)
+            self.truemin          = torch.nn.Parameter(torch.Tensor((0,)), requires_grad=False)
+
+    # SCHEREMO: Perform running estimates of percentile stats
+    def running_percentile_estimates(self, stat):
+        # SCHEREMO : Nearest-Rank method
+        sortedX = torch.sort(stat.flatten())[0]
+        upperPercentileIdx = int((sortedX.shape[0]-1)*self.upper_percentile)
+        lowerPercentileIdx = int((sortedX.shape[0]-1)*self.lower_percentile)
+        currentUpper = sortedX[upperPercentileIdx]
+        currentLower = sortedX[upperPercentileIdx]
+
+        self.min[:] = 0.9*self.min + 0.1 * currentLower
+        self.max[:] = 0.9*self.max + 0.1 * currentUpper
+
+    # SCHEREMO: Assume self.histogram magnitude list of data, binned
+    def merge_histograms(self, stat):
+
+        # SCHEREMO: Assumes that newEdges is always strictly wider than prevEdges
+        def rebin(histogram, prevEdges, newEdges):
+            assert len(prevEdges) == len(newEdges), "edge lengths are mismatching!"
+            newHistogram = torch.zeros_like(torch.Tensor(range(self.num_bins))).type_as(histogram)
+            binWidth = newEdges[1] - newEdges[0]
+
+            newIdx = 0
+            prevIdx = 0
+            while (prevIdx < len(prevEdges)-1):
+                # The old left edge is between two adjacent new edges -> at least partial match
+                if newEdges[newIdx] <= prevEdges[prevIdx] and newEdges[newIdx+1] >= prevEdges[prevIdx]:
+                    # If the old right edge is not in the bin, it's only a partial match
+                    if newEdges[newIdx+1] < prevEdges[prevIdx+1]:
+
+                        # If partial match, calculate overlap
+                        overlap = newEdges[newIdx+1] - prevEdges[prevIdx]
+                        ratio = overlap/binWidth
+                        newHistogram[newIdx] += ratio*(histogram[prevIdx])
+                        # Since we assume larger bins, add the rest to the next bin
+                        rest = 1-ratio
+                        newHistogram[newIdx+1] += rest*(histogram[prevIdx])
+
+                        # Since we matched only partially, the next match will be in another bin
+                        prevIdx += 1
+                        newIdx += 1
+
+                    # Otherwise the whole bin is "swallowed"
+                    else:
+                        newHistogram[newIdx] += histogram[prevIdx]
+
+                        # Since we swallowed, there might be more in this bin, only move prevIdx
+                        prevIdx += 1
+                else:
+                    # Since we don't match, the newBin must be "behind"
+                    newIdx += 1
+                assert newIdx < len(prevEdges), "newIdx is running away!"
+            try:
+                assert abs(torch.sum(newHistogram)-torch.sum(histogram))<(1e-3*torch.sum(newHistogram)+1e-5), "histograms are different"
+            except Exception as e:
+                print(e)
+                import IPython; IPython.embed()
+
+            return newHistogram
+
+        with torch.no_grad():
+            # SCHEREMO: get min and max
+            newTruemax = max(self.truemax.item(), stat.max())
+            newTruemin = min(self.truemin.item(), stat.min())
+
+            rangeChanged = True
+            if newTruemax == self.truemax and newTruemin == self.truemin:
+                rangeChanged = False
+
+            self.truemax[:] = newTruemax
+            self.truemin[:] = newTruemin
+
+            # SCHEREMO: Calculate new histogram according to new range
+            addHistogram = torch.histc(input=stat, min=self.truemin.item(), max=self.truemax.item(), bins=self.num_bins)
+
+            # SCHEREMO: Resample current histogram
+            if rangeChanged:
+                step = (self.truemax.item()-self.truemin.item())/self.num_bins
+                newEdges = torch.arange(self.truemin.item(), self.truemax.item()+step/2, step)
+
+                assert newEdges[0] <= self.prevEdges[0], "newEdges left edge is too large"
+                assert newEdges[-1] >= self.prevEdges[-1], "newEdges right edge is too small"
+
+                resampledHistogram = rebin(self.histogram, self.prevEdges, newEdges)
+            else:
+                resampledHistogram = self.histogram
+                newEdges = self.prevEdges
+
+            # SCHEREMO: Add histograms, preserve information about edges
+            self.histogram[:] = resampledHistogram + addHistogram
+            self.prevEdges[:] = newEdges
+
+            # SCHEREMO: Calculate clipping bounds
+            pdf = self.histogram / (torch.sum(self.histogram))
+            density = 0.0
+            idx = 0
+            if self.signed:
+                while density < self.lower_percentile:
+                    density += pdf[idx]
+                    idx += 1
+                self.min[:] = self.prevEdges[idx]
+            else:
+                self.min[:] = torch.Tensor((0.0,)).type_as(self.histogram)
+            while density < self.upper_percentile:
+                density += pdf[idx]
+                idx += 1
+            self.max[:] = self.prevEdges[idx]
 
     def get_eps(self, *args):
         return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
@@ -1237,25 +1485,11 @@ class _PACTActivation(nn.Module):
             x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             with torch.no_grad():
                 if self.percentile_clipping:
-
-                    # SCHEREMO : Nearest-Rank method
-                    sortedX = torch.sort(x_stat.flatten())[0]
-                    upperPercentileIdx = int(sortedX.shape[0]*self.upper_percentile)
-                    lowerPercentileIdx = int(sortedX.shape[0]*self.lower_percentile)
-
-                    # SCHEREMO : Case 1 : Unsigned act
-                    # Don't use the lower clip; unsigned needs clip_lo to be 0!
-                    if not self.signed:
-                        self.min[:] = min(self.min.item(), x.min())
-                        self.max[:] = max(self.max.item(), sortedX[upperPercentileIdx])
-
-                    # SCHEREMO: Case 2 : Signed act
-                    else:
-                        self.min[:] = min(self.min.item(), sortedX[lowerPercentileIdx])
-                        self.max[:] = max(self.max.item(), sortedX[upperPercentileIdx])
+                    self.merge_histograms(x_stat)
+                    #self.running_percentile_estimates(x_stat)
                 else:
-                        self.min[:] = min(self.min.item(), x_stat.min())
-                        self.max[:] = max(self.max.item(), x_stat.max())
+                    self.min[:] = min(self.min.item(), x_stat.min())
+                    self.max[:] = max(self.max.item(), x_stat.max())
                 self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
                 self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
             if self.act_kind == 'identity':
@@ -1608,7 +1842,8 @@ class _PACTLinOp:
             if self.learn_clip and self.symm_wts:
                 try:
                     clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-                except:
+                except Exception as e:
+                    print(e)
                     import IPython; IPython.embed()
             else:
                 clip_upper = self.clip_hi
