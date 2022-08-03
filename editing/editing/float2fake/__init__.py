@@ -1,3 +1,5 @@
+from quantlib.editing.editing.float2fake.quantisation.activationrounder import ActivationRounder
+from quantlib.editing.editing.float2fake.quantisation.weightrounder import WeightRounder
 from . import canonicalisation
 from . import quantisation
 
@@ -87,3 +89,67 @@ class F2F8bitPACTConverter(F2FConverter):
             addtreeforceoutputeps,
             qinterposerqdescriptionspec
         )
+
+class F2F8bitPACTRoundingConverter(ComposedEditor):
+    """Standard float-to-fake converter mapping all floating-point
+    ``nn.Module``s to 8-bit quantised counterparts, without requiring
+    QAT.
+
+    The weight parameters of linear operations are mapped to signed 8-bit,
+    whereas features are mapped to unsigned 8-bit. The algorithm is PACT.
+    This converter initializes quantization parameters so that they work
+    reasonably (with MobileNetV1, V2) without any QAT, in combination
+    with rounding of weights and activations (F2F8bitPACTRounder, to be
+    applied *after* the quantization hyperparameters have been calibrated).
+
+    """
+    def __init__(self):
+
+        # `ModuleWiseConverter` argument
+        modulewisedescriptionspec = (
+            ({'types': ('ReLU',)},                                 ('per-array',              {'bitwidth': 8, 'signed': False}, 'minmax',                        'PACT')),
+            ({'types': ('ReLU6',)},                                ('per-array',              {'bitwidth': 8, 'signed': False}, ('const', {'a': 0.0, 'b': 6.0}), 'PACT')),
+            ({'types': ('Identity',)},                             ('per-array',              {'bitwidth': 8, 'signed': True},  'const',                         'PACT')),  # using an unsigned data type for the identity would clamp all negative inputs to zero
+            ({'types': ('Linear', 'Conv1d', 'Conv2d', 'Conv3d',)}, ('per-outchannel_weights', {'bitwidth': 8, 'signed': True},  'minmax',                        'PACT')),
+        )
+
+        # `AddTreeHarmoniser` argument
+        addtreeqdescriptionspec = ('per-array', {'bitwidth': 8, 'signed': True}, ('meanstd', {'n_std': 5}), 'PACT')
+        addtreeforceoutputeps = True
+
+        # `QuantiserInterposer` argument
+        qinterposerqdescriptionspec = ('per-array', {'bitwidth': 8, 'signed': True}, 'minmax', 'PACT')
+
+        super(F2F8bitPACTRoundingConverter, self).__init__([
+            F2FCanonicaliser(),
+            F2FQuantiser(
+                modulewisedescriptionspec,
+                addtreeqdescriptionspec,
+                addtreeforceoutputeps,
+                qinterposerqdescriptionspec
+            )
+        ])
+
+class F2F8bitPACTRounder(ComposedEditor):
+    """Editor adding rounding to all PACT modules (Linear and Act).
+
+    This rounder should be used after the network has been quantized (e.g.,
+    with `F2F8bitPACTRoundingConverter`) and calibrated using 
+    ```
+    for m in net.modules():
+        if isinstance(m, tuple(qa.qalgorithms.qatalgorithms.pact.NNMODULE_TO_PACTMODULE.values())):
+            m.start_observing()
+    validate(net)
+    for m in net.modules():
+        if isinstance(m, tuple(qa.qalgorithms.qatalgorithms.pact.NNMODULE_TO_PACTMODULE.values())):
+            m.stop_observing()
+    ```
+    applied *after* the quantization hyperparameters have been calibrated).
+
+    """
+    def __init__(self):
+
+        super(F2F8bitPACTRounder, self).__init__([
+            WeightRounder(),
+            ActivationRounder()
+        ])
