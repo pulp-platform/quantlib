@@ -130,7 +130,7 @@ class F2F8bitPACTRoundingConverter(ComposedEditor):
             )
         ])
 
-class F2F8bitPACTRounder(qe.editors.ComposedEditor):
+class F2F8bitPACTRounder(ComposedEditor):
     """Editor adding rounding to all PACT modules (Linear and Act).
 
     This rounder should be used after the network has been quantized (e.g.,
