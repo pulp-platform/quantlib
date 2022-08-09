@@ -66,14 +66,19 @@ def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
     #return torch.Tensor((m.maxval/(m.n_levels-1),))
 
 def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
-    return torch.Tensor(max((m.maxval/(m.n_levels//2-1)), 0.),)
+    return m.get_eps_out(eps_in)
 
 def eps_conversion_identity(*eps_ins):
     return eps_ins[0]
 
 def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
-
     return eps_ins[0]/(eps_ins[1]*m.Delta)
+
+def eps_conversion_pact_epsdiv(m : nn.Module, *eps_ins, **kwargs):
+    return eps_ins[0]/m.constant
+
+def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
+    return eps_ins[0]
 
 # def eps_conversion_mul(*eps_ins):
 #     try:
@@ -115,6 +120,8 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTSoftmax : eps_conversion_pact_softmax,
                     PACTIntegerLayerNorm : eps_conversion_pact_layernorm,
                     PACTLayerNorm : eps_conversion_pact_layernorm,
+                    PACTEpsDiv : eps_conversion_pact_epsdiv,
+                    PACTIntegerAdd : eps_conversion_pact_integeradd,
                     PACTIntegerMatmul: eps_conversion_matmul,
 
                     f'_CALL_FUNCTION_{repr(operator.matmul)}' : eps_conversion_matmul,
@@ -200,14 +207,14 @@ class AnnotateEpsPass(FxPass):
         self.n_levels_in = n_levels_in
 
         self.accumulator_levels = accumulator_levels
-        self.placeHolderIdx = 0
 
     def run_pass(self, gm : fx.GraphModule):
         modules = gm_modules(gm)
+        placeHolderIdx = 0
         for node in gm.graph.nodes:
             if node.op == 'placeholder':
-                node.meta['quant'] = QuantInfo(eps_in=self.eps_in[self.placeHolderIdx], eps_out=self.eps_in[self.placeHolderIdx], n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in)
-                self.placeHolderIdx += 1
+                node.meta['quant'] = QuantInfo(eps_in=self.eps_in[placeHolderIdx], eps_out=self.eps_in[placeHolderIdx], n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in)
+                placeHolderIdx += 1
                 for u in node.users:
                     if self.noeps:
                         assert u.op == 'call_module' and isinstance(module_of_node(gm, u), _ORIGINAL_EPS_MODULES), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
@@ -233,9 +240,12 @@ class AnnotateEpsPass(FxPass):
                 try:
                     eps_out = _EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
                 except KeyError:
-                    #print(f"key {k} not found in _EPS_CONVERSIONS!")
-                    eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
-                    assert all(d < 1e-8 for d in eps_diffs), "Mismatching input epsilons in node with no eps propagation function!"
+                    eps_diffs = [torch.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
+                    try:
+                        assert all(d < 1e-8 for d in eps_diffs), "Mismatching input epsilons in node with no eps propagation function!"
+                    except Exception as e:
+                        print(e)
+                        import IPython; IPython.embed()
                     #print(f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
                     eps_out = all_eps[0]
 
