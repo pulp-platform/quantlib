@@ -40,6 +40,8 @@ from inspect import signature
 
 __all__ = [
     '_PACTActivation',
+    '_PACTLinOp',
+    '_PACTEps',
     'PACTUnsignedAct',
     'PACTAsymmetricAct',
     'PACTConv2d',
@@ -69,378 +71,12 @@ __all__ = [
     'PACTIntegerHardswish',
     'PACTIntegerHardsigmoid',
     'PACTDiv',
+    'PACTEpsDiv',
     'PACTIntegerDiv',
     'PACTExp',
     'PACTIntegerExp',
     'ChannelwiseThreshold'
 ]
-
-class PACTWrapLinearAttention(nn.Module):
-    class LinearAttention(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, q,k,v,
-                    wq_weight, wq_bias,
-                    wk_weight, wk_bias,
-                    wv_weight, wv_bias,
-                    wo_weight, wo_bias,
-                    wq_requant_mul, wq_requant_div,
-                    wk_requant_mul, wk_requant_div,
-                    wv_requant_mul, wv_requant_div,
-                    preattn_requant_mul, preattn_requant_div,
-                    normalizer_requant_mul, normalizer_requant_div,
-                    postattn_requant_mul, postattn_requant_div,
-                    wo_requant_mul, wo_requant_div,
-                    dim, heads, dim_head,
-                    Delta, eps, act_type,
-                    n_levels):
-            return q
-
-        @staticmethod
-        @parse_args('v','v','v',
-                    'v', 'v',
-                    'v', 'v',
-                    'v', 'v',
-                    'v', 'v',
-
-                    't', 't',
-                    't', 't',
-                    't', 't',
-                    't', 't',
-                    't', 't',
-                    't', 't',
-                    't', 't',
-
-                    't','t','t',
-                    'i', 'i', 'i',
-                    't')
-
-        def symbolic(g,
-                     q,k,v,
-                     wq_weight, wq_bias,
-                     wk_weight, wk_bias,
-                     wv_weight, wv_bias,
-                     wo_weight, wo_bias,
-                     wq_requant_mul, wq_requant_div,
-                     wk_requant_mul, wk_requant_div,
-                     wv_requant_mul, wv_requant_div,
-                     preattn_requant_mul, preattn_requant_div,
-                     normalizer_requant_mul, normalizer_requant_div,
-                     postattn_requant_mul, postattn_requant_div,
-                     wo_requant_mul, wo_requant_div,
-                     dim, heads, dim_head,
-                     Delta, eps, act_type,
-                     n_levels):
-            return g.op("PACTOps::LinearAttention",
-                        q, k, v,
-                        wq_weight, wq_bias,
-                        wk_weight, wk_bias,
-                        wv_weight, wv_bias,
-                        wo_weight, wo_bias,
-                        wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
-                        wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
-                        wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
-                        wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
-                        preattn_requant_mul_t=preattn_requant_mul, preattn_requant_div_t=preattn_requant_div,
-                        normalizer_requant_mul_t=normalizer_requant_mul, normalizer_requant_div_t=normalizer_requant_div,
-                        postattn_requant_mul_t=postattn_requant_mul, postattn_requant_div_t=postattn_requant_div,
-                        dim_t=dim, heads_t=heads, dim_head_t=dim_head,
-                        Delta_i = Delta, eps_i = eps, act_type_i=act_type,
-                        n_levels_t=n_levels)
-
-    def __init__(self, wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
-                 wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
-                 wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
-                 preattn_requant_mul, preattn_requant_div,
-                 normalizer_requant_mul, normalizer_requant_div,
-                 postattn_requant_mul, postattn_requant_div,
-                 wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
-                 dim, heads, dim_head,
-                 Delta, eps, act_type,
-                 n_levels, linearattention_node=True):
-        super().__init__()
-        self.wk_weight = nn.Parameter(torch.clone(wk_weight).detach())
-        self.wk_bias = nn.Parameter(torch.clone(wk_bias).detach())
-        self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
-        self.wk_requant_div = torch.clone(wk_requant_div).detach()
-        self.wq_weight = nn.Parameter(torch.clone(wq_weight).detach())
-        self.wq_bias = nn.Parameter(torch.clone(wq_bias).detach())
-        self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
-        self.wq_requant_div = torch.clone(wq_requant_div).detach()
-        self.wv_weight = nn.Parameter(torch.clone(wv_weight).detach())
-        self.wv_bias = nn.Parameter(torch.clone(wv_bias).detach())
-        self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
-        self.wv_requant_div = torch.clone(wv_requant_div).detach()
-        self.wo_weight = nn.Parameter(torch.clone(wo_weight).detach())
-        self.wo_bias = nn.Parameter(torch.clone(wo_bias).detach())
-        self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
-        self.wo_requant_div = torch.clone(wo_requant_div).detach()
-        self.preattn_requant_mul = torch.clone(preattn_requant_mul).detach()
-        self.preattn_requant_div = torch.clone(preattn_requant_div).detach()
-        self.normalizer_requant_mul = torch.clone(normalizer_requant_mul).detach()
-        self.normalizer_requant_div = torch.clone(normalizer_requant_div).detach()
-        self.postattn_requant_mul = torch.clone(postattn_requant_mul).detach()
-        self.postattn_requant_div = torch.clone(postattn_requant_div).detach()
-        self.Delta = Delta
-        self.eps = eps
-        self.act_type = act_type
-        self.n_levels = torch.clone(torch.Tensor((n_levels,))).detach()
-        self.dim = torch.clone(torch.Tensor((dim,))).detach()
-        self.dim_head = torch.clone(torch.Tensor((dim_head,))).detach()
-        self.heads = torch.clone(torch.Tensor((heads,))).detach()
-        self.linearattention_node = linearattention_node
-
-    def forward(self,q,k,v,**kwargs):
-        if self.linearattention_node:
-            return self.LinearAttention.apply(q,k,v,
-                                              self.wq_weight.type_as(q), self.wq_bias.type_as(q),
-                                              self.wk_weight.type_as(q), self.wk_bias.type_as(q),
-                                              self.wv_weight.type_as(q), self.wv_bias.type_as(q),
-                                              self.wo_weight.type_as(q), self.wo_bias.type_as(q),
-                                              self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
-                                              self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
-                                              self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
-                                              self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
-                                              self.normalizer_requant_mul.type_as(q), self.normalizer_requant_div.type_as(q),
-                                              self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
-                                              self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
-                                              self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
-                                              self.Delta, self.eps, self.act_type,
-                                              self.n_levels.type_as(q))
-        else:
-            return self.LinearAttention.forward(None, q,k,v,
-                                                self.wq_weight.type_as(q), self.wq_bias.type_as(q),
-                                                self.wk_weight.type_as(q), self.wk_bias.type_as(q),
-                                                self.wv_weight.type_as(q), self.wv_bias.type_as(q),
-                                                self.wo_weight.type_as(q), self.wo_bias.type_as(q),
-                                                self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
-                                                self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
-                                                self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
-                                                self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
-                                                self.normalizer_requant_mul.type_as(q), self.normalizer_requant_div.type_as(q),
-                                                self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
-                                                self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
-                                                self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
-                                                self.Delta, self.eps, self.act_type,
-                                                self.n_levels.type_as(q))
-
-class PACTWrapMHSA(nn.Module):
-
-    class MyMHSA(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, q,k,v,
-                    wq_weight, wq_bias,
-                    wk_weight, wk_bias,
-                    wv_weight, wv_bias,
-                    wo_weight, wo_bias,
-                    wq_requant_mul, wq_requant_div,
-                    wk_requant_mul, wk_requant_div,
-                    wv_requant_mul, wv_requant_div,
-                    preattn_requant_mul, preattn_requant_div,
-                    postattn_requant_mul, postattn_requant_div,
-                    wo_requant_mul, wo_requant_div,
-                    dim, heads, dim_head,
-                    isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
-                    n_levels, module):
-            return module(q,k,v)
-
-
-        @staticmethod
-        @parse_args('v','v','v',
-                    'v', 'v',
-                    'v', 'v',
-                    'v', 'v',
-                    'v', 'v',
-
-                    't', 't',
-                    't', 't',
-                    't', 't',
-                    't', 't',
-                    't', 't',
-                    't', 't',
-
-                    't','t','t',
-                    't', 't', 't', 't',
-                    't', 't')
-        def symbolic(g,
-                     q,k,v,
-                     wq_weight, wq_bias,
-                     wk_weight, wk_bias,
-                     wv_weight, wv_bias,
-                     wo_weight, wo_bias,
-
-                     wq_requant_mul, wq_requant_div,
-                     wk_requant_mul, wk_requant_div,
-                     wv_requant_mul, wv_requant_div,
-                     preattn_requant_mul, preattn_requant_div,
-                     postattn_requant_mul, postattn_requant_div,
-                     wo_requant_mul, wo_requant_div,
-
-                     dim, heads, dim_head,
-                     isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
-                     n_levels, module):
-
-            wk_requant_mul_ = g.op("Constant", value_t=wk_requant_mul)
-            wk_requant_div_ = g.op("Constant", value_t=wk_requant_div)
-            wq_requant_mul_ = g.op("Constant", value_t=wq_requant_mul)
-            wq_requant_div_ = g.op("Constant", value_t=wq_requant_div)
-            wv_requant_mul_ = g.op("Constant", value_t=wv_requant_mul)
-            wv_requant_div_ = g.op("Constant", value_t=wv_requant_div)
-            wo_requant_mul_ = g.op("Constant", value_t=wo_requant_mul)
-            wo_requant_div_ = g.op("Constant", value_t=wo_requant_div)
-            preattn_requant_mul_ = g.op("Constant", value_t=preattn_requant_mul)
-            preattn_requant_div_ = g.op("Constant", value_t=preattn_requant_div)
-            postattn_requant_mul_ = g.op("Constant", value_t=postattn_requant_mul)
-            postattn_requant_div_ = g.op("Constant", value_t=postattn_requant_div)
-            isoftmaxA_ = g.op("Constant", value_t=isoftmaxA)
-            isoftmaxB_ = g.op("Constant", value_t=isoftmaxB)
-            isoftmaxC_ = g.op("Constant", value_t=isoftmaxC)
-            isoftmaxlog2_ = g.op("Constant", value_t=isoftmaxlog2)
-            n_levels_ = g.op("Constant", value_t=n_levels)
-            dim_ = g.op("Constant", value_t=dim)
-            dim_head_ = g.op("Constant", value_t=dim_head)
-            heads_ = g.op("Constant", value_t=heads)
-
-            return g.op("PACTOps::MultiHeadSelfAttention",
-                        q, k, v,
-                        wq_weight, wq_bias,
-                        wk_weight, wk_bias,
-                        wv_weight, wv_bias,
-                        wo_weight, wo_bias,
-                        wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
-                        wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
-                        wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
-                        wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
-                        preattn_requant_mul_t=preattn_requant_mul, preattn_requant_div_t=preattn_requant_div,
-                        postattn_requant_mul_t=postattn_requant_mul, postattn_requant_div_t=postattn_requant_div,
-                        dim_t=dim, heads_t=heads, dim_head_t=dim_head,
-                        isoftmaxA_t=isoftmaxA, isoftmaxB_t=isoftmaxB, isoftmaxC_t=isoftmaxC, isoftmaxlog2_t=isoftmaxlog2,
-                        n_levels_t=n_levels)
-
-
-    def __init__(self,
-                 wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
-                 wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
-                 wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
-                 preattn_requant_mul, preattn_requant_div,
-                 postattn_requant_mul, postattn_requant_div,
-                 wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
-                 dim, heads, dim_head,
-                 isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels, module):
-
-        super().__init__()
-        self.module = copy.deepcopy(module)
-        self.wk_weight = nn.Parameter(torch.clone(wk_weight).detach())
-        self.wk_bias = nn.Parameter(torch.clone(wk_bias).detach())
-        self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
-        self.wk_requant_div = torch.clone(wk_requant_div).detach()
-        self.wq_weight = nn.Parameter(torch.clone(wq_weight).detach())
-        self.wq_bias = nn.Parameter(torch.clone(wq_bias).detach())
-        self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
-        self.wq_requant_div = torch.clone(wq_requant_div).detach()
-        self.wv_weight = nn.Parameter(torch.clone(wv_weight).detach())
-        self.wv_bias = nn.Parameter(torch.clone(wv_bias).detach())
-        self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
-        self.wv_requant_div = torch.clone(wv_requant_div).detach()
-        self.wo_weight = nn.Parameter(torch.clone(wo_weight).detach())
-        self.wo_bias = nn.Parameter(torch.clone(wo_bias).detach())
-        self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
-        self.wo_requant_div = torch.clone(wo_requant_div).detach()
-        self.preattn_requant_mul = torch.clone(preattn_requant_mul).detach()
-        self.preattn_requant_div = torch.clone(preattn_requant_div).detach()
-        self.postattn_requant_mul = torch.clone(postattn_requant_mul).detach()
-        self.postattn_requant_div = torch.clone(postattn_requant_div).detach()
-        self.isoftmaxA = torch.clone(isoftmaxA).detach()
-        self.isoftmaxB = torch.clone(isoftmaxB).detach()
-        self.isoftmaxC = torch.clone(isoftmaxC).detach()
-        self.isoftmaxlog2 = torch.clone(isoftmaxlog2).detach()
-        self.n_levels = torch.clone(torch.Tensor((n_levels,))).detach()
-        self.dim = torch.clone(torch.Tensor((dim,))).detach()
-        self.dim_head = torch.clone(torch.Tensor((dim_head,))).detach()
-        self.heads = torch.clone(torch.Tensor((heads,))).detach()
-
-    def forward(self, q,k,v, **kwargs):
-        return self.MyMHSA.apply(q,k,v,
-                                 self.wq_weight.type_as(q), self.wq_bias.type_as(q),
-                                 self.wk_weight.type_as(q), self.wk_bias.type_as(q),
-                                 self.wv_weight.type_as(q), self.wv_bias.type_as(q),
-                                 self.wo_weight.type_as(q), self.wo_bias.type_as(q),
-                                 self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
-                                 self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
-                                 self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
-                                 self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
-                                 self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
-                                 self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
-                                 self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
-                                 self.isoftmaxA.type_as(q), self.isoftmaxB.type_as(q), self.isoftmaxC.type_as(q), self.isoftmaxlog2.type_as(q),
-                                 self.n_levels.type_as(q), self.module)
-
-class PACTDiv(nn.Module):
-    def __init__(self, Delta, y_n_levels:int=2**16):
-        super().__init__()
-        self.Delta = Delta
-        self.register_buffer('eps', torch.Tensor((0.,)))
-        self.y_n_levels = y_n_levels
-
-    def forward(self,x,y):
-        if self.eps == 0.:
-            eps = (torch.abs(y).max() / (self.y_n_levels-1))
-        else:
-            eps = self.eps
-        y = torch.clip(y,min=eps)
-
-        return torch.floor(x * self.Delta / (y)) / self.Delta
-
-class PACTIntegerDiv(nn.Module):
-
-    class MyIntegerDiv(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, x, y, Delta, eps):
-            y = y + eps
-            return torch.floor(x * Delta / (y))
-
-        @staticmethod
-        @parse_args('v','v','i', 'i')
-        def symbolic(g, x, y, Delta, eps):
-            return g.op("PACTOps::IntegerDiv", x, y, Delta_i = Delta, eps_i=eps)
-
-    def __init__(self, Delta, integer_node=True, eps=1):
-        super().__init__()
-        self.Delta = Delta
-        self.eps = eps
-        self.integer_node = integer_node
-
-    def forward(self,x,y):
-        if self.integer_node:
-            return self.MyIntegerDiv.apply(x,y,self.Delta,self.eps)
-        else:
-            return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps)
-
-class PACTWrapModule(nn.Module):
-
-    def __init__(self, module, n_levels, _dict = {}, quantize : bool = False, **actArgs):
-        super().__init__()
-
-        default_kwargs = {'learn_clip': True, 'init_clip': 'max', 'act_kind': 'identity', 'leaky': 0.0}
-        default_kwargs.update(actArgs)
-
-        self.n_levels = n_levels
-        self._dict = _dict
-        self.quantize = quantize
-        self.actArgs = actArgs
-
-        self.module = copy.copy(module)
-        self.statTracker = PACTAsymmetricAct(n_levels=n_levels, **default_kwargs)
-
-    def forward(self, *x, **kwargs):
-        y = self.module.forward(*x, **kwargs)
-        z = self.statTracker(y)
-        if self.quantize:
-            return z
-        else:
-            return y
 
 class RequantShift(nn.Module):
 
@@ -598,633 +234,6 @@ class ChannelwiseThreshold(nn.Module):
     def forward(self, x):
         return self.MyChannelwiseThreshold.apply(x, self.thresh_lo.data.type_as(x), self.thresh_hi.data.type_as(x))
 
-class PACTEmbedding(torch.nn.Module):
-
-    def __init__(self, n_levels:int = 256, weights : torch.Tensor = torch.Tensor((1.,)), **kwargs):
-        super().__init__()
-        self.weights = nn.Parameter(weights)
-        self.adder = PACTIntegerAdd(n_levels=n_levels, num_args = 2, **kwargs)
-
-        self.register_buffer('maxval', torch.Tensor((0.,)))
-
-    def reassign_epsilons(self):
-        self.adder.reassign_epsilons()
-
-    def forward(self, x):
-        out = self.adder(x,self.weights)
-        self.maxval.data[0] = max(torch.max(torch.abs(out)).item(), self.maxval)
-
-        return out
-
-class PACTIntegerEmbedding(torch.nn.Module):
-
-    # Implements the integerized version of an Embedding
-    # Supports single stage mode, i.e. embeddings are quantized to the output epsilon and double stage mode where weights are quantized to an intermediate epsilon, which is more precise
-
-    def __init__(self, n_levels: int = 256, weight : torch.Tensor = torch.Tensor((1.,)), eps_in:float = 1./255, eps_adder:float=1./255, maxval:float=1., twoStage:bool = False, **kwargs):
-        super().__init__()
-        self.n_levels = n_levels
-
-        self.register_buffer('floor', torch.Tensor((False,)))
-        self.register_buffer('clip_gradient', torch.Tensor((True,)))
-        self.register_buffer('noisy', torch.Tensor((False,)))
-        self.register_buffer('twoStage', torch.Tensor((twoStage,)))
-
-        eps_out = maxval/(self.n_levels//2-1)
-        self.register_buffer("eps_out",torch.Tensor((eps_out,)))
-
-        # Requantize in two steps - the intermediate step allows for the embedding to have a lower quantization error
-        if twoStage:
-
-            clip_lo = -(torch.max(torch.max(torch.abs(weight))))
-            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
-
-            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
-            eps_bias = eps_weights/eps_adder
-            D = 2**16
-
-            self.register_buffer('weight', torch.Tensor(torch.round(PACTQuantize(weight, eps_bias, clip_lo,
-                                                                    clip_hi, self.floor, self.clip_gradient,
-                                                                                 self.noisy) / eps_bias)).detach())
-            self.rqs1 = RequantShift(mul=torch.floor(D*eps_in/eps_adder), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
-            #self.rqs1 = Requanl=torch.floor(D*eps_in/eps_adder), add=D*self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels)
-            self.rqs2 = RequantShift(mul=torch.floor(D*eps_adder/eps_out), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
-
-        # Requantize in one step - Fewer operations, but the quantization error might be larger
-        else:
-
-            clip_lo = -torch.abs(maxval)
-            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
-            D = 2**16
-
-            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_out/D, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / (eps_out/D)).detach())
-            self.rq = RequantShift(mul=torch.floor(D*eps_in/eps_out), add=self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
-
-    def forward(self, x):
-        if self.twoStage:
-            out = self.rqs2(self.rqs1(x) + self.weight)
-        else:
-            out = self.rq(x)
-
-        return out
-
-class PACTExp(torch.nn.Module):
-
-    def __init__(self, n_levels: int = 256, dim: int = 1):
-        super().__init__()
-        self.n_levels = n_levels
-        self.dim = dim
-        self.coeffA = torch.Tensor((0.35815147,))
-        self.coeffB = torch.Tensor((1.353,))
-        self.coeffC =  torch.Tensor((0.344,))
-        self.log2 =  torch.Tensor((1.,))
-        self.clip_gradient = torch.tensor(True)
-        self.floor = torch.tensor(False)
-
-
-    def updateCoeffs(self, eps):
-        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
-
-        :param eps: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-
-        p = 0
-        #eps2 = torch.Tensor((0.35815147 / 2**p,))
-        eps = eps
-        eps2 = torch.Tensor((0.3585,)).type_as(eps)
-
-        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
-        self.coeffB.data[0] = torch.round(1.353/eps) * eps
-        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
-
-        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
-        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
-
-    def forward(self, x):
-        """Approximate Softmax implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
-
-        :param x:
-        :returns:
-        :rtype:
-
-        """
-
-#         clip_lo = -torch.abs(torch.max(x))
-#         clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-#         eps = (clip_hi-clip_lo)/self.n_levels
-
-        xTilde = (x - torch.max(x, -1, keepdim=True)[0])
-        z = torch.floor(-xTilde / math.log(2))
-        p = xTilde + z * math.log(2)
-        y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
-        return y
-
-class PACTIntegerExp(torch.nn.Module):
-
-    def __init__(self, n_levels: int = 256, dim: int = 1):
-        super().__init__()
-        self.n_levels = n_levels
-        self.dim = dim
-        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
-        self.register_buffer('coeffB', torch.Tensor((1.353,)))
-        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
-        self.register_buffer('log2',  torch.Tensor((1.,)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
-
-    class MyExp(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
-            xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
-            z = torch.floor(-xTilde / log2)
-            p = xTilde + z * log2
-            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
-            out = torch.clip(y, zero, n_levels-1)
-
-            return out
-
-        @staticmethod
-        @parse_args('v', 't', 't', 't', 't', 't', 't')
-        def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
-            #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
-
-            log2_ = g.op("Constant", value_t=log2)
-            coeffA_ = g.op("Constant", value_t=coeffA)
-            coeffB_ = g.op("Constant", value_t=coeffB)
-            coeffC_ = g.op("Constant", value_t=coeffC)
-            n_levels_ = g.op("Constant", value_t=n_levels)
-
-            return g.op("PACTOps::iExp", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
-
-    def updateCoeffs(self, eps):
-        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
-
-        :param eps: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-
-        p = 0
-        #eps2 = torch.Tensor((0.35815147 / 2**p,))
-        eps = eps
-        eps2 = torch.Tensor((0.3585,)).type_as(eps)
-
-        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
-        self.coeffB.data[0] = torch.round(1.353/eps) * eps
-        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
-
-        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
-        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
-
-    def forward(self, x):
-        """Approximate Softmax implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
-
-        :param x:
-        :returns:
-        :rtype:
-
-        """
-
-        if self.export_node:
-            return self.MyExp.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
-        else:
-            return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
-
-class PACTSoftmax(torch.nn.Module):
-
-    def __init__(self, n_levels: int = 256, dim: int = 1):
-        super().__init__()
-        self.n_levels = n_levels
-        self.dim = dim
-        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
-        self.register_buffer('coeffB', torch.Tensor((1.353,)))
-        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
-        self.register_buffer('log2',  torch.Tensor((1.,)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
-
-
-    def updateCoeffs(self, eps):
-        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
-
-        :param eps: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-
-        p = 0
-        #eps2 = torch.Tensor((0.35815147 / 2**p,))
-        eps = eps
-        eps2 = torch.Tensor((0.3585,)).type_as(eps)
-
-        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
-        self.coeffB.data[0] = torch.round(1.353/eps) * eps
-        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
-
-        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
-        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
-
-    def forward(self, x):
-        """Approximate Softmax implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
-
-        :param x:
-        :returns:
-        :rtype:
-
-        """
-
-        clip_lo = -torch.abs(torch.max(x))
-        clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-        eps = (clip_hi-clip_lo)/self.n_levels
-
-        xTilde = (x - torch.max(x, -1, keepdim=True)[0])
-        z = torch.floor(-xTilde / math.log(2))
-        p = xTilde + z * math.log(2)
-        y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
-        ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-        out = y/(ysum)
-        return out
-
-#         self.updateCoeffs(eps)
-
-#         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
-#         # Quantize coeffs
-#         z = torch.floor(-xTilde / self.log2.type_as(x))
-#         p = xTilde + z * self.log2.type_as(x)
-#         y = (self.coeffA.type_as(x)*(p + self.coeffB.type_as(x))**2 + self.coeffC.type_as(x)) / 2**z
-#         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-#         out = y/(ysum)
-#         out = PACTQuantize(out, 1/self.n_levels, torch.Tensor((0,)).type_as(x), torch.Tensor((1.,)).type_as(x), floor=self.floor, clip_gradient=self.clip_gradient)
-#         return out
-
-
-class PACTIntegerSoftmax(torch.nn.Module):
-
-    class MySoftmax(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
-            xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
-            z = torch.floor(-xTilde / log2)
-            p = xTilde + z * log2
-            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
-            ysum = torch.sum(y, -1, keepdim=True)
-            norm = torch.floor(y*(n_levels-1)/(ysum))
-            out = torch.clip(norm, zero, n_levels-1)
-
-            return out
-
-        @staticmethod
-        @parse_args('v', 't', 't', 't', 't', 't', 't')
-        def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
-            #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
-
-            log2_ = g.op("Constant", value_t=log2)
-            coeffA_ = g.op("Constant", value_t=coeffA)
-            coeffB_ = g.op("Constant", value_t=coeffB)
-            coeffC_ = g.op("Constant", value_t=coeffC)
-            n_levels_ = g.op("Constant", value_t=n_levels)
-
-            return g.op("PACTOps::iSoftmax", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
-
-    def __init__(self, n_levels: int = 256, eps_in: float = 1./255, export_node=False):
-        super().__init__()
-
-        self.eps_in = eps_in
-        self.n_levels = torch.Tensor((n_levels,))
-        self.coeffA = torch.Tensor((0.35815147,))
-        self.coeffB = torch.Tensor((1.353,))
-        self.coeffC = torch.Tensor((0.344,))
-        self.log2 = torch.Tensor((1.,))
-        self.zero = torch.Tensor((0.,))
-
-        self.updateCoeffs(eps_in)
-        self.export_node = export_node
-
-    def updateCoeffs(self, eps):
-        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
-
-        :param eps: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-        eps = eps
-        eps2 = torch.Tensor((0.3585,))
-
-        self.coeffA.data[0] = torch.round(0.3585/eps2)
-        self.coeffB.data[0] = torch.round(1.353/eps)
-        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2))
-
-        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
-        self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
-
-    def forward(self, x):
-        """Approximate Softmax implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
-
-        :param x:
-        :returns:
-        :rtype:
-
-        """
-        if self.export_node:
-            return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
-        else:
-            return self.MySoftmax.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
-
-class PACTGELU(torch.nn.Module):
-
-    def __init__(self,  n_levels: int = 256):
-        super().__init__()
-
-        self.n_levels = n_levels
-        self.register_buffer('a',torch.Tensor((-0.288,)))
-        self.register_buffer('b',torch.Tensor((-1.769,)))
-        self.register_buffer('one', torch.Tensor((1.,)))
-        self.register_buffer('sqrttwo', torch.Tensor((math.sqrt(2),)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
-        # Maxval is used to gather statistics
-        self.register_buffer('maxval', torch.Tensor((0.,)))
-
-    def updateCoeffs(self, eps_in):
-        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
-
-        :param eps_in: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-        epsX = eps_in * (math.sqrt(2))
-
-        r = 8
-        p = 0
-
-        #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
-        with torch.no_grad():
-            epsB = epsX
-            epsA = torch.Tensor(((0.288)/2**p,)).type_as(eps_in)
-            self.epsB = epsB.detach()
-            self.epsA = epsA.detach()
-            epsOne = epsB**2*epsA
-            epsOut = epsOne * eps_in
-
-            self.epsOne = epsOne.detach()
-            self.epsOut = epsOut.detach()
-
-            self.a.data[0] = torch.round(-0.288/epsA) * epsA
-            self.b.data[0] = torch.round(-1.769/epsB) * epsB
-            self.one.data[0] = torch.round(1./(epsB**2*epsA)) * epsB**2*epsA
-            self.sqrttwo.data[0] = torch.round(math.sqrt(2)/(eps_in/epsB))*(eps_in/epsB)
-    def forward(self, x):
-        """Approximate floating point GELU implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
-
-        :param x:
-        :returns:
-        :rtype:
-
-        """
-        #Estimate epsilon
-        with torch.no_grad():
-            if torch.min(x) >= 0:
-                clip_lo = torch.Tensor((0,)).type_as(x)
-                clip_hi = torch.max(torch.abs(x))
-            else:
-                clip_lo = -torch.max(torch.abs(x))
-                clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-
-            eps = (clip_hi-clip_lo)/(self.n_levels-1)
-            self.updateCoeffs(eps)
-
-        # fq x:
-        x = torch.round(x/eps)*eps
-
-        L = torch.sign(x) * (self.a.type_as(x)*(torch.clip(torch.abs(x/self.sqrttwo.type_as(x)), min=torch.Tensor((0,)).type_as(x), max=-self.b.type_as(x)) + self.b.type_as(x))**2 + self.one.type_as(x))
-        # fq L:
-        L = torch.round(L/self.epsOne.type_as(x))*self.epsOne.type_as(x)
-        y = x*((self.one.type_as(x)+L)/2)
-        # fq y:
-        y = torch.round(y/self.epsOut.type_as(x))*self.epsOut.type_as(x)
-        self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-
-        return y
-
-class PACTIntegerGELU(torch.nn.Module):
-
-    class MyGELU(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, x, b, one, totScaler, D, n_levels, zero):
-            L = torch.sign(x) * (-(torch.clip(torch.abs(x), min=zero, max=-b) + b)**2 + one)
-            y = x*((one+L)>>1)
-
-            y = torch.floor((y * totScaler)/D)
-            y = torch.clip(y, min=-n_levels//2, max = n_levels//2-1)
-
-            return y
-
-        @staticmethod
-        @parse_args('v', 't','t','t','t','t','t')
-        def symbolic(g, x, b, one, totScaler, D, n_levels, zero):
-
-            b_ = g.op("Constant", value_t=b)
-            one_ = g.op("Constant", value_t=one)
-            totScaler_ = g.op("Constant", value_t=totScaler)
-            D_ = g.op("Constant", value_t=D)
-            n_levels_ = g.op("Constant", value_t=n_levels)
-
-            return g.op("PACTOps::iGELU", x, b_t=b, one_t=one, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
-
-    def __init__(self, n_levels: int = 256, eps_in = 1., maxval = 1., D=2**14, export_node = False):
-        super().__init__()
-
-        self.n_levels = torch.Tensor((n_levels,)).detach()
-
-        self.a = torch.Tensor((-0.288,)).detach()
-        self.b = torch.Tensor((-1.769,)).detach()
-        self.one = torch.Tensor((1.,)).detach()
-        self.sqrttwo = torch.Tensor((4,)).detach()
-
-        self.D = torch.Tensor((D,)).detach()
-        self.totScaler = torch.Tensor((255.,)).detach()
-        self.maxval = torch.Tensor((maxval,)).detach()
-
-        self.zero = torch.Tensor((0.,)).detach()
-        self.export_node = export_node
-
-        self.register_buffer("eps_out",torch.Tensor((0,)).detach())
-
-        self.updateCoeffs(eps_in)
-
-    def updateCoeffs(self, eps_in):
-        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
-
-        :param eps_in: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-        with torch.no_grad():
-            epsX = eps_in * (math.sqrt(2))
-
-            r = 8
-            p = 0
-
-            #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
-            epsB = torch.Tensor((epsX,))
-            epsA = torch.Tensor(((0.288)/2**p,))
-            epsOne = epsB**2*epsA
-            epsOut = epsOne * eps_in
-
-            self.eps_out[0] = self.maxval/(self.n_levels//2-1) #epsOut
-
-            self.a.data[0] = torch.round(-0.288/epsA)
-            self.b.data[0] = torch.round(-1.769/epsB)
-            self.one.data[0] = torch.round(1./(epsB**2*epsA))
-            self.sqrttwo.data[0] = torch.round(torch.Tensor((2.,)))
-
-            self.totScaler.data[0] = torch.round((self.D * epsOut) / self.eps_out)
-
-    def forward(self, x):
-
-        """Approximate Integer GELU implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
-
-        :param eps_in:
-        :returns:
-        :rtype:
-
-        """
-        if self.export_node:
-            return self.MyGELU.apply(x, self.b.detach(), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
-        else:
-            return self.MyGELU.forward(None, x, self.b.type_as(x), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
-
-class PACTIntegerLayerNorm(torch.nn.Module):
-
-    class MyLayerNorm(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, x, weight, bias, D, n_levels):
-            nom = x - (torch.mean(x, len(x.shape)-1, keepdim=True).int().float())
-            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(nom**2, len(x.shape)-1, keepdim=True))+1))
-
-            nom = nom * weight
-
-            y = (torch.div(nom,denom)).int().float()
-
-            y = y + (bias)
-
-            y = torch.floor(y/(D))
-            y = torch.clip(y, -n_levels//2, n_levels//2-1)
-            return y
-
-        @staticmethod
-        @parse_args('v','v','v','t','t')
-        def symbolic(g, x, weight, bias, D, n_levels):
-
-            n_levels_ = g.op("Constant", value_t=n_levels)
-            D_ = g.op("Constant", value_t=D)
-
-            return g.op("PACTOps::iLayerNorm", x, weight, bias, D_t=D, n_levels_t=n_levels)
-
-
-    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,)), D=2**24, export_node=False, **kwargs):
-        super().__init__()
-
-        self.n_levels = torch.Tensor((n_levels,)).detach()
-
-        self.eps = torch.Tensor((eps_in,)).detach()
-        self.D = torch.Tensor((D,)).detach()
-
-        # dummyOne and dummyZero are there to have a comparison value on Multi-GPU systems to check if weight and bias are used
-
-        self.floor = torch.Tensor((False,)).detach()
-        self.clip_gradient = torch.Tensor((True,)).detach()
-        self.noisy = torch.Tensor((False,)).detach()
-
-        # Maxval is used to track statistics
-        self.maxval = torch.Tensor((maxval,)).detach()
-
-        dummyOne =  torch.Tensor((1.,)).type_as(weight)
-        dummyZero = torch.Tensor((0.,)).type_as(bias)
-
-        self.export_node = export_node
-
-        if not torch.equal(weight, dummyOne) and not torch.equal(bias, dummyZero):
-            clip_lo = -max(torch.max(torch.abs(bias)), torch.max(torch.abs(weight)))
-            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
-
-            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
-            eps_bias = eps_weights
-
-            self.eps_weights =  eps_weights.detach()
-
-            self.register_buffer("weight", torch.Tensor(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()))
-            self.register_buffer("bias", torch.Tensor(torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach()))
-            self.register_buffer("totScaler", torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach())
-
-            self.weight *= self.totScaler
-            self.bias *= self.totScaler
-
-        else:
-
-            self.register_buffer("bias", torch.Tensor((0.,)).detach())
-            self.register_buffer("totScaler",torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach())
-            self.register_buffer("weight",self.totScaler)
-
-    def forward(self, x):
-        if self.export_node:
-            return self.MyLayerNorm.apply(x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
-        else:
-            return self.MyLayerNorm.forward(None, x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
-
-class PACTLayerNorm(torch.nn.Module):
-
-    def __init__(self, n_levels: int = 256, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), D=2**24):
-        super().__init__()
-
-        self.n_levels = n_levels
-
-        self.register_buffer('totScaler', torch.Tensor((255.,)))
-        self.register_buffer('D', torch.Tensor((D,)))
-        self.register_buffer('maxval', torch.Tensor((1.,)))
-        self.register_buffer('maxval_tot', torch.Tensor((1.,)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
-
-        self.register_buffer('dummyOne', torch.Tensor((1.,)))
-        self.register_buffer('dummyZero', torch.Tensor((0.,)))
-
-        self.normalized_shape = normalized_shape
-
-        self.weight = nn.Parameter(weight)
-        self.bias = nn.Parameter(bias)
-
-    def forward(self, x):
-
-        nom = x - torch.mean(x, -1, keepdim=True)
-        denom = torch.sqrt(torch.mean(torch.pow(nom, 2), -1, keepdim=True)+1e-5)
-        y = torch.div(nom*self.weight,denom) + self.bias
-
-        self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-        scaler = (self.n_levels)/self.maxval
-        self.totScaler.data[0] = math.floor(self.D * scaler)
-
-        return y
-
-
 r"""Broadly configurable implementations of the PACT
 (https://arxiv.org/pdf/1807.06964) and TQT (https://arxiv.org/abs/1903.08066)
 algorithms. These layers require the corresponding `Controller`s to work correctly!
@@ -1280,7 +289,7 @@ class _PACTActivation(nn.Module):
                  percentile_clipping : bool = False,
                  upper_percentile : float = 99.5,
                  lower_percentile : float = 0.5,
-                 num_bins : int = 400
+                 num_bins : int = 512
                  ):
 
         r"""Constructor.
@@ -1360,70 +369,22 @@ class _PACTActivation(nn.Module):
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
         self.register_buffer('clip_gradient', torch.tensor(True))
 
-        if self.percentile_clipping:
-            self.num_bins = num_bins
-            self.register_buffer("histogram",torch.zeros_like(torch.Tensor(range(self.num_bins))))
-            self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
-            self.truemax          = torch.nn.Parameter(torch.Tensor((0,)), requires_grad=False)
-            self.truemin          = torch.nn.Parameter(torch.Tensor((0,)), requires_grad=False)
-
-    # SCHEREMO: Perform running estimates of percentile stats
-    def running_percentile_estimates(self, stat):
-        # SCHEREMO : Nearest-Rank method
-        sortedX = torch.sort(stat.flatten())[0]
-        upperPercentileIdx = int((sortedX.shape[0]-1)*self.upper_percentile)
-        lowerPercentileIdx = int((sortedX.shape[0]-1)*self.lower_percentile)
-        currentUpper = sortedX[upperPercentileIdx]
-        currentLower = sortedX[upperPercentileIdx]
-
-        self.min[:] = 0.9*self.min + 0.1 * currentLower
-        self.max[:] = 0.9*self.max + 0.1 * currentUpper
+        self.num_bins = num_bins
+        self.register_buffer("histogram",torch.zeros_like(torch.Tensor(range(self.num_bins))))
+        self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
+        self.truemax          = torch.nn.Parameter(torch.Tensor((1,)), requires_grad=False)
+        self.truemin          = torch.nn.Parameter(torch.Tensor((-1,)), requires_grad=False)
 
     # SCHEREMO: Assume self.histogram magnitude list of data, binned
-    def merge_histograms(self, stat):
+    def updateHistogram(self, stat):
 
-        # SCHEREMO: Assumes that newEdges is always strictly wider than prevEdges
-        def rebin(histogram, prevEdges, newEdges):
-            assert len(prevEdges) == len(newEdges), "edge lengths are mismatching!"
+        def rebinInt(histogram, factor):
+            weight = torch.Tensor([1]*factor).reshape(1,1,-1).type_as(histogram)
             newHistogram = torch.zeros_like(torch.Tensor(range(self.num_bins))).type_as(histogram)
-            binWidth = newEdges[1] - newEdges[0]
-
-            newIdx = 0
-            prevIdx = 0
-            while (prevIdx < len(prevEdges)-1):
-                # The old left edge is between two adjacent new edges -> at least partial match
-                if newEdges[newIdx] <= prevEdges[prevIdx] and newEdges[newIdx+1] >= prevEdges[prevIdx]:
-                    # If the old right edge is not in the bin, it's only a partial match
-                    if newEdges[newIdx+1] < prevEdges[prevIdx+1]:
-
-                        # If partial match, calculate overlap
-                        overlap = newEdges[newIdx+1] - prevEdges[prevIdx]
-                        ratio = overlap/binWidth
-                        newHistogram[newIdx] += ratio*(histogram[prevIdx])
-                        # Since we assume larger bins, add the rest to the next bin
-                        rest = 1-ratio
-                        newHistogram[newIdx+1] += rest*(histogram[prevIdx])
-
-                        # Since we matched only partially, the next match will be in another bin
-                        prevIdx += 1
-                        newIdx += 1
-
-                    # Otherwise the whole bin is "swallowed"
-                    else:
-                        newHistogram[newIdx] += histogram[prevIdx]
-
-                        # Since we swallowed, there might be more in this bin, only move prevIdx
-                        prevIdx += 1
-                else:
-                    # Since we don't match, the newBin must be "behind"
-                    newIdx += 1
-                assert newIdx < len(prevEdges), "newIdx is running away!"
-            try:
-                assert abs(torch.sum(newHistogram)-torch.sum(histogram))<(1e-3*torch.sum(newHistogram)+1e-5), "histograms are different"
-            except Exception as e:
-                print(e)
-                import IPython; IPython.embed()
-
+            # Downsample histogram
+            res = torch.nn.functional.conv1d(histogram.reshape(1,1,-1), weight, bias=None, stride=factor, padding=0)
+            # Set new downsampled histogram in the middle
+            newHistogram[(self.num_bins//2 - self.num_bins//(2*factor)):(self.num_bins//2 + self.num_bins//(2*factor))] = res.reshape(-1)
             return newHistogram
 
         with torch.no_grad():
@@ -1431,48 +392,32 @@ class _PACTActivation(nn.Module):
             newTruemax = max(self.truemax.item(), stat.max())
             newTruemin = min(self.truemin.item(), stat.min())
 
-            rangeChanged = True
-            if newTruemax == self.truemax and newTruemin == self.truemin:
-                rangeChanged = False
-
-            self.truemax[:] = newTruemax
-            self.truemin[:] = newTruemin
+            # SCHEREMO: only rescale exponentially - allows us to rebin very fast and easy
+            binTop = max(abs(self.truemin), self.truemax)
+            newBinTop = max(abs(newTruemin), newTruemax)
+            expFact = int(max(2**torch.ceil(torch.log2(newBinTop / binTop)),1))
+            expTop =  expFact * binTop
 
             # SCHEREMO: Calculate new histogram according to new range
-            addHistogram = torch.histc(input=stat, min=self.truemin.item(), max=self.truemax.item(), bins=self.num_bins)
-
-            # SCHEREMO: Resample current histogram
-            if rangeChanged:
-                step = (self.truemax.item()-self.truemin.item())/self.num_bins
-                newEdges = torch.arange(self.truemin.item(), self.truemax.item()+step/2, step)
-
-                assert newEdges[0] <= self.prevEdges[0], "newEdges left edge is too large"
-                assert newEdges[-1] >= self.prevEdges[-1], "newEdges right edge is too small"
-
-                resampledHistogram = rebin(self.histogram, self.prevEdges, newEdges)
-            else:
-                resampledHistogram = self.histogram
-                newEdges = self.prevEdges
+            addHistogram = torch.histc(input=stat, min=-expTop.item(), max=expTop.item(), bins=self.num_bins)
+            resampledHistogram = rebinInt(self.histogram, expFact)
 
             # SCHEREMO: Add histograms, preserve information about edges
             self.histogram[:] = resampledHistogram + addHistogram
-            self.prevEdges[:] = newEdges
+            self.truemax[:] = expTop
+            self.truemin[:] = -expTop
 
-            # SCHEREMO: Calculate clipping bounds
-            pdf = self.histogram / (torch.sum(self.histogram))
-            density = 0.0
-            idx = 0
-            if self.signed:
-                while density < self.lower_percentile:
-                    density += pdf[idx]
-                    idx += 1
-                self.min[:] = self.prevEdges[idx]
-            else:
-                self.min[:] = torch.Tensor((0.0,)).type_as(self.histogram)
-            while density < self.upper_percentile:
-                density += pdf[idx]
-                idx += 1
-            self.max[:] = self.prevEdges[idx]
+    # SCHEREMO: Calculate clipping bounds
+    def updateClipBounds(self):
+        self.prevEdges[:] = torch.linspace(self.truemin[0], self.truemax[0], self.num_bins+1)
+        pdf = self.histogram / (torch.sum(self.histogram))
+        weight = torch.Tensor([1]*len(self.histogram)).reshape(1,1,-1).type_as(self.histogram)
+        cdf = torch.nn.functional.conv1d(pdf.reshape(1,1,-1), weight, bias=None, stride=1, padding=(len(self.histogram)-1)).reshape(-1)
+        cdf = cdf[:len(self.histogram)]
+        minIdx = torch.sum((cdf>=self.lower_percentile*100) == 0) + 1
+        maxIdx = torch.sum((cdf>=self.upper_percentile*100) == 0)
+        self.min[:] = (self.prevEdges[minIdx]+self.prevEdges[minIdx-1])/2
+        self.max[:] = (self.prevEdges[maxIdx]+self.prevEdges[maxIdx-1])/2
 
     def get_eps(self, *args):
         return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
@@ -1486,8 +431,8 @@ class _PACTActivation(nn.Module):
             x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
             with torch.no_grad():
                 if self.percentile_clipping:
-                    self.merge_histograms(x_stat)
-                    #self.running_percentile_estimates(x_stat)
+                    self.updateHistogram(x_stat)
+                    self.updateClipBounds()
                 else:
                     self.min[:] = min(self.min.item(), x_stat.min())
                     self.max[:] = max(self.max.item(), x_stat.max())
@@ -1505,6 +450,7 @@ class _PACTActivation(nn.Module):
                 return torch.nn.functional.hardtanh(x)
         else:
             eps = self.get_eps()
+            self.updateClipBounds()
             if self.tqt:
                 #Make sure that the activation is correctly registered with a
                 #controller which assigns clip_hi = 2**log_t!
@@ -1710,6 +656,21 @@ class PACTIntegerMatmul(torch.nn.Module):
         mulresult = torch.matmul(x,y)
         return mulresult
 
+class _PACTEps(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer('_eps_in',torch.Tensor((1.,)))
+
+    def set_eps_in(self, eps_in_list):
+        self._eps_in[:] = eps_in_list[0]
+
+    def get_eps_in(self):
+        return self._eps_in
+
+    @property
+    def eps_in(self):
+        return self.get_eps_in()
+
 class _PACTLinOp:
     # a helper class to provide initialization code common to all PACT/TQT
     # linear operators in the setup_quant_params() function.
@@ -1718,6 +679,8 @@ class _PACTLinOp:
     def __init__(self, *args, **kwargs):
         pass
 
+    def expand_bounds(self, t):
+        return t
 
     # ensure backward compatibility with checkpoints from before the addition
     # of "params_frozen" by adding this as a load_state_dict_pre_hook
@@ -2342,3 +1305,1023 @@ class PACTIntegerHardsigmoid(nn.Module):
         x = x + self.three
         x = torch.clip(x, z, self.six)
         return x * self.one_over_six
+
+class PACTEmbedding(torch.nn.Module):
+
+    def __init__(self, n_levels:int = 256, weights : torch.Tensor = torch.Tensor((1.,)), **kwargs):
+        super().__init__()
+        self.weights = nn.Parameter(weights)
+        self.adder = PACTIntegerAdd(n_levels=n_levels, num_args = 2, **kwargs)
+
+        self.register_buffer('maxval', torch.Tensor((0.,)))
+
+    def reassign_epsilons(self):
+        self.adder.reassign_epsilons()
+
+    def forward(self, x):
+        out = self.adder(x,self.weights)
+        self.maxval.data[0] = max(torch.max(torch.abs(out)).item(), self.maxval)
+
+        return out
+
+class PACTIntegerEmbedding(torch.nn.Module):
+
+    # Implements the integerized version of an Embedding
+    # Supports single stage mode, i.e. embeddings are quantized to the output epsilon and double stage mode where weights are quantized to an intermediate epsilon, which is more precise
+
+    def __init__(self, n_levels: int = 256, weight : torch.Tensor = torch.Tensor((1.,)), eps_in:float = 1./255, eps_adder:float=1./255, maxval:float=1., twoStage:bool = False, **kwargs):
+        super().__init__()
+        self.n_levels = n_levels
+
+        self.register_buffer('floor', torch.Tensor((False,)))
+        self.register_buffer('clip_gradient', torch.Tensor((True,)))
+        self.register_buffer('noisy', torch.Tensor((False,)))
+        self.register_buffer('twoStage', torch.Tensor((twoStage,)))
+
+        eps_out = maxval/(self.n_levels//2-1)
+        self.register_buffer("eps_out",torch.Tensor((eps_out,)))
+
+        # Requantize in two steps - the intermediate step allows for the embedding to have a lower quantization error
+        if twoStage:
+
+            clip_lo = -(torch.max(torch.max(torch.abs(weight))))
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+
+            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+            eps_bias = eps_weights/eps_adder
+            D = 2**16
+
+            self.register_buffer('weight', torch.Tensor(torch.round(PACTQuantize(weight, eps_bias, clip_lo,
+                                                                    clip_hi, self.floor, self.clip_gradient,
+                                                                                 self.noisy) / eps_bias)).detach())
+            self.rqs1 = RequantShift(mul=torch.floor(D*eps_in/eps_adder), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
+            #self.rqs1 = Requanl=torch.floor(D*eps_in/eps_adder), add=D*self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels)
+            self.rqs2 = RequantShift(mul=torch.floor(D*eps_adder/eps_out), add=torch.Tensor((0.,)), signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
+
+        # Requantize in one step - Fewer operations, but the quantization error might be larger
+        else:
+
+            clip_lo = -torch.abs(maxval)
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+            D = 2**16
+
+            self.register_buffer('weight', torch.round(PACTQuantize(weight, eps_out/D, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / (eps_out/D)).detach())
+            self.rq = RequantShift(mul=torch.floor(D*eps_in/eps_out), add=self.weight, signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
+
+    def forward(self, x):
+        if self.twoStage:
+            out = self.rqs2(self.rqs1(x) + self.weight)
+        else:
+            out = self.rq(x)
+
+        return out
+
+class PACTExp(torch.nn.Module):
+
+    def __init__(self, n_levels: int = 256, dim: int = 1):
+        super().__init__()
+        self.n_levels = n_levels
+        self.dim = dim
+        self.coeffA = torch.Tensor((0.35815147,))
+        self.coeffB = torch.Tensor((1.353,))
+        self.coeffC =  torch.Tensor((0.344,))
+        self.log2 =  torch.Tensor((1.,))
+        self.clip_gradient = torch.tensor(True)
+        self.floor = torch.tensor(False)
+
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+
+        p = 0
+        #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def forward(self, x):
+        """Approximate Softmax implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+
+#         clip_lo = -torch.abs(torch.max(x))
+#         clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+#         eps = (clip_hi-clip_lo)/self.n_levels
+
+        xTilde = (x - torch.max(x, -1, keepdim=True)[0])
+        z = torch.floor(-xTilde / math.log(2))
+        p = xTilde + z * math.log(2)
+        y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
+        return y
+
+class PACTIntegerExp(torch.nn.Module):
+
+    def __init__(self, n_levels: int = 256, dim: int = 1):
+        super().__init__()
+        self.n_levels = n_levels
+        self.dim = dim
+        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
+        self.register_buffer('log2',  torch.Tensor((1.,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))
+
+    class MyExp(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
+            z = torch.floor(-xTilde / log2)
+            p = xTilde + z * log2
+            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
+            out = torch.clip(y, zero, n_levels-1)
+
+            return out
+
+        @staticmethod
+        @parse_args('v', 't', 't', 't', 't', 't', 't')
+        def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
+
+            log2_ = g.op("Constant", value_t=log2)
+            coeffA_ = g.op("Constant", value_t=coeffA)
+            coeffB_ = g.op("Constant", value_t=coeffB)
+            coeffC_ = g.op("Constant", value_t=coeffC)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::iExp", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+
+        p = 0
+        #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def forward(self, x):
+        """Approximate Softmax implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+
+        if self.export_node:
+            return self.MyExp.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+        else:
+            return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+
+class PACTSoftmax(torch.nn.Module):
+
+    def __init__(self, n_levels: int = 256, dim: int = 1):
+        super().__init__()
+        self.n_levels = n_levels
+        self.dim = dim
+        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
+        self.register_buffer('log2',  torch.Tensor((1.,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))
+
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+
+        p = 0
+        #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def forward(self, x):
+        """Approximate Softmax implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+
+        clip_lo = -torch.abs(torch.max(x))
+        clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+        eps = (clip_hi-clip_lo)/self.n_levels
+
+        xTilde = (x - torch.max(x, -1, keepdim=True)[0])
+        z = torch.floor(-xTilde / math.log(2))
+        p = xTilde + z * math.log(2)
+        y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
+        ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+        out = y/(ysum)
+        return out
+
+#         self.updateCoeffs(eps)
+
+#         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
+#         # Quantize coeffs
+#         z = torch.floor(-xTilde / self.log2.type_as(x))
+#         p = xTilde + z * self.log2.type_as(x)
+#         y = (self.coeffA.type_as(x)*(p + self.coeffB.type_as(x))**2 + self.coeffC.type_as(x)) / 2**z
+#         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
+#         out = y/(ysum)
+#         out = PACTQuantize(out, 1/self.n_levels, torch.Tensor((0,)).type_as(x), torch.Tensor((1.,)).type_as(x), floor=self.floor, clip_gradient=self.clip_gradient)
+#         return out
+
+
+class PACTIntegerSoftmax(torch.nn.Module):
+
+    class MySoftmax(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
+            z = torch.floor(-xTilde / log2)
+            p = xTilde + z * log2
+            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
+            ysum = torch.sum(y, -1, keepdim=True)
+            norm = torch.floor(y*(n_levels-1)/(ysum))
+            out = torch.clip(norm, zero, n_levels-1)
+
+            return out
+
+        @staticmethod
+        @parse_args('v', 't', 't', 't', 't', 't', 't')
+        def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
+
+            log2_ = g.op("Constant", value_t=log2)
+            coeffA_ = g.op("Constant", value_t=coeffA)
+            coeffB_ = g.op("Constant", value_t=coeffB)
+            coeffC_ = g.op("Constant", value_t=coeffC)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::iSoftmax", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
+
+    def __init__(self, n_levels: int = 256, eps_in: float = 1./255, export_node=False):
+        super().__init__()
+
+        self.eps_in = eps_in
+        self.n_levels = torch.Tensor((n_levels,))
+        self.coeffA = torch.Tensor((0.35815147,))
+        self.coeffB = torch.Tensor((1.353,))
+        self.coeffC = torch.Tensor((0.344,))
+        self.log2 = torch.Tensor((1.,))
+        self.zero = torch.Tensor((0.,))
+
+        self.updateCoeffs(eps_in)
+        self.export_node = export_node
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+        eps = eps
+        eps2 = torch.Tensor((0.3585,))
+
+        self.coeffA.data[0] = torch.round(0.3585/eps2)
+        self.coeffB.data[0] = torch.round(1.353/eps)
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2))
+
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
+
+    def forward(self, x):
+        """Approximate Softmax implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+        if self.export_node:
+            return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+        else:
+            return self.MySoftmax.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+
+class PACTGELU(torch.nn.Module):
+
+    def __init__(self,  n_levels: int = 256):
+        super().__init__()
+
+        self.n_levels = n_levels
+        self.register_buffer('a',torch.Tensor((-0.288,)))
+        self.register_buffer('b',torch.Tensor((-1.769,)))
+        self.register_buffer('one', torch.Tensor((1.,)))
+        self.register_buffer('sqrttwo', torch.Tensor((math.sqrt(2),)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))
+        # Maxval is used to gather statistics
+        self.register_buffer('maxval', torch.Tensor((0.,)))
+
+    def updateCoeffs(self, eps_in):
+        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
+
+        :param eps_in: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+        epsX = eps_in * (math.sqrt(2))
+
+        r = 8
+        p = 0
+
+        #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
+        with torch.no_grad():
+            epsB = epsX
+            epsA = torch.Tensor(((0.288)/2**p,)).type_as(eps_in)
+            self.epsB = epsB.detach()
+            self.epsA = epsA.detach()
+            epsOne = epsB**2*epsA
+            epsOut = epsOne * eps_in
+
+            self.epsOne = epsOne.detach()
+            self.epsOut = epsOut.detach()
+
+            self.a.data[0] = torch.round(-0.288/epsA) * epsA
+            self.b.data[0] = torch.round(-1.769/epsB) * epsB
+            self.one.data[0] = torch.round(1./(epsB**2*epsA)) * epsB**2*epsA
+            self.sqrttwo.data[0] = torch.round(math.sqrt(2)/(eps_in/epsB))*(eps_in/epsB)
+    def forward(self, x):
+        """Approximate floating point GELU implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+        #Estimate epsilon
+        with torch.no_grad():
+            if torch.min(x) >= 0:
+                clip_lo = torch.Tensor((0,)).type_as(x)
+                clip_hi = torch.max(torch.abs(x))
+            else:
+                clip_lo = -torch.max(torch.abs(x))
+                clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+
+            eps = (clip_hi-clip_lo)/(self.n_levels-1)
+            self.updateCoeffs(eps)
+
+        # fq x:
+        x = torch.round(x/eps)*eps
+
+        L = torch.sign(x) * (self.a.type_as(x)*(torch.clip(torch.abs(x/self.sqrttwo.type_as(x)), min=torch.Tensor((0,)).type_as(x), max=-self.b.type_as(x)) + self.b.type_as(x))**2 + self.one.type_as(x))
+        # fq L:
+        L = torch.round(L/self.epsOne.type_as(x))*self.epsOne.type_as(x)
+        y = x*((self.one.type_as(x)+L)/2)
+        # fq y:
+        y = torch.round(y/self.epsOut.type_as(x))*self.epsOut.type_as(x)
+        self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
+
+        return y
+
+class PACTIntegerGELU(torch.nn.Module):
+
+    class MyGELU(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, b, one, totScaler, D, n_levels, zero):
+            L = torch.sign(x) * (-(torch.clip(torch.abs(x), min=zero, max=-b) + b)**2 + one)
+            y = x*((one+L)>>1)
+
+            y = torch.floor((y * totScaler)/D)
+            y = torch.clip(y, min=-n_levels//2, max = n_levels//2-1)
+
+            return y
+
+        @staticmethod
+        @parse_args('v', 't','t','t','t','t','t')
+        def symbolic(g, x, b, one, totScaler, D, n_levels, zero):
+
+            b_ = g.op("Constant", value_t=b)
+            one_ = g.op("Constant", value_t=one)
+            totScaler_ = g.op("Constant", value_t=totScaler)
+            D_ = g.op("Constant", value_t=D)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::iGELU", x, b_t=b, one_t=one, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
+
+    def __init__(self, n_levels: int = 256, eps_in = 1., maxval = 1., D=2**14, export_node = False):
+        super().__init__()
+
+        self.n_levels = torch.Tensor((n_levels,)).detach()
+
+        self.a = torch.Tensor((-0.288,)).detach()
+        self.b = torch.Tensor((-1.769,)).detach()
+        self.one = torch.Tensor((1.,)).detach()
+        self.sqrttwo = torch.Tensor((4,)).detach()
+
+        self.D = torch.Tensor((D,)).detach()
+        self.totScaler = torch.Tensor((255.,)).detach()
+        self.maxval = torch.Tensor((maxval,)).detach()
+
+        self.zero = torch.Tensor((0.,)).detach()
+        self.export_node = export_node
+
+        self.register_buffer("eps_out",torch.Tensor((0,)).detach())
+
+        self.updateCoeffs(eps_in)
+
+    def updateCoeffs(self, eps_in):
+        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
+
+        :param eps_in: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+        with torch.no_grad():
+            epsX = eps_in * (math.sqrt(2))
+
+            r = 8
+            p = 0
+
+            #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
+            epsB = torch.Tensor((epsX,))
+            epsA = torch.Tensor(((0.288)/2**p,))
+            epsOne = epsB**2*epsA
+            epsOut = epsOne * eps_in
+
+            self.eps_out[0] = self.maxval/(self.n_levels//2-1) #epsOut
+
+            self.a.data[0] = torch.round(-0.288/epsA)
+            self.b.data[0] = torch.round(-1.769/epsB)
+            self.one.data[0] = torch.round(1./(epsB**2*epsA))
+            self.sqrttwo.data[0] = torch.round(torch.Tensor((2.,)))
+
+            self.totScaler.data[0] = torch.round((self.D * epsOut) / self.eps_out)
+
+    def forward(self, x):
+
+        """Approximate Integer GELU implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param eps_in:
+        :returns:
+        :rtype:
+
+        """
+        if self.export_node:
+            return self.MyGELU.apply(x, self.b.detach(), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+        else:
+            return self.MyGELU.forward(None, x, self.b.type_as(x), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+
+class PACTIntegerLayerNorm(torch.nn.Module):
+
+    class MyLayerNorm(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, weight, bias, D, n_levels):
+            nom = x - (torch.mean(x, len(x.shape)-1, keepdim=True).int().float())
+            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(nom**2, len(x.shape)-1, keepdim=True))+1))
+
+            nom = nom * weight
+
+            y = (torch.div(nom,denom)).int().float()
+
+            y = y + (bias)
+
+            y = torch.floor(y/(D))
+            y = torch.clip(y, -n_levels//2, n_levels//2-1)
+            return y
+
+        @staticmethod
+        @parse_args('v','v','v','t','t')
+        def symbolic(g, x, weight, bias, D, n_levels):
+
+            n_levels_ = g.op("Constant", value_t=n_levels)
+            D_ = g.op("Constant", value_t=D)
+
+            return g.op("PACTOps::iLayerNorm", x, weight, bias, D_t=D, n_levels_t=n_levels)
+
+
+    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,)), D=2**24, export_node=False, **kwargs):
+        super().__init__()
+
+        self.n_levels = torch.Tensor((n_levels,)).detach()
+
+        self.eps = torch.Tensor((eps_in,)).detach()
+        self.D = torch.Tensor((D,)).detach()
+
+        # dummyOne and dummyZero are there to have a comparison value on Multi-GPU systems to check if weight and bias are used
+
+        self.floor = torch.Tensor((False,)).detach()
+        self.clip_gradient = torch.Tensor((True,)).detach()
+        self.noisy = torch.Tensor((False,)).detach()
+
+        # Maxval is used to track statistics
+        self.maxval = torch.Tensor((maxval,)).detach()
+
+        dummyOne =  torch.Tensor((1.,)).type_as(weight)
+        dummyZero = torch.Tensor((0.,)).type_as(bias)
+
+        self.export_node = export_node
+
+        if not torch.equal(weight, dummyOne) and not torch.equal(bias, dummyZero):
+            clip_lo = -max(torch.max(torch.abs(bias)), torch.max(torch.abs(weight)))
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+
+            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+            eps_bias = eps_weights
+
+            self.eps_weights =  eps_weights.detach()
+
+            self.register_buffer("weight", torch.Tensor(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()))
+            self.register_buffer("bias", torch.Tensor(torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach()))
+            self.register_buffer("totScaler", torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach())
+
+            self.weight *= self.totScaler
+            self.bias *= self.totScaler
+
+        else:
+
+            self.register_buffer("bias", torch.Tensor((0.,)).detach())
+            self.register_buffer("totScaler",torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach())
+            self.register_buffer("weight",self.totScaler)
+
+    def forward(self, x):
+        if self.export_node:
+            return self.MyLayerNorm.apply(x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+        else:
+            return self.MyLayerNorm.forward(None, x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+
+class PACTLayerNorm(_PACTEps, _PACTLinOp):
+
+    def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), eps=1e-5, *args, **kwargs):
+        _PACTLinOp.__init__(self)
+        _PACTEps.__init__(self)
+
+        self.setup_quant_params(*args, **kwargs)
+
+        self.normalized_shape = normalized_shape
+        self.weight = nn.Parameter(weight)
+        self.bias = nn.Parameter(bias)
+        self.register_buffer('eps', torch.Tensor((eps,)))
+
+    def get_bias_q(self, eps_in):
+        # we assume that bias gets quantized to a really high bitwidth so don't
+        # clip it
+        with torch.no_grad():
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+        return b
+
+    # do not use in training!
+    def get_bias_int(self, eps_in):
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
+
+    # SCHEREMO: Eps needs to be positive!
+    def get_eps_q(self):
+        with torch.no_grad():
+            eps = PACTQuantize(self.eps, self.eps_in, self.clip_lo, self.clip_hi, clip_gradient=self.clip_gradient)
+            eps = torch.max(self.eps_in, eps)
+        return eps
+
+    def forward(self, x):
+
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps)*eps
+            return x
+
+        #import IPython; IPython.embed()
+
+        nom = x - RQ(torch.mean(x, -1, keepdim=True), self.eps_in)
+        denom = RQ(torch.sqrt(RQ(torch.mean(torch.pow(nom, 2), -1, keepdim=True),self.eps_in**2)+self.eps_in), self.get_eps_q())
+
+        y = RQ(((nom*self.weight_q) / denom), self.eps_in * self.get_eps_w())
+        y = y + self.get_bias_q(self.eps_in)
+
+        return y
+
+class PACTIntegerEpsDiv(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.constant = None
+
+    def forward(self, x, **kwargs):
+        return x
+
+class PACTEpsDiv(torch.nn.Module):
+
+    def __init__(self, constant=1.):
+        super().__init__()
+        self.constant = constant
+
+    def forward(self, x, **kwargs):
+        return x / self.constant
+
+
+class PACTWrapLinearAttention(nn.Module):
+    class LinearAttention(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, q,k,v,
+                    wq_weight, wq_bias,
+                    wk_weight, wk_bias,
+                    wv_weight, wv_bias,
+                    wo_weight, wo_bias,
+                    wq_requant_mul, wq_requant_div,
+                    wk_requant_mul, wk_requant_div,
+                    wv_requant_mul, wv_requant_div,
+                    preattn_requant_mul, preattn_requant_div,
+                    normalizer_requant_mul, normalizer_requant_div,
+                    postattn_requant_mul, postattn_requant_div,
+                    wo_requant_mul, wo_requant_div,
+                    dim, heads, dim_head,
+                    Delta, eps, act_type,
+                    n_levels):
+            return q
+
+        @staticmethod
+        @parse_args('v','v','v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+
+                    't','t','t',
+                    'i', 'i', 'i',
+                    't')
+
+        def symbolic(g,
+                     q,k,v,
+                     wq_weight, wq_bias,
+                     wk_weight, wk_bias,
+                     wv_weight, wv_bias,
+                     wo_weight, wo_bias,
+                     wq_requant_mul, wq_requant_div,
+                     wk_requant_mul, wk_requant_div,
+                     wv_requant_mul, wv_requant_div,
+                     preattn_requant_mul, preattn_requant_div,
+                     normalizer_requant_mul, normalizer_requant_div,
+                     postattn_requant_mul, postattn_requant_div,
+                     wo_requant_mul, wo_requant_div,
+                     dim, heads, dim_head,
+                     Delta, eps, act_type,
+                     n_levels):
+            return g.op("PACTOps::LinearAttention",
+                        q, k, v,
+                        wq_weight, wq_bias,
+                        wk_weight, wk_bias,
+                        wv_weight, wv_bias,
+                        wo_weight, wo_bias,
+                        wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
+                        wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
+                        wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
+                        wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
+                        preattn_requant_mul_t=preattn_requant_mul, preattn_requant_div_t=preattn_requant_div,
+                        normalizer_requant_mul_t=normalizer_requant_mul, normalizer_requant_div_t=normalizer_requant_div,
+                        postattn_requant_mul_t=postattn_requant_mul, postattn_requant_div_t=postattn_requant_div,
+                        dim_t=dim, heads_t=heads, dim_head_t=dim_head,
+                        Delta_i = Delta, eps_i = eps, act_type_i=act_type,
+                        n_levels_t=n_levels)
+
+    def __init__(self, wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+                 wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+                 wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                 preattn_requant_mul, preattn_requant_div,
+                 normalizer_requant_mul, normalizer_requant_div,
+                 postattn_requant_mul, postattn_requant_div,
+                 wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                 dim, heads, dim_head,
+                 Delta, eps, act_type,
+                 n_levels, linearattention_node=True):
+        super().__init__()
+        self.wk_weight = nn.Parameter(torch.clone(wk_weight).detach())
+        self.wk_bias = nn.Parameter(torch.clone(wk_bias).detach())
+        self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
+        self.wk_requant_div = torch.clone(wk_requant_div).detach()
+        self.wq_weight = nn.Parameter(torch.clone(wq_weight).detach())
+        self.wq_bias = nn.Parameter(torch.clone(wq_bias).detach())
+        self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
+        self.wq_requant_div = torch.clone(wq_requant_div).detach()
+        self.wv_weight = nn.Parameter(torch.clone(wv_weight).detach())
+        self.wv_bias = nn.Parameter(torch.clone(wv_bias).detach())
+        self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
+        self.wv_requant_div = torch.clone(wv_requant_div).detach()
+        self.wo_weight = nn.Parameter(torch.clone(wo_weight).detach())
+        self.wo_bias = nn.Parameter(torch.clone(wo_bias).detach())
+        self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
+        self.wo_requant_div = torch.clone(wo_requant_div).detach()
+        self.preattn_requant_mul = torch.clone(preattn_requant_mul).detach()
+        self.preattn_requant_div = torch.clone(preattn_requant_div).detach()
+        self.normalizer_requant_mul = torch.clone(normalizer_requant_mul).detach()
+        self.normalizer_requant_div = torch.clone(normalizer_requant_div).detach()
+        self.postattn_requant_mul = torch.clone(postattn_requant_mul).detach()
+        self.postattn_requant_div = torch.clone(postattn_requant_div).detach()
+        self.Delta = Delta
+        self.eps = eps
+        self.act_type = act_type
+        self.n_levels = torch.clone(torch.Tensor((n_levels,))).detach()
+        self.dim = torch.clone(torch.Tensor((dim,))).detach()
+        self.dim_head = torch.clone(torch.Tensor((dim_head,))).detach()
+        self.heads = torch.clone(torch.Tensor((heads,))).detach()
+        self.linearattention_node = linearattention_node
+
+    def forward(self,q,k,v,**kwargs):
+        if self.linearattention_node:
+            return self.LinearAttention.apply(q,k,v,
+                                              self.wq_weight.type_as(q), self.wq_bias.type_as(q),
+                                              self.wk_weight.type_as(q), self.wk_bias.type_as(q),
+                                              self.wv_weight.type_as(q), self.wv_bias.type_as(q),
+                                              self.wo_weight.type_as(q), self.wo_bias.type_as(q),
+                                              self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
+                                              self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
+                                              self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
+                                              self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
+                                              self.normalizer_requant_mul.type_as(q), self.normalizer_requant_div.type_as(q),
+                                              self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
+                                              self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
+                                              self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
+                                              self.Delta, self.eps, self.act_type,
+                                              self.n_levels.type_as(q))
+        else:
+            return self.LinearAttention.forward(None, q,k,v,
+                                                self.wq_weight.type_as(q), self.wq_bias.type_as(q),
+                                                self.wk_weight.type_as(q), self.wk_bias.type_as(q),
+                                                self.wv_weight.type_as(q), self.wv_bias.type_as(q),
+                                                self.wo_weight.type_as(q), self.wo_bias.type_as(q),
+                                                self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
+                                                self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
+                                                self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
+                                                self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
+                                                self.normalizer_requant_mul.type_as(q), self.normalizer_requant_div.type_as(q),
+                                                self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
+                                                self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
+                                                self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
+                                                self.Delta, self.eps, self.act_type,
+                                                self.n_levels.type_as(q))
+
+class PACTWrapMHSA(nn.Module):
+
+    class MyMHSA(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, q,k,v,
+                    wq_weight, wq_bias,
+                    wk_weight, wk_bias,
+                    wv_weight, wv_bias,
+                    wo_weight, wo_bias,
+                    wq_requant_mul, wq_requant_div,
+                    wk_requant_mul, wk_requant_div,
+                    wv_requant_mul, wv_requant_div,
+                    preattn_requant_mul, preattn_requant_div,
+                    postattn_requant_mul, postattn_requant_div,
+                    wo_requant_mul, wo_requant_div,
+                    dim, heads, dim_head,
+                    isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
+                    n_levels, module):
+            return module(q,k,v)
+
+
+        @staticmethod
+        @parse_args('v','v','v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+
+                    't','t','t',
+                    't', 't', 't', 't',
+                    't', 't')
+        def symbolic(g,
+                     q,k,v,
+                     wq_weight, wq_bias,
+                     wk_weight, wk_bias,
+                     wv_weight, wv_bias,
+                     wo_weight, wo_bias,
+
+                     wq_requant_mul, wq_requant_div,
+                     wk_requant_mul, wk_requant_div,
+                     wv_requant_mul, wv_requant_div,
+                     preattn_requant_mul, preattn_requant_div,
+                     postattn_requant_mul, postattn_requant_div,
+                     wo_requant_mul, wo_requant_div,
+
+                     dim, heads, dim_head,
+                     isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2,
+                     n_levels, module):
+
+            wk_requant_mul_ = g.op("Constant", value_t=wk_requant_mul)
+            wk_requant_div_ = g.op("Constant", value_t=wk_requant_div)
+            wq_requant_mul_ = g.op("Constant", value_t=wq_requant_mul)
+            wq_requant_div_ = g.op("Constant", value_t=wq_requant_div)
+            wv_requant_mul_ = g.op("Constant", value_t=wv_requant_mul)
+            wv_requant_div_ = g.op("Constant", value_t=wv_requant_div)
+            wo_requant_mul_ = g.op("Constant", value_t=wo_requant_mul)
+            wo_requant_div_ = g.op("Constant", value_t=wo_requant_div)
+            preattn_requant_mul_ = g.op("Constant", value_t=preattn_requant_mul)
+            preattn_requant_div_ = g.op("Constant", value_t=preattn_requant_div)
+            postattn_requant_mul_ = g.op("Constant", value_t=postattn_requant_mul)
+            postattn_requant_div_ = g.op("Constant", value_t=postattn_requant_div)
+            isoftmaxA_ = g.op("Constant", value_t=isoftmaxA)
+            isoftmaxB_ = g.op("Constant", value_t=isoftmaxB)
+            isoftmaxC_ = g.op("Constant", value_t=isoftmaxC)
+            isoftmaxlog2_ = g.op("Constant", value_t=isoftmaxlog2)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+            dim_ = g.op("Constant", value_t=dim)
+            dim_head_ = g.op("Constant", value_t=dim_head)
+            heads_ = g.op("Constant", value_t=heads)
+
+            return g.op("PACTOps::MultiHeadSelfAttention",
+                        q, k, v,
+                        wq_weight, wq_bias,
+                        wk_weight, wk_bias,
+                        wv_weight, wv_bias,
+                        wo_weight, wo_bias,
+                        wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
+                        wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
+                        wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
+                        wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
+                        preattn_requant_mul_t=preattn_requant_mul, preattn_requant_div_t=preattn_requant_div,
+                        postattn_requant_mul_t=postattn_requant_mul, postattn_requant_div_t=postattn_requant_div,
+                        dim_t=dim, heads_t=heads, dim_head_t=dim_head,
+                        isoftmaxA_t=isoftmaxA, isoftmaxB_t=isoftmaxB, isoftmaxC_t=isoftmaxC, isoftmaxlog2_t=isoftmaxlog2,
+                        n_levels_t=n_levels)
+
+
+    def __init__(self,
+                 wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+                 wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+                 wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                 preattn_requant_mul, preattn_requant_div,
+                 postattn_requant_mul, postattn_requant_div,
+                 wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                 dim, heads, dim_head,
+                 isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels, module):
+
+        super().__init__()
+        self.module = copy.deepcopy(module)
+        self.wk_weight = nn.Parameter(torch.clone(wk_weight).detach())
+        self.wk_bias = nn.Parameter(torch.clone(wk_bias).detach())
+        self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
+        self.wk_requant_div = torch.clone(wk_requant_div).detach()
+        self.wq_weight = nn.Parameter(torch.clone(wq_weight).detach())
+        self.wq_bias = nn.Parameter(torch.clone(wq_bias).detach())
+        self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
+        self.wq_requant_div = torch.clone(wq_requant_div).detach()
+        self.wv_weight = nn.Parameter(torch.clone(wv_weight).detach())
+        self.wv_bias = nn.Parameter(torch.clone(wv_bias).detach())
+        self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
+        self.wv_requant_div = torch.clone(wv_requant_div).detach()
+        self.wo_weight = nn.Parameter(torch.clone(wo_weight).detach())
+        self.wo_bias = nn.Parameter(torch.clone(wo_bias).detach())
+        self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
+        self.wo_requant_div = torch.clone(wo_requant_div).detach()
+        self.preattn_requant_mul = torch.clone(preattn_requant_mul).detach()
+        self.preattn_requant_div = torch.clone(preattn_requant_div).detach()
+        self.postattn_requant_mul = torch.clone(postattn_requant_mul).detach()
+        self.postattn_requant_div = torch.clone(postattn_requant_div).detach()
+        self.isoftmaxA = torch.clone(isoftmaxA).detach()
+        self.isoftmaxB = torch.clone(isoftmaxB).detach()
+        self.isoftmaxC = torch.clone(isoftmaxC).detach()
+        self.isoftmaxlog2 = torch.clone(isoftmaxlog2).detach()
+        self.n_levels = torch.clone(torch.Tensor((n_levels,))).detach()
+        self.dim = torch.clone(torch.Tensor((dim,))).detach()
+        self.dim_head = torch.clone(torch.Tensor((dim_head,))).detach()
+        self.heads = torch.clone(torch.Tensor((heads,))).detach()
+
+    def forward(self, q,k,v, **kwargs):
+        return self.MyMHSA.apply(q,k,v,
+                                 self.wq_weight.type_as(q), self.wq_bias.type_as(q),
+                                 self.wk_weight.type_as(q), self.wk_bias.type_as(q),
+                                 self.wv_weight.type_as(q), self.wv_bias.type_as(q),
+                                 self.wo_weight.type_as(q), self.wo_bias.type_as(q),
+                                 self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
+                                 self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
+                                 self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
+                                 self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
+                                 self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
+                                 self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
+                                 self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
+                                 self.isoftmaxA.type_as(q), self.isoftmaxB.type_as(q), self.isoftmaxC.type_as(q), self.isoftmaxlog2.type_as(q),
+                                 self.n_levels.type_as(q), self.module)
+
+class PACTDiv(nn.Module):
+    def __init__(self, Delta, eps_init = 36./256):
+        super().__init__()
+        self.Delta = Delta
+        self.register_buffer('eps', torch.Tensor((eps_init,)))
+
+    def forward(self,x,y):
+        # SCHEREMO TODO: Get a controller that sets this eps...
+        y = y + max(1e-5, self.eps)
+        return torch.floor(x * self.Delta / (y)) / self.Delta
+
+class PACTIntegerDiv(nn.Module):
+
+    class MyIntegerDiv(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, y, Delta, eps):
+            y = y + eps
+            return torch.floor(x * Delta / (y))
+
+        @staticmethod
+        @parse_args('v','v','i', 'i')
+        def symbolic(g, x, y, Delta, eps):
+            return g.op("PACTOps::IntegerDiv", x, y, Delta_i = Delta, eps_i=eps)
+
+    def __init__(self, Delta, integer_node=True, eps=1):
+        super().__init__()
+        self.Delta = Delta
+        self.eps = eps
+        self.integer_node = integer_node
+
+    def forward(self,x,y):
+        if self.integer_node:
+            return self.MyIntegerDiv.apply(x,y,self.Delta,self.eps)
+        else:
+            return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps)
+
+class PACTWrapModule(nn.Module):
+
+    def __init__(self, module, n_levels, _dict = {}, quantize : bool = False, **actArgs):
+        super().__init__()
+
+        default_kwargs = {'learn_clip': True, 'init_clip': 'max', 'act_kind': 'identity', 'leaky': 0.0}
+        default_kwargs.update(actArgs)
+
+        self.n_levels = n_levels
+        self._dict = _dict
+        self.quantize = quantize
+        self.actArgs = actArgs
+
+        self.module = copy.copy(module)
+        self.statTracker = PACTAsymmetricAct(n_levels=n_levels, **default_kwargs)
+
+    def forward(self, *x, **kwargs):
+        y = self.module.forward(*x, **kwargs)
+        z = self.statTracker(y)
+        if self.quantize:
+            return z
+        else:
+            return y

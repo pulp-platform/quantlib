@@ -46,6 +46,7 @@ from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_t
 from functools import partial
 import copy
 
+
 class OpTree:
 
     def __init__(self, end_node : fx.Node):
@@ -198,7 +199,21 @@ class TruedivReplacementPass(ModularizePass):
     def __init__(self, Delta=2**14, **kwargs):
         self.kwargs = kwargs
         target = [operator.truediv]
-        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, Delta=Delta), name="MATMUL_REPLACEMENT_PASS")
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, Delta=Delta), name="DIV_REPLACEMENT_PASS")
+
+
+class EpsdivReplacementPass(ModularizePass):
+
+    @staticmethod
+    def epsdiv_replacement_fn(node):
+        import IPython; IPython.embed()
+        assert len(node.args) == 2, "Div with more than 2 operands? I don't think so..."
+        return (PACTEpsDiv(0.), node.args, node.kwargs)
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        target = [torch.div]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.epsdiv_replacement_fn), name="EPSDIV_REPLACEMENT_PASS")
 
 
 class MatmulReplacementPass(ModularizePass):
@@ -410,7 +425,6 @@ def integerize_wrap_module_fun(node, _pass, _tracer, _shape_fun: lambda node: no
     fx_graph = _tracer.trace(cloneModule)
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
     fx_model = runnablePass.apply(fx_model)
-
     returnNode = PACTWrapModule(fx_model, module.n_levels, module._dict, False, **module.actArgs)
     return returnNode, node.args, node.kwargs
 
@@ -423,7 +437,6 @@ class IntegerizeWrapModule(ModularizePass):
 
 
 def wrap_module_fun(node, n_levels, quantize, **actArgs):
-
     module = dict(node.graph._owning_module.named_modules())[node.target]
     returnNode = PACTWrapModule(module, n_levels, module.__dict__, quantize = quantize, **actArgs)
     return returnNode, node.args, node.kwargs
@@ -432,7 +445,7 @@ class WrapModulePass(ModularizePass):
     def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, quantize = False, **kwargs):
         self.kwargs = kwargs
         pattern = [wrapClassCallable()]
-        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, **self.kwargs, quantize=quantize), name="MATMUL_REPLACEMENT_PASS")
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, **self.kwargs, quantize=quantize), name="WRAP_REPLACEMENT_PASS")
 
 # def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
 
@@ -536,8 +549,10 @@ def unwrap_linearattention_fun(wrap_module):
     except:
         wo_bias = torch.Tensor((0,))
 
-    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_1)
-    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
+    #import IPython; IPython.embed()
+
+    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism.kernel_func_1._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
+    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism.kernel_func_2._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_1)
     wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
     preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
     normalizer_requant_mul, normalizer_requant_add, normalizer_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_2)
@@ -616,7 +631,7 @@ def unwrap_mhsa_fun(wrap_module):
             postattn_requant_mul, postattn_requant_div,
             wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
             dim, heads, dim_head,
-            isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels), {}
+            isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels, wrap_module), {}
 
 def unwrap_module_fun(node, wrapClass = None, unwrapFunction = None):
 

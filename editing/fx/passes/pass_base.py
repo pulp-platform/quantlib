@@ -38,10 +38,10 @@ __all__ = ['FxPass',
            'ReplaceSequentialPatternPass',
            'ReplaceSingleInputPatternPass',
            'ModularizeNodePass',
-           'ModularizePass']
+           'ModularizePass',
+           'ConstShapePass']
 
 #TODO implement logging!
-
 class FxPass:
 
     def __init__(self):
@@ -285,7 +285,7 @@ class ReplaceMatchWithModulePass(FxPass):
                 with gm.graph.inserting_after(first_matched_node.all_input_nodes[0]):
                     # TODO: The bug's here
                     new_node = gm.graph.call_module(target, args=first_matched_node.args, kwargs=first_matched_node.kwargs)
-            except:
+            except Exception as e:
                 import IPython; IPython.embed()
 
         else:
@@ -342,7 +342,7 @@ class ReplacePartialSingleInputMatchWithModulePass(FxPass):
             try:
                 with gm.graph.inserting_after(first_matched_node):
                     new_node = gm.graph.call_module(target, args=(first_matched_node,))
-            except:
+            except Exception as e:
                 import IPython; IPython.embed()
 
         else:
@@ -431,7 +431,7 @@ class ModularizeNodePass(FxPass):
         if self.node not in gm.graph.nodes or self.new_target in submodule_names:
             # either the pass has already been run or we were passed the wrong
             # graphmodule. in either case, quit.
-            import IPython; IPython.embed()
+            #import IPython; IPython.embed()
             return gm
 
         gm.add_submodule(self.new_target, self.module)
@@ -487,3 +487,12 @@ class ModularizePass(SequentialPass):
                 i += 1
 
         self.setup_passes(passes)
+
+class ConstShapePass(FxPass):
+    def __init__(self):
+        super.__init__()
+
+    def run_pass(self, gm):
+        for node in gm.nodes:
+            #Check for occurence of shape nodes:
+            pass

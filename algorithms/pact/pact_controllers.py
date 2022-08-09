@@ -32,9 +32,10 @@ from ..controller import Controller
 from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d
 from .util import assert_param_valid, almost_symm_quant
 
-
+import copy
 
 __all__ = [
+    'PACTEpsController',
     'PACTActController',
     'PACTLinearController',
     'PACTIntegerModulesController',
@@ -79,6 +80,29 @@ _sawb_asymm_lut = {
     256: [36.15292, 41.73554],
 }
 
+class PACTEpsController(Controller):
+    def __init__(self, fx_model, modules, eps_in, n_levels_in, tracer, eps_pass):
+        self.model = fx_model
+        self.modules = modules
+
+        self.eps_pass = eps_pass
+        self.tracer = tracer
+
+    def step_pre_training_batch(self, *args, **kwargs):
+        fx_model = self.eps_pass.apply(self.model)
+        nm = dict(fx_model.named_modules())
+        for node in fx_model.graph.nodes:
+            if node.op == 'call_module' and nm[node.target] in self.modules:
+                arg_eps_ins = node.meta['quant'].eps_in[0]
+                nm[node.target].set_eps_in(arg_eps_ins)
+
+        # SCHEREMO: Perform an eps prop pass
+
+    def step_pre_training_epoch(self, *args, **kwargs):
+        pass
+
+    def step_pre_validation_epoch(self, *args, **kwargs):
+        pass
 
 class PACTActController(Controller):
     """

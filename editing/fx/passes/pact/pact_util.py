@@ -23,12 +23,8 @@
 from functools import partial
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from quantlib.algorithms.pact import *
-from quantlib.algorithms.pact.pact_ops import _PACTActivation
+from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.generic.generic_ops import *
-
-
-
 
 #PACT operations which should not be traced through
 
@@ -53,6 +49,8 @@ PACT_OPS = set([_PACTActivation,
                 RequantShift,
                 PACTDiv,
                 PACTIntegerDiv,
+                PACTExp,
+                PACTIntegerExp,
                 Multiply,
                 ChannelwiseThreshold])
 
