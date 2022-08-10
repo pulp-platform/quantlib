@@ -1879,9 +1879,11 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         self.normalized_shape = normalized_shape
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
+
         self.register_buffer('eps', torch.Tensor((eps,)))
-        self.div = PACTDiv(Delta=1., stable=False)
         self.register_buffer('eta', torch.Tensor((1.,)))
+
+        self.div = PACTDiv(Delta=1., stable=False)
 
     def get_bias_q(self, eps):
         # we assume that bias gets quantized to a really high bitwidth so don't
@@ -1912,7 +1914,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         var = RQ(torch.mean(torch.pow(nom, 2), -1, keepdim=True), self.eps_in**2 )
         var = var * self.eta**2
         nom = nom * self.eta
-        eps = RQ(self.eta**2 * self.eps / self.eps_in**2, 1)
+        eps = RQ((self.eta**2 / self.eps_in**2) * self.eps , 1)
         denom = RQ(torch.sqrt(var + eps), self.eps_in)
 
         if self.started:
@@ -2249,12 +2251,15 @@ class PACTDiv(_PACTEps):
         assert not ((stable) and (eps_div <= 0.) ), "Either stabilize division and choose eps > 0 or don't stabilize!"
 
         super().__init__(True)
+
         self.Delta = Delta
         self.stable = stable
+
         self.register_buffer('eta', torch.Tensor((1.,)))
         self.register_buffer('eps_div', torch.Tensor((eps_div,)))
         self.register_buffer('eps_in_x', torch.Tensor((eps_div,)))
         self.register_buffer('eps_in_y', torch.Tensor((eps_div,)))
+
         self.set_eps_in([torch.Tensor((eps_div,)), torch.Tensor((eps_div,))])
 
     def set_eps_in(self, eps_in_list):
@@ -2280,7 +2285,8 @@ class PACTDiv(_PACTEps):
 
         if self.stable:
             y = y * self.eta
-            eps = RQ(self.eps_div*self.eta/self.eps_in_y, 1)
+            x = x * self.eta
+            eps = RQ((self.eta/self.eps_in_y) * self.eps_div, 1)
         else:
             eps = 0
 
