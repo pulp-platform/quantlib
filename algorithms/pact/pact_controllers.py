@@ -87,12 +87,15 @@ class PACTEpsController(Controller):
         self.schedule = schedule
 
         self.eps_pass = eps_pass
+        # Choose a tracer that doesn't have PACTWrapModule!
         self.tracer = tracer
 
     def step_pre_training_batch(self, *args, **kwargs):
-        fx_model = self.eps_pass.apply(self.model)
+        fx_graph = self.tracer.trace(self.model)
+        fx_model = torch.fx.GraphModule(self.tracer.root, fx_graph, self.tracer.root.__class__.__name__)
+        fx_model = self.eps_pass.apply(fx_model)
         nm = dict(fx_model.named_modules())
-        for node in fx_model.graph.nodes:
+        for node in fx_graph.nodes:
             if node.op == 'call_module' and nm[node.target] in self.modules:
                 arg_eps_ins = node.meta['quant'].eps_in[0]
                 nm[node.target].set_eps_in(arg_eps_ins)
