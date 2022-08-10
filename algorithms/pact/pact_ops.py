@@ -379,6 +379,7 @@ class _PACTActivation(nn.Module):
     def updateHistogram(self, stat):
 
         def rebinInt(histogram, factor):
+            factor = min(self.num_bins//2, factor)
             weight = torch.Tensor([1]*factor).reshape(1,1,-1).type_as(histogram)
             newHistogram = torch.zeros_like(torch.Tensor(range(self.num_bins))).type_as(histogram)
             # Downsample histogram
@@ -411,7 +412,7 @@ class _PACTActivation(nn.Module):
     def updateClipBounds(self):
         self.prevEdges[:] = torch.linspace(self.truemin[0], self.truemax[0], self.num_bins+1)
         pdf = self.histogram / (torch.sum(self.histogram))
-        weight = torch.Tensor([1]*len(self.histogram)).reshape(1,1,-1).type_as(self.histogram)
+        weight = torch.Tensor([1]*len(self.histogram.reshape(-1))).reshape(1,1,-1).type_as(self.histogram)
         cdf = torch.nn.functional.conv1d(pdf.reshape(1,1,-1), weight, bias=None, stride=1, padding=(len(self.histogram)-1)).reshape(-1)
         cdf = cdf[:len(self.histogram)]
         minIdx = torch.sum((cdf>=self.lower_percentile*100) == 0) + 1
@@ -450,7 +451,6 @@ class _PACTActivation(nn.Module):
                 return torch.nn.functional.hardtanh(x)
         else:
             eps = self.get_eps()
-            self.updateClipBounds()
             if self.tqt:
                 #Make sure that the activation is correctly registered with a
                 #controller which assigns clip_hi = 2**log_t!
@@ -657,9 +657,12 @@ class PACTIntegerMatmul(torch.nn.Module):
         return mulresult
 
 class _PACTEps(nn.Module):
-    def __init__(self):
+    def __init__(self, startedFlag=False):
         super().__init__()
         self.register_buffer('_eps_in',torch.Tensor((1.,)))
+        if startedFlag:
+            self.started = False
+        self.locked = False
 
     def set_eps_in(self, eps_in_list):
         self._eps_in[:] = eps_in_list[0]
@@ -1505,8 +1508,7 @@ class PACTIntegerExp(torch.nn.Module):
         else:
             return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
-class PACTSoftmax(torch.nn.Module):
-
+class PACTSoftmax(_PACTEps):
     def __init__(self, n_levels: int = 256, dim: int = 1):
         super().__init__()
         self.n_levels = n_levels
@@ -1518,62 +1520,31 @@ class PACTSoftmax(torch.nn.Module):
         self.register_buffer('clip_gradient', torch.tensor(True))
         self.register_buffer('floor', torch.tensor(False))
 
+    def set_eps_in(self, eps_list):
+        super().set_eps_in(eps_list)
+        self.updateCoeffs(self.eps_in)
 
     def updateCoeffs(self, eps):
-        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
-
-        :param eps: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-
-        p = 0
-        #eps2 = torch.Tensor((0.35815147 / 2**p,))
-        eps = eps
         eps2 = torch.Tensor((0.3585,)).type_as(eps)
-
         self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
         self.coeffB.data[0] = torch.round(1.353/eps) * eps
         self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
-
-        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
         self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
 
     def forward(self, x):
-        """Approximate Softmax implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
 
-        :param x:
-        :returns:
-        :rtype:
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps)*eps
+            return x
 
-        """
-
-        clip_lo = -torch.abs(torch.max(x))
-        clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-        eps = (clip_hi-clip_lo)/self.n_levels
-
-        xTilde = (x - torch.max(x, -1, keepdim=True)[0])
-        z = torch.floor(-xTilde / math.log(2))
-        p = xTilde + z * math.log(2)
-        y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
+        xTilde = x - RQ(torch.max(x, -1, keepdim=True)[0], self.eps_in)
+        z = -RQ(xTilde / self.log2, torch.Tensor((1.,)).type_as(x))
+        p = xTilde + z * self.log2
+        y = RQ((self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z, self.coeffA*self.eps_in**2)
         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-        out = y/(ysum)
+        out = RQ(y / (ysum), 1./self.n_levels)
         return out
-
-#         self.updateCoeffs(eps)
-
-#         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
-#         # Quantize coeffs
-#         z = torch.floor(-xTilde / self.log2.type_as(x))
-#         p = xTilde + z * self.log2.type_as(x)
-#         y = (self.coeffA.type_as(x)*(p + self.coeffB.type_as(x))**2 + self.coeffC.type_as(x)) / 2**z
-#         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-#         out = y/(ysum)
-#         out = PACTQuantize(out, 1/self.n_levels, torch.Tensor((0,)).type_as(x), torch.Tensor((1.,)).type_as(x), floor=self.floor, clip_gradient=self.clip_gradient)
-#         return out
-
 
 class PACTIntegerSoftmax(torch.nn.Module):
 
@@ -1903,47 +1874,54 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
     def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), eps=1e-5, *args, **kwargs):
         _PACTLinOp.__init__(self)
         _PACTEps.__init__(self)
-
         self.setup_quant_params(*args, **kwargs)
 
         self.normalized_shape = normalized_shape
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
         self.register_buffer('eps', torch.Tensor((eps,)))
+        self.div = PACTDiv(Delta=1., stable=False)
+        self.register_buffer('eta', torch.Tensor((1.,)))
 
-    def get_bias_q(self, eps_in):
+    def get_bias_q(self, eps):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip it
         with torch.no_grad():
-            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+            b = PACTQuantize(self.bias, eps, -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
         return b
 
     # do not use in training!
     def get_bias_int(self, eps_in):
         return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
 
-    # SCHEREMO: Eps needs to be positive!
-    def get_eps_q(self):
-        with torch.no_grad():
-            eps = PACTQuantize(self.eps, self.eps_in, self.clip_lo, self.clip_hi, clip_gradient=self.clip_gradient)
-            eps = torch.max(self.eps_in, eps)
-        return eps
+    def set_eps_in(self, eps_in_list):
+        super().set_eps_in(eps_in_list)
+
+        t = self.eps_in / torch.sqrt(self.eps)
+        self.eta = torch.ceil(t)
+
+        self.div.set_eps_in([self.eps_in*self.get_eps_w(), self.eps_in])
 
     def forward(self, x):
-
         def RQ(x, eps):
             if self.started:
                 x = torch.floor(x/eps)*eps
             return x
 
-        #import IPython; IPython.embed()
-
         nom = x - RQ(torch.mean(x, -1, keepdim=True), self.eps_in)
-        denom = RQ(torch.sqrt(RQ(torch.mean(torch.pow(nom, 2), -1, keepdim=True),self.eps_in**2)+self.eps_in), self.get_eps_q())
+        var = RQ(torch.mean(torch.pow(nom, 2), -1, keepdim=True), self.eps_in**2 )
+        var = var * self.eta**2
+        nom = nom * self.eta
+        eps = RQ(self.eta**2 * self.eps / self.eps_in**2, 1)
+        denom = RQ(torch.sqrt(var + eps), self.eps_in)
 
-        y = RQ(((nom*self.weight_q) / denom), self.eps_in * self.get_eps_w())
-        y = y + self.get_bias_q(self.eps_in)
+        if self.started:
+            nom = nom*self.weight_q
+        else:
+            nom = nom*self.weight
+        b = self.bias
 
+        y = self.div(nom, denom) + b
         return y
 
 class PACTIntegerEpsDiv(torch.nn.Module):
@@ -1961,7 +1939,7 @@ class PACTEpsDiv(torch.nn.Module):
         self.constant = constant
 
     def forward(self, x, **kwargs):
-        return x / self.constant
+      return x / self.constant
 
 
 class PACTWrapLinearAttention(nn.Module):
@@ -2265,16 +2243,54 @@ class PACTWrapMHSA(nn.Module):
                                  self.isoftmaxA.type_as(q), self.isoftmaxB.type_as(q), self.isoftmaxC.type_as(q), self.isoftmaxlog2.type_as(q),
                                  self.n_levels.type_as(q), self.module)
 
-class PACTDiv(nn.Module):
-    def __init__(self, Delta, eps_init = 36./256):
-        super().__init__()
+class PACTDiv(_PACTEps):
+    def __init__(self, Delta, stable=True, eps_div = 1e-5):
+
+        assert not ((stable) and (eps_div <= 0.) ), "Either stabilize division and choose eps > 0 or don't stabilize!"
+
+        super().__init__(True)
         self.Delta = Delta
-        self.register_buffer('eps', torch.Tensor((eps_init,)))
+        self.stable = stable
+        self.register_buffer('eta', torch.Tensor((1.,)))
+        self.register_buffer('eps_div', torch.Tensor((eps_div,)))
+        self.register_buffer('eps_in_x', torch.Tensor((eps_div,)))
+        self.register_buffer('eps_in_y', torch.Tensor((eps_div,)))
+        self.set_eps_in([torch.Tensor((eps_div,)), torch.Tensor((eps_div,))])
+
+    def set_eps_in(self, eps_in_list):
+        self.eps_in_x[:] = eps_in_list[0]
+        self.eps_in_y[:] = eps_in_list[1]
+
+        if self.stable:
+            t = self.eps_in_y / self.eps_div
+            self.eta = torch.ceil(t)
+
+    def get_eps_out(self, eps_in_x, eps_in_y):
+        if not self.locked:
+            return eps_in_x / eps_in_y
+        else:
+            return eps_in_x / (eps_in_y*m.Delta)
 
     def forward(self,x,y):
-        # SCHEREMO TODO: Get a controller that sets this eps...
-        y = y + max(1e-5, self.eps)
-        return torch.floor(x * self.Delta / (y)) / self.Delta
+
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x / eps) * eps
+            return x
+
+        if self.stable:
+            y = y * self.eta
+            eps = RQ(self.eps_div*self.eta/self.eps_in_y, 1)
+        else:
+            eps = 0
+
+        y = y + eps
+        assert torch.sum( y > 0 ) == len(y.reshape(-1)), "PACTDiv: Dividing by negative numbers not allowed!"
+
+        if not self.locked:
+            return RQ(x/y , self.get_eps_out(self.eps_in_x, self.eps_in_y))
+        else:
+            return RQ(x*self.Delta/y , self.get_eps_out(self.eps_in_x, self.eps_in_y))
 
 class PACTIntegerDiv(nn.Module):
 
