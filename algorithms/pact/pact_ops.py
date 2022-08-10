@@ -46,6 +46,7 @@ __all__ = [
     'PACTAsymmetricAct',
     'PACTConv2d',
     'PACTConv1d',
+    'PACTConstWrap',
     'PACTCausalConv1d',
     'PACTLinear',
     'PACTQuantize',
@@ -1914,7 +1915,11 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         var = RQ(torch.mean(torch.pow(nom, 2), -1, keepdim=True), self.eps_in**2 )
         var = var * self.eta**2
         nom = nom * self.eta
-        eps = RQ((self.eta**2 / self.eps_in**2) * self.eps , 1)
+        eps = RQ(self.eta**2 * self.eps , self.eps_in**2)
+
+        if self.started:
+            assert eps>=self.eps_in**2, "Eps was rounded down in PACTLayerNorm"
+
         denom = RQ(torch.sqrt(var + eps), self.eps_in)
 
         if self.started:
@@ -2246,7 +2251,7 @@ class PACTWrapMHSA(nn.Module):
                                  self.n_levels.type_as(q), self.module)
 
 class PACTDiv(_PACTEps):
-    def __init__(self, Delta, stable=True, eps_div = 1e-5):
+    def __init__(self, Delta=2**8, stable=True, eps_div = 1e-5, autoscale=True):
 
         assert not ((stable) and (eps_div <= 0.) ), "Either stabilize division and choose eps > 0 or don't stabilize!"
 
@@ -2254,6 +2259,8 @@ class PACTDiv(_PACTEps):
 
         self.Delta = Delta
         self.stable = stable
+        self.autoscale = autoscale
+        self.register_buffer('running_min' , torch.Tensor((1.,)))
 
         self.register_buffer('eta', torch.Tensor((1.,)))
         self.register_buffer('eps_div', torch.Tensor((eps_div,)))
@@ -2274,7 +2281,7 @@ class PACTDiv(_PACTEps):
         if not self.locked:
             return eps_in_x / eps_in_y
         else:
-            return eps_in_x / (eps_in_y*m.Delta)
+            return eps_in_x / (eps_in_y*self.Delta)
 
     def forward(self,x,y):
 
@@ -2286,12 +2293,22 @@ class PACTDiv(_PACTEps):
         if self.stable:
             y = y * self.eta
             x = x * self.eta
-            eps = RQ((self.eta/self.eps_in_y) * self.eps_div, 1)
+            eps = RQ(self.eta * self.eps_div, self.eps_in_y)
+            if self.started:
+                assert eps>=self.eps_in_y, "Eps was rounded down in PACTDiv"
         else:
             eps = 0
 
         y = y + eps
         assert torch.sum( y > 0 ) == len(y.reshape(-1)), "PACTDiv: Dividing by negative numbers not allowed!"
+
+        with torch.no_grad():
+            if self.autoscale:
+                x_hat = x/self.eps_in_x
+                y_hat = y/self.eps_in_y
+                div = (x_hat)/(y_hat)
+                self.running_min = torch.min(self.running_min, torch.min(torch.where(div > 0, div, div.max())))
+                self.Delta = torch.abs(torch.ceil(self.running_min**(-1)))
 
         if not self.locked:
             return RQ(x/y , self.get_eps_out(self.eps_in_x, self.eps_in_y))
@@ -2323,6 +2340,19 @@ class PACTIntegerDiv(nn.Module):
             return self.MyIntegerDiv.apply(x,y,self.Delta,self.eps)
         else:
             return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps)
+
+class PACTConstWrap(nn.Module):
+    def __init__(self, eps=1.):
+        super().__init__()
+        self.register_buffer('eps', torch.Tensor((eps,)))
+
+    def set_eps(self, eps):
+        self.eps = torch.Tensor((eps,)).type_as(self.eps)
+
+    def forward(self, x):
+        with torch.no_grad():
+            self.set_eps(x)
+        return self.eps
 
 class PACTWrapModule(nn.Module):
 

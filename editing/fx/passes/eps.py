@@ -54,6 +54,9 @@ def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : 
 def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
     return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
 
+def eps_conversion_pact_matmul(m : nn.Module, *eps_ins):
+    return eps_ins[0] * eps_ins[1]
+
 def eps_conversion_matmul(*eps_ins):
     return eps_ins[0] * eps_ins[1]
 
@@ -71,6 +74,9 @@ def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
 
 def eps_conversion_pact_epsdiv(m : nn.Module, *eps_ins, **kwargs):
     return eps_ins[0]/m.constant
+
+def eps_conversion_pact_constwrap(m : nn.Module, *eps_ins, **kwargs):
+    return m.eps
 
 def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
     return m.act_out.get_eps()
@@ -104,9 +110,9 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTSoftmax : eps_conversion_pact_softmax,
                     PACTIntegerLayerNorm : eps_conversion_pact_layernorm,
                     PACTLayerNorm : eps_conversion_pact_layernorm,
-                    PACTEpsDiv : eps_conversion_pact_epsdiv,
                     PACTIntegerAdd : eps_conversion_pact_integeradd,
-                    PACTIntegerMatmul: eps_conversion_matmul,
+                    PACTIntegerMatmul: eps_conversion_pact_matmul,
+                    PACTConstWrap: eps_conversion_pact_constwrap,
 
                     f'_CALL_FUNCTION_{repr(operator.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
@@ -217,10 +223,14 @@ class AnnotateEpsPass(FxPass):
                     m = module_of_node(gm, node)
                     k = type(m)
                     conversion_args = [m] + arg_eps_ins + other_args
+
                 else:
                     assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
                     conversion_args = arg_eps_ins
-                    k = f'_{node.op.upper()}_{node.target}'
+                    if node.op == 'call_function':
+                        k = f'_{node.op.upper()}_{repr(node.target)}'
+                    else:
+                        k = f'_{node.op.upper()}_{node.target}'
                 try:
                     eps_out = _EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
                 except KeyError:
