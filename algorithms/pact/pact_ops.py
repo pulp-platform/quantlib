@@ -416,8 +416,8 @@ class _PACTActivation(nn.Module):
         weight = torch.Tensor([1]*len(self.histogram.reshape(-1))).reshape(1,1,-1).type_as(self.histogram)
         cdf = torch.nn.functional.conv1d(pdf.reshape(1,1,-1), weight, bias=None, stride=1, padding=(len(self.histogram)-1)).reshape(-1)
         cdf = cdf[:len(self.histogram)]
-        minIdx = torch.sum((cdf>=self.lower_percentile*100) == 0) + 1
-        maxIdx = torch.sum((cdf>=self.upper_percentile*100) == 0)
+        minIdx = torch.sum((cdf>=self.lower_percentile) == 0) + 1
+        maxIdx = torch.sum((cdf>=self.upper_percentile) == 0)
         self.min[:] = (self.prevEdges[minIdx]+self.prevEdges[minIdx-1])/2
         self.max[:] = (self.prevEdges[maxIdx]+self.prevEdges[maxIdx-1])/2
 
@@ -2306,7 +2306,7 @@ class PACTDiv(_PACTEps):
             if self.autoscale:
                 x_hat = x/self.eps_in_x
                 y_hat = y/self.eps_in_y
-                div = (x_hat)/(y_hat)
+                div = torch.abs((x_hat)/(y_hat))
                 self.running_min = torch.min(self.running_min, torch.min(torch.where(div > 0, div, div.max())))
                 self.Delta = torch.abs(torch.ceil(self.running_min**(-1)))
 
