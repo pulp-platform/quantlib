@@ -52,18 +52,13 @@ def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : 
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
 def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
-    #return (1./(m.n_levels//2-1))
-#     m.updateCoeffs(eps_in)
-#     return m.epsOut
     return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
-    #return torch.Tensor(((m.n_levels//2-1)/m.maxval),)
 
 def eps_conversion_matmul(*eps_ins):
     return eps_ins[0] * eps_ins[1]
 
 def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
     return torch.Tensor((1./(m.n_levels-1.),))
-    #return torch.Tensor((m.maxval/(m.n_levels-1),))
 
 def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
     return m.get_eps_out(eps_in)
@@ -72,19 +67,13 @@ def eps_conversion_identity(*eps_ins):
     return eps_ins[0]
 
 def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
-    return eps_ins[0]/(eps_ins[1]*m.Delta)
+    return m.get_eps_out(eps_ins[0], eps_ins[1])
 
 def eps_conversion_pact_epsdiv(m : nn.Module, *eps_ins, **kwargs):
     return eps_ins[0]/m.constant
 
 def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
-    return eps_ins[0]
-
-# def eps_conversion_mul(*eps_ins):
-#     try:
-#         return eps_ins[0]*eps_ins[1]
-#     except:
-#         return eps_ins[0]
+    return m.act_out.get_eps()
 
 def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
     return m.maxval/(m.adder.n_levels//2-1)
@@ -94,11 +83,6 @@ def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
 
 def eps_conversion_mul(m : nn.Module, *eps_in):
     return eps_in[0] * eps_in[1]
-
-
-
-#return torch.Tensor((1./m.n_levels,))
-
 
 _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTConv1d : eps_conversion_pact_linears,

@@ -81,9 +81,10 @@ _sawb_asymm_lut = {
 }
 
 class PACTEpsController(Controller):
-    def __init__(self, fx_model, modules, eps_in, n_levels_in, tracer, eps_pass):
+    def __init__(self, fx_model, modules, schedule, tracer, eps_pass):
         self.model = fx_model
         self.modules = modules
+        self.schedule = schedule
 
         self.eps_pass = eps_pass
         self.tracer = tracer
@@ -96,13 +97,33 @@ class PACTEpsController(Controller):
                 arg_eps_ins = node.meta['quant'].eps_in[0]
                 nm[node.target].set_eps_in(arg_eps_ins)
 
-        # SCHEREMO: Perform an eps prop pass
+    def step_pre_training_epoch(self, epoch, *args, **kwargs):
 
-    def step_pre_training_epoch(self, *args, **kwargs):
-        pass
+        if epoch in self.schedule.keys():
+            cur_cmds = self.schedule[epoch]
+            if not isinstance(cur_cmds, list):
+                cur_cmds = [cur_cmds]
+            for cmd in cur_cmds:
+                if cmd == 'start':
+                    for m in self.modules:
+                        m.started |= True
+                        pass
+                elif cmd == 'start_no_init':
+                        m.started |= True
+                elif cmd == 'stop':
+                    for m in self.modules:
+                        m.started &= False
 
-    def step_pre_validation_epoch(self, *args, **kwargs):
-        pass
+    def step_pre_validation_epoch(self, epoch, *args, **kwargs):
+        self.step_pre_training_batch(self, *args, **kwargs)
+        if epoch in self.schedule.keys():
+            cur_cmds = self.schedule[epoch]
+            if not isinstance(cur_cmds, list):
+                cur_cmds = [cur_cmds]
+            for cmd in cur_cmds:
+                if cmd == 'lock':
+                    for m in self.modules:
+                        m.locked |= True
 
 class PACTActController(Controller):
     """
@@ -189,8 +210,7 @@ class PACTActController(Controller):
                     self.frozen = False
                     self.log("Unfroze clipping parameters!")
 
-                else:
-                    assert cmd == 'stop', "Invalid PACTActController command at epoch {}: {}".format(epoch, cmd)
+                elif cmd == 'stop':
                     for m in self.modules:
                         m.started &= False
                     self.log("Stopped quantization!")
