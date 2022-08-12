@@ -71,8 +71,8 @@ __all__ = [
     'PACTHardsigmoid',
     'PACTIntegerHardswish',
     'PACTIntegerHardsigmoid',
+    'PACTMean',
     'PACTDiv',
-    'PACTEpsDiv',
     'PACTIntegerDiv',
     'PACTExp',
     'PACTIntegerExp',
@@ -287,10 +287,9 @@ class _PACTActivation(nn.Module):
                  tqt_beta : float = 0.9,
                  tqt_clip_grad : bool = True,
                  signed : bool = True,
-                 percentile_clipping : bool = False,
                  upper_percentile : float = 99.5,
                  lower_percentile : float = 0.5,
-                 num_bins : int = 512
+                 num_bins : int = 2**12 # SCHEREMO: Stay below or at 2**12 - everything else is super slow
                  ):
 
         r"""Constructor.
@@ -315,10 +314,10 @@ class _PACTActivation(nn.Module):
         super(_PACTActivation, self).__init__()
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
-        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
 
-        self.percentile_clipping = percentile_clipping
+        assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const', 'klj', 'percentile'])
+
         self.upper_percentile = upper_percentile/100
         self.lower_percentile = lower_percentile/100
 
@@ -375,6 +374,7 @@ class _PACTActivation(nn.Module):
         self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
         self.truemax          = torch.nn.Parameter(torch.Tensor((1,)), requires_grad=False)
         self.truemin          = torch.nn.Parameter(torch.Tensor((-1,)), requires_grad=False)
+        self.register_buffer('ready', torch.tensor(False))
 
     # SCHEREMO: Assume self.histogram magnitude list of data, binned
     def updateHistogram(self, stat):
@@ -416,10 +416,13 @@ class _PACTActivation(nn.Module):
         weight = torch.Tensor([1]*len(self.histogram.reshape(-1))).reshape(1,1,-1).type_as(self.histogram)
         cdf = torch.nn.functional.conv1d(pdf.reshape(1,1,-1), weight, bias=None, stride=1, padding=(len(self.histogram)-1)).reshape(-1)
         cdf = cdf[:len(self.histogram)]
-        minIdx = torch.sum((cdf>=self.lower_percentile) == 0) + 1
-        maxIdx = torch.sum((cdf>=self.upper_percentile) == 0)
-        self.min[:] = (self.prevEdges[minIdx]+self.prevEdges[minIdx-1])/2
-        self.max[:] = (self.prevEdges[maxIdx]+self.prevEdges[maxIdx-1])/2
+        rightMinIdx = torch.sum((cdf<self.lower_percentile))
+        rightMaxIdx = torch.sum((cdf<self.upper_percentile))
+        leftMinIdx = torch.clip(rightMinIdx-1, min=0.)
+        leftMaxIdx = torch.clip(rightMaxIdx-1, min=0.)
+        #assert rightMaxIdx >= rightMinIdx, "PACTActivation: Clipping bounds swapped!"
+        self.min[:] = (self.prevEdges[rightMinIdx]+self.prevEdges[leftMinIdx])/2
+        self.max[:] = (self.prevEdges[rightMaxIdx]+self.prevEdges[leftMaxIdx])/2
 
     def get_eps(self, *args):
         return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
@@ -430,26 +433,31 @@ class _PACTActivation(nn.Module):
 
     def forward(self, x):
         if not self.started:
-            x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
-            with torch.no_grad():
-                if self.percentile_clipping:
-                    self.updateHistogram(x_stat)
-                    self.updateClipBounds()
-                else:
+            if self.act_kind == 'identity':
+                res =  x
+            elif self.act_kind == 'relu':
+                res = torch.nn.functional.relu(x)
+            elif self.act_kind == 'relu6':
+                res = torch.nn.functional.relu6(x)
+            elif self.act_kind == 'leaky_relu':
+                res = torch.nn.functional.leaky_relu(x, self.leaky)
+            elif self.act_kind == 'htanh':
+                res = torch.nn.functional.hardtanh(x)
+
+            x_stat = torch.tensor(res, device=self.max.device, dtype=self.max.dtype) if not isinstance(res, torch.Tensor) else res
+            self.updateHistogram(x_stat)
+
+            if self.init_clip == 'percentile' and self.ready:
+                res = torch.clip(res, min=self.min, max=self.max)
+            else:
+                with torch.no_grad():
                     self.min[:] = min(self.min.item(), x_stat.min())
                     self.max[:] = max(self.max.item(), x_stat.max())
-                self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
-                self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
-            if self.act_kind == 'identity':
-                return x
-            elif self.act_kind == 'relu':
-                return torch.nn.functional.relu(x)
-            elif self.act_kind == 'relu6':
-                return torch.nn.functional.relu6(x)
-            elif self.act_kind == 'leaky_relu':
-                return torch.nn.functional.leaky_relu(x, self.leaky)
-            elif self.act_kind == 'htanh':
-                return torch.nn.functional.hardtanh(x)
+                    self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
+                    self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
+
+            return res
+
         else:
             eps = self.get_eps()
             if self.tqt:
@@ -1510,7 +1518,7 @@ class PACTIntegerExp(torch.nn.Module):
             return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
 class PACTSoftmax(_PACTEps):
-    def __init__(self, n_levels: int = 256, dim: int = 1):
+    def __init__(self, dim: int = 1):
         super().__init__()
         self.n_levels = n_levels
         self.dim = dim
@@ -1622,82 +1630,62 @@ class PACTIntegerSoftmax(torch.nn.Module):
         else:
             return self.MySoftmax.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
-class PACTGELU(torch.nn.Module):
+class PACTGELU(_PACTEps):
 
-    def __init__(self,  n_levels: int = 256):
-        super().__init__()
-
-        self.n_levels = n_levels
+    def __init__(self):
+        super().__init__(True)
         self.register_buffer('a',torch.Tensor((-0.288,)))
         self.register_buffer('b',torch.Tensor((-1.769,)))
         self.register_buffer('one', torch.Tensor((1.,)))
         self.register_buffer('sqrttwo', torch.Tensor((math.sqrt(2),)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
-        # Maxval is used to gather statistics
-        self.register_buffer('maxval', torch.Tensor((0.,)))
+
+        self.register_buffer('epsA',torch.Tensor((1.,)))
+        self.register_buffer('epsB',torch.Tensor((1.,)))
+        self.register_buffer('epsOne', torch.Tensor((1.,)))
+        self.register_buffer('epsOut', torch.Tensor((1.,)))
+
+    def get_eps_out(self, eps_in):
+        self.set_eps_in(eps_in)
+        return self.epsOut
+
+    def set_eps_in(self, eps_in_list):
+        super().set_eps_in(eps_in_list)
+        self.updateCoeffs(self.eps_in)
 
     def updateCoeffs(self, eps_in):
-        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
+        def RQ(x,eps):
+            if self.started:
+                x = torch.round(x/eps)*eps
+            return x
 
-        :param eps_in: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-        epsX = eps_in * (math.sqrt(2))
-
-        r = 8
+        epsX = eps_in / (math.sqrt(2))
         p = 0
 
-        #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
         with torch.no_grad():
             epsB = epsX
-            epsA = torch.Tensor(((0.288)/2**p,)).type_as(eps_in)
-            self.epsB = epsB.detach()
-            self.epsA = epsA.detach()
+            epsA = torch.Tensor(((-0.2888)/2**p,)).type_as(eps_in)
             epsOne = epsB**2*epsA
             epsOut = epsOne * eps_in
 
-            self.epsOne = epsOne.detach()
-            self.epsOut = epsOut.detach()
+            self.epsB = epsB
+            self.epsA = epsA
+            self.epsOne = epsOne
+            self.epsOut = epsOut
 
-            self.a.data[0] = torch.round(-0.288/epsA) * epsA
-            self.b.data[0] = torch.round(-1.769/epsB) * epsB
-            self.one.data[0] = torch.round(1./(epsB**2*epsA)) * epsB**2*epsA
-            self.sqrttwo.data[0] = torch.round(math.sqrt(2)/(eps_in/epsB))*(eps_in/epsB)
+            self.a = RQ(torch.Tensor((-0.2888,)).type_as(self.a), epsA)
+            self.b = RQ(torch.Tensor((-1.769,)).type_as(self.b), epsB)
+            self.one = RQ(torch.Tensor((1.,)).type_as(self.one),epsB**2*epsA)
+            self.sqrttwo = RQ(torch.Tensor((math.sqrt(2.),)).type_as(self.sqrttwo),eps_in/epsB)
+
     def forward(self, x):
-        """Approximate floating point GELU implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
+        def RQ(x,eps):
+            if self.started:
+                x = torch.floor(x/eps)*eps
+            return x
 
-        :param x:
-        :returns:
-        :rtype:
-
-        """
-        #Estimate epsilon
-        with torch.no_grad():
-            if torch.min(x) >= 0:
-                clip_lo = torch.Tensor((0,)).type_as(x)
-                clip_hi = torch.max(torch.abs(x))
-            else:
-                clip_lo = -torch.max(torch.abs(x))
-                clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-
-            eps = (clip_hi-clip_lo)/(self.n_levels-1)
-            self.updateCoeffs(eps)
-
-        # fq x:
-        x = torch.round(x/eps)*eps
-
-        L = torch.sign(x) * (self.a.type_as(x)*(torch.clip(torch.abs(x/self.sqrttwo.type_as(x)), min=torch.Tensor((0,)).type_as(x), max=-self.b.type_as(x)) + self.b.type_as(x))**2 + self.one.type_as(x))
-        # fq L:
-        L = torch.round(L/self.epsOne.type_as(x))*self.epsOne.type_as(x)
-        y = x*((self.one.type_as(x)+L)/2)
-        # fq y:
-        y = torch.round(y/self.epsOut.type_as(x))*self.epsOut.type_as(x)
-        self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-
+        q = RQ(torch.clip(torch.abs(x/self.sqrttwo),min=torch.Tensor((0,)).type_as(x), max=-self.b), self.epsB)
+        L = torch.sign(x) * (self.a * (q + self.b)**2 + self.one)
+        y = x * RQ(((self.one+L)/2),self.epsOne)
         return y
 
 class PACTIntegerGELU(torch.nn.Module):
@@ -1884,11 +1872,12 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         self.register_buffer('eps', torch.Tensor((eps,)))
         self.register_buffer('eta', torch.Tensor((1.,)))
 
-        self.div = PACTDiv(Delta=1., stable=False)
+        self.div = PACTDiv(Delta=1., stable=False, autoscale=True)
 
-    def get_bias_q(self, eps):
+    def get_bias_q(self):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip it
+        eps = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
         with torch.no_grad():
             b = PACTQuantize(self.bias, eps, -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
         return b
@@ -1896,6 +1885,10 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
     # do not use in training!
     def get_bias_int(self, eps_in):
         return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
+
+    def get_eps_out(self, eps_in):
+        self.set_eps_in([eps_in])
+        return self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
 
     def set_eps_in(self, eps_in_list):
         super().set_eps_in(eps_in_list)
@@ -1926,28 +1919,11 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
             nom = nom*self.weight_q
         else:
             nom = nom*self.weight
+
         b = self.bias
 
         y = self.div(nom, denom) + b
         return y
-
-class PACTIntegerEpsDiv(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.constant = None
-
-    def forward(self, x, **kwargs):
-        return x
-
-class PACTEpsDiv(torch.nn.Module):
-
-    def __init__(self, constant=1.):
-        super().__init__()
-        self.constant = constant
-
-    def forward(self, x, **kwargs):
-      return x / self.constant
-
 
 class PACTWrapLinearAttention(nn.Module):
     class LinearAttention(torch.autograd.Function):
@@ -2272,12 +2248,14 @@ class PACTDiv(_PACTEps):
     def set_eps_in(self, eps_in_list):
         self.eps_in_x[:] = eps_in_list[0]
         self.eps_in_y[:] = eps_in_list[1]
+        assert self.eps_in_y > 0, "PACTDiv: Denominator's eps is lt or eq 0!"
 
         if self.stable:
             t = self.eps_in_y / self.eps_div
             self.eta = torch.ceil(t)
 
     def get_eps_out(self, eps_in_x, eps_in_y):
+        self.set_eps_in([eps_in_x, eps_in_y])
         if not self.locked:
             return eps_in_x / eps_in_y
         else:
@@ -2296,12 +2274,12 @@ class PACTDiv(_PACTEps):
             eps = RQ(self.eta * self.eps_div, self.eps_in_y)
             if self.started:
                 assert eps>=self.eps_in_y, "Eps was rounded down in PACTDiv"
+
         else:
             eps = 0
 
         y = y + eps
         assert torch.sum( y > 0 ) == len(y.reshape(-1)), "PACTDiv: Dividing by negative numbers not allowed!"
-
         with torch.no_grad():
             if self.autoscale:
                 x_hat = x/self.eps_in_x
@@ -2353,6 +2331,18 @@ class PACTConstWrap(nn.Module):
         with torch.no_grad():
             self.set_eps(x)
         return self.eps
+
+class PACTMean(_PACTEps):
+    def __init__(self):
+        super().__init__(True)
+
+    def forward(self, x, **kwargs):
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps)*eps
+            return x
+
+        return RQ(torch.mean(x, **kwargs), self.eps_in)
 
 class PACTWrapModule(nn.Module):
 

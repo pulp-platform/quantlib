@@ -201,20 +201,16 @@ class TruedivReplacementPass(ModularizePass):
         target = [operator.truediv]
         super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, Delta=Delta), name="DIV_REPLACEMENT_PASS")
 
-
-class EpsdivReplacementPass(ModularizePass):
+class MeanReplacementPass(ModularizePass):
 
     @staticmethod
-    def epsdiv_replacement_fn(node):
-        import IPython; IPython.embed()
-        assert len(node.args) == 2, "Div with more than 2 operands? I don't think so..."
-        return (PACTEpsDiv(0.), node.args, node.kwargs)
+    def mean_replacement_fn(node):
+        return (PACTMean(), node.args, node.kwargs)
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        target = [torch.div]
-        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.epsdiv_replacement_fn), name="EPSDIV_REPLACEMENT_PASS")
-
+        target = [torch.mean]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.mean_replacement_fn), name="MEAN_REPLACEMENT_PASS")
 
 class MatmulReplacementPass(ModularizePass):
 

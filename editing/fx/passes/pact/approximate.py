@@ -44,17 +44,17 @@ from ...util.tracing import LeafTracer, custom_symbolic_trace
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
 class ApproximateSoftmaxPass(SequentialPass):
-    def __init__(self, n_levels, **kwargs):
+    def __init__(self, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTSoftmax(n_levels), f'_APPROXIMATE_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTSoftmax(), f'_APPROXIMATE_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_SOFTMAX_PASS')
 
 class ApproximateGELUPass(SequentialPass):
-    def __init__(self, n_levels, **kwargs):
+    def __init__(self, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.GELU())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(n_levels), f'_APPROXIMATE_GELU_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
 def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):

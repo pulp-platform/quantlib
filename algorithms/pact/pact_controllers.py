@@ -34,6 +34,9 @@ from .util import assert_param_valid, almost_symm_quant
 
 import copy
 
+from tqdm import tqdm
+import math
+
 __all__ = [
     'PACTEpsController',
     'PACTActController',
@@ -181,11 +184,19 @@ class PACTActController(Controller):
                 elif cmd == 'verbose_off':
                     self.verbose = False
 
+                elif cmd == 'ready':
+                    for m in tqdm(self.modules):
+                        m.ready |= True
+                        m.updateClipBounds()
+                        m.histogram *= 0
+                        m.truemax /= m.truemax
+                        m.truemin /= m.truemin
+                    self.log("Started activation quantization!")
+
                 elif cmd == 'start':
-                    for m in self.modules:
+                    for m in tqdm(self.modules):
                         self.reset_clip_bounds(m, m.init_clip)
                         m.started |= True
-
                     self.log("Started activation quantization!")
 
                 elif cmd == 'start_no_init':
@@ -238,6 +249,82 @@ class PACTActController(Controller):
                 max_val = torch.ones_like(p.data) * self.init_clip_hi
                 min_val = torch.ones_like(p.data) * self.init_clip_lo
                 break
+
+        elif method == 'percentile':
+            m.updateClipBounds()
+            max_val = m.max.data
+            try:
+                if m.symm:
+                    max_val = torch.maximum(max_val, -m.min)
+                    min_val, max_val = almost_symm_quant(max_val, m.n_levels)
+                else:
+                    min_val = m.min.data
+            except AttributeError:
+                # we don't need 'min_val' if m does not have the 'symm' attribute because in that case
+                # it's not an asymmetric activation
+                pass
+
+        elif method == 'klj':
+
+            m.updateClipBounds()
+
+            l1 = torch.nn.KLDivLoss()
+            l2 = torch.nn.KLDivLoss()
+
+            def klj_loss(x_hp, x_fq, l1, l2):
+                return l1(x_hp, x_fq) + l2(x_fq, x_hp)
+            def jensen_shannon_loss(x_hp, x_fq, l1, l2):
+                return 0.5*(l1(x_hp, ((x_fq+x_hp)/2)) + l2(x_fq, ((x_fq+x_hp)/2)))
+            def cust_loss(x_hp, x_fq, bincenter, l1, l2):
+                return torch.sum((torch.abs(x_hp-x_fq) * torch.abs(bincenter))**2)#* torch.cos(torch.abs(bincenter)/torch.max(bincenter) * pi/2)
+
+            class Resampler(nn.Module):
+                def __init__(self,m):
+                    super().__init__()
+                    self.m = m
+
+                def forward(self, histogram, prevEdges, n_levels, max):
+                    leftIdx = torch.sum(torch.where(prevEdges < -max, 1, 0))
+                    rightIdx = torch.sum(torch.where(prevEdges < max, 1, 0))
+                    newHist = torch.zeros_like(histogram)
+                    oldHist = histogram[leftIdx:rightIdx]
+                    innerSamples = torch.nn.functional.interpolate(oldHist.reshape(1,1,-1),size=n_levels,mode='linear').reshape(-1)
+                    innerSamples[0] = innerSamples[0] + torch.sum(histogram[:leftIdx])
+                    innerSamples[-1] = innerSamples[-1] + torch.sum(histogram[rightIdx:])
+                    innerSamples = torch.nn.functional.interpolate(innerSamples.reshape(1,1,-1),size=(rightIdx-leftIdx),mode='linear').reshape(-1)
+                    newHist[leftIdx:rightIdx] = innerSamples
+                    return newHist
+
+            model = Resampler(m)
+
+            hist = copy.deepcopy(m.histogram/torch.sum(m.histogram))
+            prevEdges = copy.deepcopy(m.prevEdges)
+            binCenters = torch.zeros_like(hist)
+            for idx in range(len(binCenters)):
+                binCenters[idx] = (prevEdges[idx] + prevEdges[idx+1])/2
+            abs_scale = m.truemax / m.num_bins
+
+            best = 0
+            minLoss = 1
+
+            max = copy.deepcopy(m.truemax)
+
+            maxHat = max
+            model.eval()
+            for i in range(m.num_bins-1):
+                newHist = model(hist, prevEdges, m.n_levels, maxHat)
+                absLoss = cust_loss(hist, newHist, binCenters, l1, l2)
+                maxHat = maxHat - abs_scale
+                if absLoss < minLoss:
+                    best = i
+                    minLoss = absLoss.item()
+
+            max_val = m.truemax - abs_scale*best
+            if m.symm:
+                min_val, max_val = almost_symm_quant(max_val, m.n_levels)
+            else:
+                min_val = m.min.data
+
         else: # method == 'std'
             max_val = m.running_mean.data + m.nb_std * torch.sqrt(m.running_var.data)
             try:
@@ -469,6 +556,7 @@ class PACTLinearController(Controller):
 
                 # where alpha is negative, use min/max bounds
                 min_val, max_val = torch.where(alpha < 0, min_val_mm, min_val), torch.where(alpha < 0, max_val_mm, max_val)
+
             else: # method == 'const'
                 min_val = torch.ones_like(m.clip_lo.data) * self.init_clip_lo
                 max_val = torch.ones_like(m.clip_hi.data) * self.init_clip_hi

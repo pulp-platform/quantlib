@@ -52,7 +52,7 @@ def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : 
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
 def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
-    return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
+    return m.get_eps_out(eps_in)
 
 def eps_conversion_pact_matmul(m : nn.Module, *eps_ins):
     return eps_ins[0] * eps_ins[1]
@@ -72,8 +72,8 @@ def eps_conversion_identity(*eps_ins):
 def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
     return m.get_eps_out(eps_ins[0], eps_ins[1])
 
-def eps_conversion_pact_epsdiv(m : nn.Module, *eps_ins, **kwargs):
-    return eps_ins[0]/m.constant
+def eps_conversion_pact_mean(m : nn.Module, *eps_ins, **kwargs):
+    return eps_ins[0]
 
 def eps_conversion_pact_constwrap(m : nn.Module, *eps_ins, **kwargs):
     return m.eps
@@ -113,6 +113,7 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTIntegerAdd : eps_conversion_pact_integeradd,
                     PACTIntegerMatmul: eps_conversion_pact_matmul,
                     PACTConstWrap: eps_conversion_pact_constwrap,
+                    PACTMean: eps_conversion_pact_mean,
 
                     f'_CALL_FUNCTION_{repr(operator.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
@@ -152,7 +153,7 @@ _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
                       PACTUnsignedAct : n_levels_out_pact_acts,
                       PACTWrapModule : n_levels_out_pact_acts,
                       PACTEmbedding : n_levels_out_pact_embedding,
-                      PACTGELU : n_levels_out_pact_acts,
+                      PACTGELU : n_levels_out_pact_linears,
                       PACTIntegerGELU : n_levels_out_pact_acts,
                       PACTIntegerMatmul : n_levels_out_pact_linears,
                       PACTSoftmax : n_levels_out_pact_acts,
