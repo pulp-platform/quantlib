@@ -7,15 +7,12 @@ from torch import nn, fx
 from quantlib.editing.fx.util import module_of_node, named_module_nodes
 from quantlib.editing.fx.passes import FxPass, ModifySequentialPatternPass, ShapePropPass, CountMACsPass, SequentialPass, MemoryUsagePass, CollectPropertiesPass, AnnotateEpsPass
 from quantlib.algorithms.pact import PACTIntegerAdd
-from .bb_util import BB_symbolic_trace
+from .bb_util import BB_symbolic_trace, find_layer_sets, partition_dict
 
-from quantlib.algorithms.bb import BBAct, BBConv2d, BBLinear, BBGateController, BBBOPComplexityRegularizer, BBLatencyRegularizer, BBMultiLayerController, BB_attach_gates_individual, BB_attach_gates_shared, BB_attach_gates_individual_best_latency
+from quantlib.algorithms.bb import BBAct, BBConv2d, BBLinear, BBGateController, BBBOPComplexityRegularizer, BBLatencyRegularizer, BBSplitLatencyRegularizer, BBMultiLayerController, BB_attach_gates_individual, BB_attach_gates_shared, BB_attach_gates_individual_best_latency
 from quantlib.algorithms.bb.bb_ops import _BB_LINOPS
 from quantlib.algorithms.bb.generate_bench_spec import import_bench_results, ident_of_layer
 
-__all__ = ["BBAttachControllersPass",
-           "BBControllerInitPass",
-           "BBActConvControllerInitPass"]
 
 _ALL_DEF_ARGS = {"precs": [2,4,8],
                  "hc_stretch": 1.2,
@@ -170,7 +167,7 @@ class ReadLatencyPass(FxPass):
         return gm
 
 class BBControllerPrepPass(FxPass):
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], n_levels_in : int = 256, latency_spec : Optional[str] = None):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], latency_spec : Optional[str] = None):
         super(BBControllerPrepPass, self).__init__()
         # to know #MACs for each layer we must first know the input shapes for
         # conv layers
@@ -200,22 +197,12 @@ class BBControllerPrepPass(FxPass):
 
         return gm
 
+
+
 class BBActConvControllerInitPass(FxPass):
 
-    # layers which we want to ignore when searching for an activation preceding
-    # a linear operator
-    _PASSTHRU_LAYERS = (nn.AdaptiveAvgPool1d,
-                        nn.AdaptiveAvgPool2d,
-                        nn.AvgPool1d,
-                        nn.AvgPool2d,
-                        nn.AdaptiveMaxPool1d,
-                        nn.AdaptiveMaxPool2d,
-                        nn.MaxPool1d,
-                        nn.MaxPool2d,
-                        nn.Flatten,
-                        nn.Dropout)
 
-    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], gate_init : float = 2., input_prec : int = 8, joint_distribution : bool = False, shared_gates : bool = False, target : Literal["bops", "latency"] = "bops", latency_spec_file : Optional[str] = None, init_best_latency_gates : bool = False):
+    def __init__(self, shape_in : Union[Tuple[int], List[int], torch.Size], gate_init : float = 2., input_prec : int = 8, joint_distribution : bool = False, shared_gates : bool = False, target : Literal["bops", "latency"] = "bops", latency_spec_file : Optional[str] = None, init_best_latency_gates : bool = False, split : str = None):
         super(BBActConvControllerInitPass, self).__init__()
         assert target in ["bops", "latency"], f"BBActConvControllerInitPass expected parameter 'target' with value 'bops' or 'latency', got '{target}'"
         if target == "latency":
@@ -224,7 +211,7 @@ class BBActConvControllerInitPass(FxPass):
         else:
             assert not init_best_latency_gates, f"For target=={target}, BBActConvController requires init_best_latency_gates==False!"
         self.target = target
-        self.register_subpass("prep", BBControllerPrepPass(shape_in, 2**input_prec, latency_spec_file))
+        self.register_subpass("prep", BBControllerPrepPass(shape_in, latency_spec_file))
         self.input_prec = input_prec
         self.joint_distribution = joint_distribution
         self.gate_init = gate_init
@@ -236,58 +223,24 @@ class BBActConvControllerInitPass(FxPass):
             self.attach_gate_fn = BB_attach_gates_individual_best_latency
         else:
             self.attach_gate_fn = BB_attach_gates_individual
+        self.split = split
 
-    def find_prev_act(self, gm : fx.GraphModule, node : fx.Node):
-        if node.op in ["call_method", "call_function"]:
-            print(f"BBAttachControllersPass: find_prev_act ignoring node {node.op}({node.target}) and continuing to node {node.all_input_nodes[0]}! If this is not correct, go and fix the code :^)")
-            return self.find_prev_act(gm, node.all_input_nodes[0])
-        elif node.op == "call_module":
-            m = module_of_node(gm, node)
-            if isinstance(m, (BBAct, PACTIntegerAdd)):
-                return node
-            elif isinstance(m, self._PASSTHRU_LAYERS):
-                return self.find_prev_act(gm, node.all_input_nodes[0])
-
-        return None
-
-    def find_layer_sets(self, gm : fx.GraphModule):
-        layer_pairs = []
-        # we need to check if the same layer has already been found as the same
-        # activation may lead into multiple linear operators
-
-        for node in gm.graph.nodes:
-            if node.op == "call_module" and isinstance(module_of_node(gm, node), tuple(_BB_LINOPS)):
-                cur_layer_pair = [node.target]
-                maybe_act = self.find_prev_act(gm, node.all_input_nodes[0])
-                if maybe_act is not None:
-                    am = module_of_node(gm, maybe_act)
-                    act_target = maybe_act.target
-                    if isinstance(am, PACTIntegerAdd):
-                        act_target += ".act_out"
-                        am = am.act_out
-                    cur_layer_pair = [act_target] + cur_layer_pair
-                layer_pairs.append(cur_layer_pair)
-        return layer_pairs
 
     def run_pass(self, gm : fx.GraphModule):
         gm = self.prep(gm)
         prop_dict = self.prep.property_dict
-        layer_pairs = self.find_layer_sets(gm)
+        layer_pairs = find_layer_sets(gm)
 
-        def partition_dict(d : dict, s : list):
-            dicts_out = []
-            for l_set in s:
-                cur_dict = {k:[gm.get_submodule(k), d[k]] for k in l_set}
-                dicts_out.append(cur_dict)
-            return dicts_out
-
-        prop_dicts_partitioned = partition_dict(prop_dict, layer_pairs)
+        prop_dicts_partitioned = partition_dict(gm, prop_dict, layer_pairs)
 
         for pd in prop_dicts_partitioned:
             if self.target == "bops":
                 t_reg = BBBOPComplexityRegularizer(self.joint_distribution, self.input_prec)
             else:
-                t_reg = BBLatencyRegularizer(self.input_prec)
+                if not self.split:
+                    t_reg = BBLatencyRegularizer(self.input_prec)
+                else:
+                    t_reg = BBSplitLatencyRegularizer(self.input_prec, self.split)
             # TODO add memory regularizer
             gate_init_kwargs = {'gate_init':self.gate_init}
             if self.init_best_latency_gates:
@@ -295,4 +248,3 @@ class BBActConvControllerInitPass(FxPass):
             ctrl = BBMultiLayerController(pd, [t_reg], self.attach_gate_fn, gate_init_kwargs)
 
         return gm
-
