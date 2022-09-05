@@ -24,9 +24,35 @@
 # limitations under the License.
 
 import torch
+import numpy as np
 from torch.overrides import (
     has_torch_function, has_torch_function_unary, has_torch_function_variadic,
-    handle_torch_function, get_default_nowrap_functions)
+    handle_torch_function)
+
+_QTENSOR_OVERRIDES = {}
+
+def qt_implements(torch_func : callable):
+    def inner(f):
+        _QTENSOR_OVERRIDES[torch_func] = f
+        return f
+    return inner
+
+
+@qt_implements(torch.stack)
+def qt_stack(tensors, dim=0, out=None):
+    with torch._C.DisableTorchFunction():
+        stacked = torch.stack(tensors, dim=dim, out=out)
+
+    if all(isinstance(t, QTensor) and t.eps is not None for t in tensors):
+        epses = [t.eps for t in tensors]
+        eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(epses[:-1], epses[1:])]
+        if not all(ed < 1e-8 for ed in eps_diffs):
+            print("Warning: stacking QTensors  with different eps values!! Eps is discarded for resulting QTensor")
+        else:
+            stacked.eps = epses[0]
+    return stacked
+
+
 
 class QTensor(torch.Tensor):
     @staticmethod
@@ -54,6 +80,10 @@ class QTensor(torch.Tensor):
         else:
             return None
 
+    @eps.setter
+    def eps(self, value):
+        self._eps = value
+
     @classmethod
     def getOverriddenMethods(cls):
         parent_attrs = set()
@@ -68,13 +98,16 @@ class QTensor(torch.Tensor):
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
-        #import IPython; IPython.embed()
+        if kwargs is None:
+            kwargs = {}
         if func.__name__ in cls.getOverriddenMethods():
-            return getattr(cls, func.__name__)(args, kwargs)
+            return getattr(cls, func.__name__)(*args, **kwargs)
+        elif func in _QTENSOR_OVERRIDES:
+            return _QTENSOR_OVERRIDES[func](*args, **kwargs)
         else:
             ret = super().__torch_function__(func,types,args,kwargs)
             c = _convert(ret, cls)
-            return c
+        return c
 
     def clone(self, *args, **kwargs):
         if hasattr(self, '_eps'):
@@ -87,7 +120,9 @@ class QTensor(torch.Tensor):
             new_obj=QTensor([], self._eps)
         else:
             new_obj=QTensor([], None)
-        tempTensor = super().to(*args, **kwargs)
+        #import ipdb; ipdb.set_trace()
+        with torch._C.DisableTorchFunction():
+            tempTensor = super().to(*args, **kwargs)
         new_obj.data=tempTensor.data
         new_obj.requires_grad=tempTensor.requires_grad
         if hasattr(self, '_eps'):
@@ -95,6 +130,18 @@ class QTensor(torch.Tensor):
         else:
             new_obj.__init__(tempTensor, None)
         return(new_obj)
+
+    def split(self, *args, **kwargs):
+        with torch._C.DisableTorchFunction():
+            base_spl = super().split(*args, **kwargs)
+        q_spl = _convert(base_spl, QTensor)
+        if self.eps is not None:
+            for qt in q_spl:
+                qt.eps = self.eps
+        return q_spl
+
+
+
 
 def _convert(ret, cls):
     if isinstance(ret, torch.Tensor) and not isinstance(ret, cls):

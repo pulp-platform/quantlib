@@ -32,6 +32,7 @@ from .util import assert_param_valid, almost_symm_quant
 import math
 import copy
 
+from quantlib.QTensor import QTensor
 from torch.onnx.symbolic_helper import parse_args
 import torch.onnx.symbolic_registry as sym_registry
 
@@ -1013,13 +1014,16 @@ class _PACTActivation(nn.Module):
             if self.tqt:
                 #Make sure that the activation is correctly registered with a
                 #controller which assigns clip_hi = 2**log_t!
-                return TQTQuantize(x, eps, self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, self.rounding)
+                result = TQTQuantize(x, eps, self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, self.rounding)
             else:
                 if self.learn_clip and self.symm and self.signed:
                     clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
                 else:
                     clip_upper = self.clip_hi
-                return PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
+                result = PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
+            if isinstance(result, QTensor):
+                result.eps = eps
+            return result
 
 
 class PACTUnsignedAct(_PACTActivation):
@@ -1190,7 +1194,11 @@ class PACTIntegerAdd(torch.nn.Module):
         total = self.acts[0](x[0])
         for idx, i in enumerate(x[1:]):
             total = total + self.acts[idx+1](i)
-        return self.act_out(total)
+
+        result = self.act_out(total)
+        if isinstance(result, QTensor):
+            result.eps = self.act_out.get_eps()
+        return result
 
 
 class PACTIntegerMatmul(torch.nn.Module):
@@ -1212,6 +1220,8 @@ class PACTIntegerMatmul(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, y: torch.Tensor):
         mulresult = torch.matmul(x,y)
+        if all(isinstance(t, QTensor) and t.eps is not None for t in (x,y)):
+            mulresult.eps = x.eps * y.eps
         return mulresult
 
 
@@ -1397,7 +1407,20 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         :param kwargs: passed to Conv2d constructor
         """
 
+        valid_padding_modes = {'zeros', 'reflect', 'replicate', 'circular'}
+        try:
+            pm = kwargs['padding_mode']
+        except KeyError:
+            pm = 'zeros'
+        if pm not in valid_padding_modes:
+            assert pm == 'eps', f'PACTConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps"})}'
+            # for Conv1d initializer, pretend we are doing zero padding...
+            kwargs['padding_mode'] = 'zeros'
+
         super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
+
+        self.padding_mode = pm
+
         self.setup_quant_params(n_levels=n_levels,
                                 quantize=quantize,
                                 init_clip=init_clip,
@@ -1438,7 +1461,18 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         else:
             w = self.weight
 
-        return nn.functional.conv2d(x, w, b, self.stride, self.padding, self.dilation, self.groups)
+        if self.padding_mode != 'zeros':
+            mode = 'constant' if self.padding_mode == 'eps' else self.padding_mode
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item()
+            x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
+            padding = 0
+        else:
+            padding = self.padding
+        result = nn.functional.conv2d(x, w, b, self.stride, padding, self.dilation, self.groups)
+        if self.started and isinstance(result, QTensor) and x.eps is not None:
+            result.eps = self.get_eps_out(x.eps)
+
+        return result
 
 
     # this is not very pretty. Any suggestions on how to avoid it are welcome...
@@ -1447,6 +1481,10 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
 
     @classmethod
     def from_conv2d(cls, c : nn.Conv2d, **kwargs):
+        pm = c.padding_mode
+        if 'padding_mode' in kwargs:
+            pm = kwargs['padding_mode']
+            kwargs.pop('padding_mode')
         # kwargs should be arguments to PACTConv2d
         pact_conv = cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
@@ -1456,7 +1494,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
                    dilation=c.dilation,
                    groups=c.groups,
                    bias=(c.bias is not None),
-                   padding_mode=c.padding_mode,
+                   padding_mode=pm,
                    **kwargs)
         # initialize parameters from the nn.Conv2d
         pact_conv.weight.data.copy_(c.weight.data)
@@ -1491,7 +1529,22 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         :param kernel_size: See torch.nn.Conv2d
         :param kwargs: passed to Conv1d constructor
         """
+
+        valid_padding_modes = {'zeros', 'reflect', 'replicate', 'circular'}
+        try:
+            pm = kwargs['padding_mode']
+        except KeyError:
+            pm = 'zeros'
+        if pm not in valid_padding_modes:
+            assert pm == 'eps', f'PACTConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps"})}'
+            # for Conv1d initializer, pretend we are doing zero padding...
+            kwargs['padding_mode'] = 'zeros'
+
+
+
         super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
+        self.padding_mode = pm
+
         self.setup_quant_params(n_levels=n_levels,
                                 quantize=quantize,
                                 init_clip=init_clip,
@@ -1519,6 +1572,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
                 t = torch.cat(self.out_channels*[t])
             t = torch.reshape(t, (self.out_channels, 1, 1))
         return t
+
     def forward(self, x):
         b = self.bias
         if self.started:
@@ -1529,13 +1583,27 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         else:
             w = self.weight
 
-        return nn.functional.conv1d(x, w, b, self.stride, self.padding, self.dilation, self.groups)
+        if self.padding_mode != 'zeros':
+            mode = 'constant' if self.padding_mode == 'eps' else self.padding_mode
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item()
+            x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
+            padding = 0
+        else:
+            padding = self.padding
+        result = nn.functional.conv1d(x, w, b, self.stride, padding, self.dilation, self.groups)
+        if self.started and isinstance(result, QTensor) and x.eps is not None:
+            result.eps = self.get_eps_out(x.eps)
+        return result
 
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
 
     @classmethod
     def from_conv1d(cls, c : nn.Conv1d, **kwargs):
+        pm = c.padding_mode
+        if 'padding_mode' in kwargs:
+            pm = kwargs['padding_mode']
+            kwargs.pop('padding_mode')
         # kwargs should be arguments to PACTConv1d
         pact_conv = cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
@@ -1545,7 +1613,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
                    dilation=c.dilation,
                    groups=c.groups,
                    bias=(c.bias is not None),
-                   padding_mode=c.padding_mode,
+                   padding_mode=pm,
                    **kwargs)
         # initialize parameters from the nn.Conv1d
         pact_conv.weight.data.copy_(c.weight.data)
@@ -1572,30 +1640,31 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             tqt_clip_grad = True,
             **kwargs
     ):
+
+        valid_padding_modes = {'zeros', 'reflect', 'replicate', 'circular'}
+        try:
+            pm = kwargs['padding_mode']
+        except KeyError:
+            pm = 'zeros'
+        if pm not in valid_padding_modes:
+            assert pm == 'eps', f'PACTCausalConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps"})}'
         if isinstance(kernel_size, tuple):
-            assert len(kernel_size) == 1, "Invalid Kernel Size in PACTCausalConv1d: {}".format(kernel_size)
+            assert len(kernel_size) == 1, "Invalid Kernel Size in CausalConv1d: {}".format(kernel_size)
             k = kernel_size[0]
         else:
             k = kernel_size
-
-        if 'dilation' in kwargs.keys():
+        try:
             dilation = kwargs['dilation']
-            if isinstance(dilation, tuple):
-                assert len(dilation) == 1, "Invalid Dilation in PACTCausalConv1d: {}".format(dilation)
-                dil = dilation[0]
-            else:
-                dil = dilation
+        except KeyError:
+            dilation = 1
+        if isinstance(dilation, tuple):
+            assert len(dilation) == 1, "Invalid Dilation in CausalConv1d: {}".format(dilation)
+            dil = dilation[0]
         else:
-            dil = 1
-
+            dil = dilation
         self.__padding = (k-1) * dil
 
-        if 'padding_mode' in kwargs:
-            self.padding_mode = kwargs['padding_mode']
-        else:
-            self.padding_mode = 'zeros'
-
-        super(PACTCausalConv1d, self).__init__(
+        super(PACTCausalConv1d, self).__init__( 
             in_channels,
             out_channels,
             kernel_size,
@@ -1608,21 +1677,38 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             tqt,
             tqt_beta,
             tqt_clip_grad,
+            padding=0,
             **kwargs)
+        self.padding_mode = pm
 
     def extra_repr(self):
         # done veryy ugly, but I was getting a recursion error all the time and couldn't figure it out
         return f"{self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
 
     def forward(self, input):
-        pad_mode = 'constant' if self.padding_mode == 'zeros' else self.padding_mode
-        x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode)
+
+        pad_mode = 'constant' if self.padding_mode in ['eps', 'zeros'] else self.padding_mode
+        pad_val = 0.0
+        if self.padding_mode == 'eps' and self.started and isinstance(input, QTensor) and input.eps is not None:
+            pad_val = input.eps.item()
+        padding = 0
+
+        x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode, value=pad_val)
         result = super(PACTCausalConv1d, self).forward(x)
+
+        if self.started and isinstance(result, QTensor) and x.eps is not None:
+            result.eps = self.get_eps_out(x.eps)
         return result
+
 
     @classmethod
     def from_causalconv1d(cls, c : CausalConv1d, **kwargs):
         # kwargs should be arguments to PACTCausalConv1d
+        pm = c.padding_mode
+        if 'padding_mode' in kwargs:
+            pm = kwargs['padding_mode']
+            kwargs.pop('padding_mode')
+
         pact_causalconv = cls(
             in_channels=c.in_channels,
             out_channels=c.out_channels,
@@ -1631,7 +1717,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             dilation=c.dilation,
             groups=c.groups,
             bias=(c.bias is not None),
-            padding_mode=c.padding_mode,
+            padding_mode=pm,
             **kwargs)
         # initialize parameters from the nn.Conv1d
         pact_causalconv.weight.data.copy_(c.weight.data)
@@ -1694,12 +1780,16 @@ class PACTLinear(nn.Linear, _PACTLinOp):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip it
         with torch.no_grad():
-            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
         return b
+
 
     # do not use in training!
     def get_bias_int(self, eps_in):
         return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
+
+    def get_eps_out(self, eps_in):
+        return self.get_eps_w().flatten()*eps_in
 
     def forward(self, x):
         b = self.bias
@@ -1711,7 +1801,12 @@ class PACTLinear(nn.Linear, _PACTLinOp):
         else:
             w = self.weight
 
-        return nn.functional.linear(x, w, b)
+        result = nn.functional.linear(x, w, b)
+
+        if self.started and isinstance(result, QTensor) and x.eps is not None:
+            result.eps = self.get_eps_out(x.eps)
+
+        return result
 
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
@@ -1737,10 +1832,9 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 # ARE STILL IN BETA STADIUM - DO NOT USE FOR IMPORTANT THINGS!
 #############################################################
 class PACTHardswish(nn.Module):
-    def __init__(self, eps_s : float, eps_in_fn : Optional[callable] = None):
+    def __init__(self, eps_s : float):
         super(PACTHardswish, self).__init__()
         self.eps_s = eps_s
-        self.eps_in_fn = eps_in_fn
 
     def forward(self, x):
         inp = x
@@ -1750,9 +1844,9 @@ class PACTHardswish(nn.Module):
         o = torch.ones(1, dtype=x.dtype, device=x.device)
         # if we have a handle on the input epsilon, quantize the constants 3
         # and 6 to eps_in
-        if self.eps_in_fn:
-            three = PACTQuantize(three, self.eps_in_fn(), 2., 4., floor=False)
-            six = PACTQuantize(six, self.eps_in_fn(), 5., 6., floor=False)
+        if isinstance(x, QTensor) and x.eps is not None:
+            three = PACTQuantize(three, x.eps, 2., 4., floor=False)
+            six = PACTQuantize(six, x.eps, 5., 6., floor=False)
         # now perform quantized hswish with the input data:
         # 1. relu6(x+3)
         x = x + three
@@ -1794,10 +1888,9 @@ class PACTIntegerHardswish(nn.Module):
 
 
 class PACTHardsigmoid(nn.Module):
-    def __init__(self, eps_s : float, eps_in_fn : Optional[callable] = None):
+    def __init__(self, eps_s : float):
         super(PACTHardsigmoid, self).__init__()
         self.eps_s = eps_s
-        self.eps_in_fn = eps_in_fn
 
     def forward(self, x):
         three = torch.tensor(3., dtype=x.dtype, device=x.device)
@@ -1806,9 +1899,9 @@ class PACTHardsigmoid(nn.Module):
         o = torch.ones(1, dtype=x.dtype, device=x.device)
         # if we have a handle on the input epsilon, quantize the constants 3
         # and 6 to eps_in
-        if self.eps_in_fn:
-            three = PACTQuantize(three, self.eps_in_fn(), 2., 4., floor=False)
-            six = PACTQuantize(six, self.eps_in_fn(), 5., 6.5, floor=False)
+        if isinstance(x, QTensor) and x.eps is not None:
+            three = PACTQuantize(three, x.eps, 2., 4., floor=False)
+            six = PACTQuantize(six, x.eps, 5., 6.5, floor=False)
         # now perform quantized hswish with the input data:
         # 1. relu6(x+3)
         x = x + three

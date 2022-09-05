@@ -19,6 +19,42 @@ class AvgPoolWrap(nn.Sequential):
     def __init__(self, *args):
         super(AvgPoolWrap, self).__init__(*args)
 
+
+
+class RemoveRedundantGlobalPoolingPass(SequentialPass):
+    GLOBAL_POOL_CLS = (nn.AdaptiveAvgPool1d,
+                       nn.AdaptiveAvgPool2d,
+                       nn.AdaptiveAvgPool3d,
+                       nn.AdaptiveMaxPool1d,
+                       nn.AdaptiveMaxPool2d,
+                       nn.AdaptiveMaxPool3d,)
+
+    # global avg/max pooling layers that don't do anything 
+    @staticmethod
+    def remove_redundant_pool(gm : fx.GraphModule, match : Match):
+        n = get_ordered_active_nodes(match)
+        m = [module_of_node(gm, node) for node in n]
+        if isinstance(m[0], RemoveRedundantGlobalPoolingPass.GLOBAL_POOL_CLS):
+            shape_in = n[0].all_input_nodes[0].meta['tensor_meta'].shape
+            shape_out = n[0].meta['tensor_meta'].shape
+            # strip batch and channel dimensions
+            shape_in = shape_in[2:]
+            shape_out = shape_out[2:]
+            if shape_in == shape_out:
+                return None
+            # if the pooling layer does something, return a copy of it
+            return deepcopy(m[0])
+
+
+    def __init__(self):
+        passes = []
+        name = "REMOVE_REDUNDANT_POOLING"
+        for p_cls in self.GLOBAL_POOL_CLS:
+            pattern = nn.Sequential(p_cls(1))
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, self.remove_redundant_pool, name))
+
+        super(RemoveRedundantGlobalPoolingPass, self).__init__(*passes)
+
 class AlignAvgPoolPass(SequentialPass):
     GLOBAL_AVGPOOL_CLS = (nn.AdaptiveAvgPool1d,
                        nn.AdaptiveAvgPool2d,
@@ -38,6 +74,8 @@ class AlignAvgPoolPass(SequentialPass):
             # strip batch and channel dimensions
             shape_in = shape_in[2:]
             shape_out = shape_out[2:]
+            if shape_in == shape_out:
+                return None
             ks_tot = 1
             for i, (in_d, out_d) in enumerate(zip(shape_in, shape_out)):
                 assert in_d % out_d == 0, "AlignAvgPoolPass: Non-integer kernel size in dimension {i} - in_dim {in_d}, out_dim {out_d}!"
@@ -136,6 +174,8 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
 
     mergeable_modules = (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d)
 
+    requanting_modules = (DORYAdder,)
+
     # this pass replaces quantized adders with DORY-compatible custom adder
     # nodes. It does this in the following way:
     # 1. look for adder nodes which have RequantShift nodes at their inputs
@@ -147,13 +187,15 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
     # 4. delete those requantization nodes which are absorbed into the adder
     @staticmethod
     def get_input_requant(gm : fx.GraphModule, n : fx.Node):
+        # if the input to an adder performs requantization by itself (currently
+        # only done by DORYAdders), nothing needs to be done
+        if isinstance(module_of_node(gm, n), DORYReplaceAddersPass.requanting_modules):
+            return (None, None)
         inp = n.all_input_nodes[0]
         assert inp.op == "call_module", "DORYReplaceAddersPass found a RequantShift node ({n}) with a very strange input node ({inp}) whose op is not 'call_module' but {inp.op}..."
         inp_module = module_of_node(gm, inp)
-        try:
-            assert len(n.users) == 1, f"DORYReplaceAddersPass found a RequantShift going into an adder with <1 ({len(inp.users)}) users at node {inp}"
-        except AssertionError:
-            import ipdb; ipdb.set_trace()
+        # if the input module is merged with the subsequent Requant module by
+        # DORY, we don't want to perform the input requantization in the adder
         if isinstance(inp_module, DORYReplaceAddersPass.mergeable_modules):
             return (None, None)
         return n, module_of_node(gm, n)
@@ -169,7 +211,7 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
             return None
 
         for a in tree.args:
-            if not (a.op == "call_module" and isinstance(module_of_node(gm, a), RequantShift)):
+            if not (a.op == "call_module" and isinstance(module_of_node(gm, a), (RequantShift, DORYAdder))):
                 return None
 
         inp_requants = [self.get_input_requant(gm, a) for a in tree.args]
@@ -220,6 +262,7 @@ class DORYHarmonizePass(SequentialPass):
         passes.append(ShapePropPass(in_shape))
         passes.append(DORYReplaceAddersPass())
         passes.append(AlignAvgPoolPass())
+        passes.append(RemoveRedundantGlobalPoolingPass())
         super(DORYHarmonizePass, self).__init__(*passes)
 
 
