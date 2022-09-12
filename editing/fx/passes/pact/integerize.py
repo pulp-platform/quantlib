@@ -79,7 +79,7 @@ def integerize_gelu_fun(gm : fx.GraphModule, match : Match, D=2**14, export_node
     eps_in = extract_eps(lin_node.meta['quant'].eps_in)
     assert isinstance(module, PACTGELU), f"integerize_gelu_fun got bad match - expected PACTGELU, got {type(lin)}"
 
-    new_gelu = PACTIntegerGELU(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D,export_node=export_node)
+    new_gelu = PACTIntegerGELU(eps_in=eps_in, D=D,export_node=export_node)
 
     return new_gelu
 
@@ -99,35 +99,45 @@ def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, 
 
     return new_layernorm
 
-def integerize_truediv_fun(gm : fx.GraphModule, match : Match, affine = True):
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    layernorm_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    module = matched_modules[0]
-    eps_in = extract_eps(layernorm_node.meta['quant'].eps_in)
-    assert isinstance(module, PACTDiv), f"integerize_layernorm_fun got bad match - expected PACTDiv, got {type(module)}"
+class IntegerizeConstWrapPass(ModularizePass):
+    @staticmethod
+    def constwrap_replacement_fn(node):
+        module = dict(node.graph._owning_module.named_modules())[node.target]
+        return (PACTIntegerConstWrap(), node.args, node.kwargs)
 
-    new_div = PACTIntegerDiv(module.Delta)
+    def __init__(self, **kwargs):
+        target = [PACTConstWrap()]
+        super().__init__(op='call_module', target=tuple(target), replacement_fn = self.constwrap_replacement_fn, name="CONSTWRAP_REPLACEMENT_PASS")
 
-    return new_div
+class IntegerizeMeanPass(ModularizePass):
 
+    @staticmethod
+    def mean_replacement_fn(node):
+        return (PACTIntegerMean(**node.kwargs), node.args, node.kwargs)
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        target = [PACTMean()]
+        super().__init__(op='call_module', target=tuple(target), replacement_fn = partial(self.mean_replacement_fn), name="MEAN_INTEGERIZE_PASS")
 
 class IntegerizeTrueDivPass(ModularizePass):
     @staticmethod
-    def truediv_replacement_fn(node):
+    def truediv_replacement_fn(node, integer_node=False):
         module = dict(node.graph._owning_module.named_modules())[node.target]
-        return (PACTIntegerDiv(module.Delta), node.args, node.kwargs)
+        if module.stable:
+            return (PACTIntegerDiv(module.Delta, eps=module.get_eps_div(), eta=module.eta, integer_node=integer_node), node.args, node.kwargs)
+        else:
+            return (PACTIntegerDiv(module.Delta, eps=0*module.get_eps_div(), eta=module.eta, integer_node=integer_node), node.args, node.kwargs)
 
-    def __init__(self, Delta=2**14, **kwargs):
+    def __init__(self, Delta=2**14, export_div_node = False, **kwargs):
         self.kwargs = kwargs
         target = [PACTDiv(Delta)]
-        super().__init__(op='call_module', target=tuple(target), replacement_fn = self.truediv_replacement_fn, name="TRUEDIV_REPLACEMENT_PASS")
+        super().__init__(op='call_module', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, integer_node=export_div_node), name="TRUEDIV_REPLACEMENT_PASS")
 
 class IntegerizeLayerNormPass(SequentialPass):
     def __init__(self, affine = True, D=2**12, export_layernorm_node = False, **kwargs):
         passes = []
-        pattern = nn.Sequential(PACTLayerNorm(256))
+        pattern = nn.Sequential(PACTLayerNorm())
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D, export_node=export_layernorm_node), f'_INTEGER_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
 
@@ -141,7 +151,7 @@ class IntegerizeSoftmaxPass(SequentialPass):
 class IntegerizeGELUPass(SequentialPass):
     def __init__(self, D=2**14, export_gelu_node=False, **kwargs):
         passes = []
-        pattern = nn.Sequential(PACTGELU(256))
+        pattern = nn.Sequential(PACTGELU())
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D,export_node=export_gelu_node), f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
@@ -223,7 +233,10 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
                         bias=(lin.bias is not None))
     new_lin.weight.data.copy_(lin.weight_int.round())
     if lin.bias is not None:
-        new_lin.bias.data.copy_(lin.get_bias_int(eps_in).round())
+        new_bias = lin.get_bias_int(eps_in).round()
+        if len(new_bias.shape) == 2:
+            new_bias = torch.diagonal(new_bias,0,dim1=-2, dim2=-1)
+        new_lin.bias.data.copy_(new_bias)
 
     new_lin.n_levels = lin.n_levels
 
@@ -341,7 +354,7 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_req
     gamma_h *= eps_in
     gamma_h /= eps_out
     beta_h /= eps_out
-    if act.rounding:
+    if act.rounding and not cmsis_requant:
         beta_h += 0.5
 
     gamma_h *= D
@@ -757,7 +770,7 @@ class IntegerizePACTNetPass(SequentialPass):
                  fix_channel_numbers=False, convert_input_to_unsigned : bool = False,
                  D1 : float = 2**18, D2 : float = 2**12, ternarize : bool = False,
                  export_layernorm_node = False, export_softmax_node = False,
-                 export_gelu_node = False):
+                 export_gelu_node = False, export_div_node = False):
 
         passes = []
         # start by retracing the network to dissolve any integer ops
@@ -803,5 +816,7 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeGELUPass(D=D, export_gelu_node=export_gelu_node))
         passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))
         passes.append(IntegerizeEmbeddingsPass(cmsis_requant=enable_add_first, requant_node=requant_node))
-        passes.append(IntegerizeTrueDivPass())
+        passes.append(IntegerizeTrueDivPass(export_div_node=export_div_node))
+        passes.append(IntegerizeMeanPass())
+        passes.append(IntegerizeConstWrapPass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")

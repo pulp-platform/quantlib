@@ -155,8 +155,6 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     # now we pass a test input through the model and log the intermediate
     # activations
 
-
-
     # make a forward hook to dump outputs of RequantShift layers
     acts = []
     def dump_hook(self, inp, outp, name):
@@ -173,16 +171,17 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
         im_tensor = in_data.clone().to(dtype=torch.float64)
         net_integerized = net_integerized.to(dtype=torch.float64)
         output = net_integerized(im_tensor).to(dtype=torch.float64)
-
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
             t = t.squeeze(0)
+
             if t.dim()==3:
                 # expect a (C, H, W) tensor - DORY expects (H, W, C)
                 t = t.permute(1,2,0)
-            elif t.dim()==2:
-                # expect a (C, D) tensor - DORY expects (D, C)
-                t = t.permute(1,0)
+            #SCHEREMO: HACK HACK HACK HACK HACK HACK
+#             elif t.dim()==2:
+#                 # expect a (C, D) tensor - DORY expects (D, C)
+#                 t = t.permute(1,0)
             else:
                 print(f"Not permuting output of layer {layer_name}...")
 

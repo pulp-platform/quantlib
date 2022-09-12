@@ -29,7 +29,7 @@ from quantlib.editing.lightweight import LightweightGraph
 from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, SubTypeFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d
+from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d, PACTGELU
 from .util import assert_param_valid, almost_symm_quant
 
 import copy
@@ -98,6 +98,7 @@ class PACTEpsController(Controller):
         fx_model = torch.fx.GraphModule(self.tracer.root, fx_graph, self.tracer.root.__class__.__name__)
         fx_model = self.eps_pass.apply(fx_model)
         nm = dict(fx_model.named_modules())
+
         for node in fx_graph.nodes:
             if node.op == 'call_module' and nm[node.target] in self.modules:
                 arg_eps_ins = node.meta['quant'].eps_in[0]
@@ -185,7 +186,7 @@ class PACTActController(Controller):
                     self.verbose = False
 
                 elif cmd == 'ready':
-                    for m in tqdm(self.modules):
+                    for m in self.modules:
                         m.ready |= True
                         m.updateClipBounds()
                         m.histogram *= 0
@@ -194,7 +195,7 @@ class PACTActController(Controller):
                     self.log("Started activation quantization!")
 
                 elif cmd == 'start':
-                    for m in tqdm(self.modules):
+                    for m in self.modules:
                         self.reset_clip_bounds(m, m.init_clip)
                         m.started |= True
                     self.log("Started activation quantization!")

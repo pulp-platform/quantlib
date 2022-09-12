@@ -43,7 +43,8 @@ __all__ = ['AnnotateEpsPass',
            'extract_eps']
 
 def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor):
-    return m.get_eps_out(eps_in)
+    ret = m.get_eps_out(eps_in)
+    return ret
 
 def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor):
     return m.get_eps()

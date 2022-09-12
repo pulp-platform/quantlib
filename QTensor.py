@@ -29,14 +29,15 @@ from torch.overrides import (
     handle_torch_function, get_default_nowrap_functions)
 
 class QTensor(torch.Tensor):
+
+    hookedMethods = {}
+
     @staticmethod
     def __new__(cls, x, eps=None, *args, **kwargs):
-
         if isinstance(x, torch.Tensor):
             inst = x.__deepcopy__(memo={}).as_subclass(cls)
         else:
             inst = super().__new__(cls, x, *args, **kwargs)
-
         return inst
 
     def __init__(self, x, eps=None, *args, **kwargs):
@@ -55,22 +56,28 @@ class QTensor(torch.Tensor):
             return None
 
     @classmethod
-    def getOverriddenMethods(cls):
-        parent_attrs = set()
-        for base in cls.__bases__:
-            parent_attrs.update(dir(base))
-
-        # find all methods implemented in the class itself
-        methods = {name for name, thing in vars(cls).items() if callable(thing)}
-
-        # return the intersection of both
-        return parent_attrs.intersection(methods)
+    def hookMethod(cls, methodName, function):
+        if methodName in cls.getOverriddenMethods():
+            raise KeyError(f"Trying to override method {methodName} of QTensor!")
+        cls.hookedMethods[methodName] = function
 
     @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
-        #import IPython; IPython.embed()
+    def getOverriddenMethods(cls):
+        # find all methods implemented in the class itself
+        methods = [name for name, thing in vars(cls).items() if callable(thing)]
+        hookedMethodList = list(cls.hookedMethods.keys())
+        return methods+hookedMethodList
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs={}):
+        print(f"{func.__name__}")
+
         if func.__name__ in cls.getOverriddenMethods():
-            return getattr(cls, func.__name__)(args, kwargs)
+            print(f"Dispatching {func.__name__}")
+            if func.__name__ not in cls.hookedMethods.keys():
+                return getattr(cls, func.__name__)(*args, **kwargs)
+            else:
+                return cls.hookedMethods[func.__name__](*args, **kwargs)
         else:
             ret = super().__torch_function__(func,types,args,kwargs)
             c = _convert(ret, cls)
@@ -96,7 +103,7 @@ class QTensor(torch.Tensor):
             new_obj.__init__(tempTensor, None)
         return(new_obj)
 
-def _convert(ret, cls):
+def _convert(ret, cls, eps=None):
     if isinstance(ret, torch.Tensor) and not isinstance(ret, cls):
         ret = ret.as_subclass(cls)
     if isinstance(ret, (tuple, list)):
