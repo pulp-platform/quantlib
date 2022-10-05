@@ -235,20 +235,19 @@ class PACTActController(Controller):
             method = m.init_clip
         if method == 'max':
             max_val = m.max.data
-            try:
-                if m.symm:
-                    max_val = torch.maximum(max_val, -m.min)
-                    min_val, max_val = almost_symm_quant(max_val, m.n_levels)
-                else:
-                    min_val = m.min.data
-            except AttributeError:
-                # we don't need 'min_val' if m does not have the 'symm' attribute because in that case
-                # it's not an asymmetric activation
-                pass
+            if isinstance(m, PACTAsymmetricAct) and m.symm:
+                max_val = torch.maximum(max_val, -m.min)
+                min_val, max_val = almost_symm_quant(max_val, m.n_levels)
+            else:
+                min_val = m.min.data
         elif method == 'const':
             for p in m.clipping_params.values():
                 max_val = torch.ones_like(p.data) * self.init_clip_hi
                 min_val = torch.ones_like(p.data) * self.init_clip_lo
+                if isinstance(m, PACTAsymmetricAct) and  m.symm:
+                    max_abs = torch.maximum(max_val, -min_val)
+                    min_val, max_val = almost_symm_quant(max_abs, m.n_levels)
+
                 break
 
         elif method == 'percentile':
@@ -328,13 +327,11 @@ class PACTActController(Controller):
 
         else: # method == 'std'
             max_val = m.running_mean.data + m.nb_std * torch.sqrt(m.running_var.data)
-            try:
-                if m.symm:
-                    min_val, max_val = almost_symm_quant(max_val, m.n_levels)
-                else:
-                    min_val = m.running_mean.data - m.nb_std * torch.sqrt(m.running_var.data)
-            except AttributeError:
-                pass
+            if isinstance(m, PACTAsymmetricAct) and m.symm:
+                min_val, max_val = almost_symm_quant(max_val, m.n_levels)
+            else:
+                min_val = m.running_mean.data - m.nb_std * torch.sqrt(m.running_var.data)
+
 
         for k, b in m.clipping_params.items():
             if k == 'high':
