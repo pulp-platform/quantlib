@@ -30,6 +30,7 @@ import torch
 from torch import fx, nn
 
 from quantlib.algorithms.pact.pact_ops import *
+from quantlib.algorithms.bb.bb_ops import *
 from quantlib.algorithms.generic.generic_ops import *
 
 from .pass_base import FxPass, ReplaceSequentialPatternPass
@@ -41,6 +42,10 @@ __all__ = ['AnnotateEpsPass',
            'extract_eps']
 
 def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor):
+    try:
+        e = m.get_eps_out(eps_in)
+    except RuntimeError:
+        import ipdb; ipdb.set_trace()
     return m.get_eps_out(eps_in)
 
 def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor):
@@ -154,24 +159,74 @@ _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(torch.matmul)}' : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(torch.bmm)}' : n_levels_out_pact_linears,}
 
+always_signed = lambda m, si: True
+always_unsigned = lambda m, si: False
+
+def signed_out_pact_wrap(m : nn.Module, si : list):
+    return _SIGNED_OUT_PROP[type(m.Module)](m.module, si)
+def signed_out_or_in_signed(m : nn.Module, si : list):
+    out_signed = False
+    for s in si:
+        out_signed = out_signed or s
+    return out_signed
+
+def has_signed_attr(m : nn.Module, si : list):
+    return m.signed
+
+_SIGNED_OUT_PROP = {PACTLinear : always_signed,
+                      PACTConv1d : always_signed,
+                      PACTConv2d : always_signed,
+                      PACTAsymmetricAct : always_signed,
+                      PACTUnsignedAct : always_unsigned,
+                      PACTWrapModule : signed_out_pact_wrap,
+                      PACTGELU : always_signed,
+                      PACTIntegerGELU : always_signed,
+                      PACTIntegerMatmul : signed_out_or_in_signed,
+                      PACTSoftmax : always_unsigned,
+                      PACTIntegerSoftmax : always_unsigned,
+                    BBConv2d : always_signed,
+                    BBAct : has_signed_attr,
+                    nn.Conv1d : always_signed,
+                    nn.Conv2d : always_signed,
+                    nn.Linear : always_signed,
+                    nn.BatchNorm1d : always_signed,
+                    nn.BatchNorm2d : always_signed,
+                    nn.MaxPool1d : signed_out_or_in_signed,
+                    nn.MaxPool2d : signed_out_or_in_signed,
+                    nn.AdaptiveMaxPool1d : signed_out_or_in_signed,
+                    nn.AdaptiveMaxPool2d : signed_out_or_in_signed,
+                    nn.AvgPool1d : signed_out_or_in_signed,
+                    nn.AvgPool2d : signed_out_or_in_signed,
+                    nn.AdaptiveAvgPool1d : signed_out_or_in_signed,
+                    nn.AdaptiveAvgPool2d : signed_out_or_in_signed,
+                      f'_CALL_FUNCTION_{repr(torch.matmul)}' : always_signed,
+                      f'_CALL_FUNCTION_{repr(torch.bmm)}' : signed_out_or_in_signed,
+                      f'_CALL_FUNCTION_{repr(operator.add)}' : signed_out_or_in_signed,
+                    }
 @dataclass
 class QuantInfo:
     eps_in : torch.Tensor
     eps_out : torch.Tensor
-    n_levels_in : int
+    n_levels_in : list
     n_levels_out : int
+    signed_in : list
+    signed_out : bool
 
 class AnnotateEpsPass(FxPass):
-    def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32):
+    def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32, signed_in : bool = True, prop_eps : bool = True, prop_n_levels : bool = True, prop_sign : bool = True):
         super(AnnotateEpsPass, self).__init__()
-        if not isinstance(eps_in, torch.Tensor) and eps_in is not None:
-            self.eps_in = torch.tensor(eps_in).reshape(-1)
-            self.noeps = False
-        elif eps_in is None:
-            self.eps_in = torch.tensor(1.0).reshape(1)
-            self.noeps = True
+        if prop_eps:
+            if not isinstance(eps_in, torch.Tensor) and eps_in is not None:
+                self.eps_in = torch.tensor(eps_in).reshape(-1)
+                self.noeps = False
+            elif eps_in is None:
+                self.eps_in = torch.tensor(1.0).reshape(1)
+                self.noeps = True
+            else:
+                self.eps_in = eps_in.reshape(-1)
+                self.noeps = False
         else:
-            self.eps_in = eps_in.reshape(-1)
+            self.eps_in = None
             self.noeps = False
 
         if n_levels_in is None:
@@ -179,54 +234,91 @@ class AnnotateEpsPass(FxPass):
             self.noeps = True
         self.n_levels_in = n_levels_in
 
+        self.signed_in = signed_in
         self.accumulator_levels = accumulator_levels
+        # sometimes we use the AnnotateEpsPass before proper eps propagation is
+        # possible (i.e. on unharmonized nets); then eps propagation would fail.
+        # In these cases we can disable it.
+        self.prop_eps = prop_eps
+        self.prop_n_levels = prop_n_levels
+        self.prop_sign = prop_sign
 
 
     def run_pass(self, gm : fx.GraphModule):
         modules = gm_modules(gm)
         for node in gm.graph.nodes:
             if node.op == 'placeholder':
-                node.meta['quant'] = QuantInfo(eps_in=self.eps_in, eps_out=self.eps_in, n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in)
+                node.meta['quant'] = QuantInfo(eps_in=self.eps_in, eps_out=self.eps_in, n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in, signed_in=[self.signed_in], signed_out=self.signed_in)
+                # an equivalent for noeps for signedness is not yet supported...
                 for u in node.users:
                     if self.noeps:
                         assert u.op == 'call_module' and isinstance(module_of_node(gm, u), _ORIGINAL_EPS_MODULES), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
                     #u.meta['quant'] = QuantInfo(eps_in=torch.tensor(1.0), eps_out=torch.tensor(-1.0))
             else:
-                arg_eps_ins = [i.meta['quant'].eps_out for i in node.args if isinstance(i, fx.Node)]
-                other_args = [i for i in node.args if not isinstance(i, fx.Node)]
-
-                kwarg_eps_ins = {k : v.meta['quant'].eps_out for k, v in node.kwargs.items() if isinstance(v, fx.Node)}
-                other_kwargs = {k : v for k, v in node.kwargs.items() if not isinstance(v, fx.Node)}
-                conversion_kwargs = copy.copy(other_kwargs)
-                conversion_kwargs.update(other_kwargs)
-                all_eps = arg_eps_ins + [v for v in kwarg_eps_ins.values()]
-                eps_in = [arg_eps_ins, kwarg_eps_ins]
                 if node.op == 'call_module':
                     m = module_of_node(gm, node)
                     k = type(m)
-                    conversion_args = [m] + arg_eps_ins + other_args
                 else:
                     assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
-                    conversion_args = arg_eps_ins
                     k = f'_{node.op.upper()}_{node.target}'
-                try:
-                    eps_out = _EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
-                except KeyError:
-                    print(f"key {k} not found in _EPS_CONVERSIONS!")
-                    eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
-                    assert all(d < 1e-8 for d in eps_diffs), "Mismatching input epsilons in node with no eps propagation function!"
-                    print(f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
-                    eps_out = all_eps[0]
+                    m = None
 
-                node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
-                try:
-                    node_out_levels = _N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
-                except KeyError:
-                    print(f"key {k} not found in _N_LEVELS_OUT_PROP!")
-                    assert node_in_levels[1:] == node_in_levels[:-1], "Mismatching input n_levels in node with no n_levels_out propagation function! "
-                    node_out_levels = node_in_levels[0]
+                if self.prop_eps:
+                    arg_eps_ins = [i.meta['quant'].eps_out for i in node.args if isinstance(i, fx.Node)]
+                    other_args = [i for i in node.args if not isinstance(i, fx.Node)]
 
-                node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels)
+                    kwarg_eps_ins = {k : v.meta['quant'].eps_out for k, v in node.kwargs.items() if isinstance(v, fx.Node)}
+                    other_kwargs = {k : v for k, v in node.kwargs.items() if not isinstance(v, fx.Node)}
+                    conversion_kwargs = copy.copy(other_kwargs)
+                    conversion_kwargs.update(other_kwargs)
+                    all_eps = arg_eps_ins + [v for v in kwarg_eps_ins.values()]
+                    eps_in = [arg_eps_ins, kwarg_eps_ins]
+                    if node.op == 'call_module':
+                        conversion_args = [m] + arg_eps_ins + other_args
+                    else:
+                        assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
+                        conversion_args = arg_eps_ins
+
+                    try:
+                        eps_out = _EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
+                    except KeyError:
+                        print(f"key {k} not found in _EPS_CONVERSIONS!")
+                        eps_diffs = [np.abs(e1 - e2).sum() for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
+                        if not all(d < 1e-8 for d in eps_diffs):
+                            print("Mismatching input epsilons in node with no eps propagation function! Eps propagation will likely be wrong!")
+                        print(f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
+                        eps_out = all_eps[0]
+                else:
+                    eps_in = None
+                    eps_out = None
+
+                if self.prop_n_levels:
+                    node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
+                    try:
+                        node_out_levels = _N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
+                    except KeyError:
+                        print(f"key {k} not found in _N_LEVELS_OUT_PROP!")
+                        if node_in_levels[1:] != node_in_levels[:-1]:
+                            print("Mismatching input n_levels in node with no n_levels_out propagation function! n_levels propagation will likely be wrong!")
+                        node_out_levels = node_in_levels[0]
+                else:
+                    node_in_levels = None
+                    node_out_levels = None
+
+                if self.prop_sign:
+
+                    node_in_signed = [i.meta['quant'].signed_out for i in node.args if isinstance(i, fx.Node)]
+                    try:
+                        node_out_signed = _SIGNED_OUT_PROP[k](m, node_in_signed)
+                    except KeyError:
+                        print(f"key {k} not found in _SIGNED_OUT_PROP!")
+                        if node_in_signed[1:] != node_in_signed[:-1]:
+                            print("Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!")
+                        node_out_signed = node_in_signed[0]
+                else:
+                    node_in_signed = None
+                    node_out_signed = None
+                node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels, signed_in=node_in_signed, signed_out=node_out_signed)
 
         return gm
 
