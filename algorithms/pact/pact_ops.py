@@ -21,6 +21,7 @@
 # limitations under the License.
 #
 
+import warnings
 from typing import Union, Optional, Literal
 import torch
 from torch import nn
@@ -1137,22 +1138,54 @@ class PACTIntegerAdd(torch.nn.Module):
             self,
             num_args = 1,
             force_out_eps=False,
-            signed : bool = True,
+            signed : Union[bool, list] = True,
+            n_levels : Union[int, list] = 256,
             **kwargs
     ):
-
         super().__init__()
-        act_cls = PACTAsymmetricAct if signed else PACTUnsignedAct
+        # signed can be different for all the activations -> num_args+1
+        # elements in the list
+        if isinstance(signed, bool):
+            signed = [signed] * (num_args + 1)
+        assert len(signed) == num_args + 1, f"PACTIntegerAdd expected 2 elements in 'signed', got {len(signed)}"
+        # n_levels can be different for input and output, but has to be the
+        # same for all inputs. if a list is passed, the first element is used
+        # for the inputs' n_levels and the last for the output
+        if isinstance(n_levels, torch.Tensor):
+            if len(n_levels) == 1:
+                n_levels = n_levels.to(dtype=int).item()
+            else:
+                n_levels = n_levels.to(dtype=int).tolist
+        if isinstance(n_levels, int):
+            n_levels = [n_levels] * 2
+        assert len(n_levels) == 2, f"PACTIntegerAdd expected 2 elements in 'n_levels', got {len(n_levels)}"
+
         self.acts = torch.nn.ModuleList([])
         for i in range(num_args):
-            self.acts.append(act_cls(**kwargs))
+            act_cls = PACTAsymmetricAct if signed[i] else PACTUnsignedAct
+            self.acts.append(act_cls(n_levels=n_levels[0], **kwargs))
 
-        self.act_out = act_cls(**kwargs)
+        if n_levels[1] > 0:
+            act_cls_out = PACTAsymmetricAct if signed[-1] else PACTUnsignedAct
+            self.act_out = act_cls_out(n_levels=n_levels[1], **kwargs)
+        else:
+            self.act_out = None
+
+        assert not (force_out_eps and not self.act_out), "Can't use force_eps_out with no output activation!"
 
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
+        # DEPRECATED MEMBER; IF YOU USE THIS PLEASE STOP
         self.n_levels = self.acts[0].n_levels
+        self.n_levels_in = n_levels[0]
+        self.n_levels_out = n_levels[1] if n_levels[1] > 0 else None
         self.force_out_eps = force_out_eps
+
+
+    def __getattribute__(self, name):
+        if name == "n_levels":
+            warnings.warn("PACTIntegerAdd.n_levels was accessed - this member is deprecated; please use n_levels_in and n_levels_out!")
+        return super(PACTIntegerAdd, self).__getattribute__(name)
 
     def reassign_epsilons(self):
         if not self.force_out_eps:
@@ -1165,40 +1198,33 @@ class PACTIntegerAdd(torch.nn.Module):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
-                    eps = diff/(self.n_levels-1)
+                    eps = diff/(self.n_levels_in-1)
 
-            # SCHEREMO: This is the part that I might have to think about a bit more...
-            for i in self.acts:
-                # Closer to unsigned than to signed -- Is this reasonable?
-                #if abs(i.clip_lo) < abs(i.clip_hi)/2:
-                # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
-                if abs(i.clip_lo) < i.get_eps():
-                    i.symm = False
-                    i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
-                    i.clip_lo.data.copy_(torch.Tensor((0.,)))
-                    # Closer to signed than unsigned
-                else:
-                    i.symm = True
-                    i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
-                    i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
-#                     i.clip_lo.data.copy_(lower_bound)
-#                     i.clip_hi.data.copy_(upper_bound)
         else:
             clip_hi = self.act_out.clip_hi.data.detach().clone()
             clip_lo = self.act_out.clip_lo.data.detach().clone()
-            for i in self.acts:
-                i.clip_hi.data.copy_(clip_hi)
-                i.clip_lo.data.copy_(clip_lo)
+            eps = (clip_hi - clip_lo) / (self.act_out.n_levels-1)
+        for i in self.acts:
+            if isinstance(i, PACTUnsignedAct):
+                i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels_in-1),)))
+            else:
+                i.symm = True
+                i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels_in/2)*eps,)))
+                i.clip_hi.data.copy_(torch.Tensor(((self.n_levels_in/2 - 1)*eps,)))
 
     def forward(self, *x: torch.Tensor):
         total = self.acts[0](x[0])
         for idx, i in enumerate(x[1:]):
             total = total + self.acts[idx+1](i)
 
-        result = self.act_out(total)
-        if isinstance(result, QTensor):
-            result.eps = self.act_out.get_eps()
-        return result
+        if self.act_out is not None:
+            total = self.act_out(total)
+        if isinstance(total, QTensor):
+            if self.act_out is not None:
+                total.eps = self.act_out.get_eps()
+            else:
+                total.eps = self.acts[0].get_eps()
+        return total
 
 
 class PACTIntegerMatmul(torch.nn.Module):
