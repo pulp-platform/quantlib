@@ -56,6 +56,16 @@ class LayerIdentifier:
         is_lin = df['kernel_size'].item() == 1 and df['input_size'].item() == 1 and df['output_size'].item() == 1
         return cls(is_lin, *[df[k].item() for k in ['kernel_size', 'input_size', 'output_size', 'DW', 'groups', 'padding', 'stride', 'chin', 'chout']])
 
+    @property
+    def macs(self):
+        macs = self.k**2 * self.out_size**2 * self.ch_in * self.ch_out
+        if self.dw:
+            macs = macs//self.groups
+        return macs
+
+    def norm_macs(self, precs):
+        return self.macs * max(precs)//2
+
 
 def ident_of_conv2d(m : nn.Module, in_size : torch.Size, out_size : torch.Size):
     dw = m.in_channels == m.groups and m.in_channels == m.out_channels
@@ -100,6 +110,21 @@ def extract_unique_layers(network : fx.GraphModule, *shapes_in, dtype_in : torch
             print(f"Layer {name} has identifier {l_ident}")
 
     return unique_layers
+
+def build_ident_dict(network : fx.GraphModule, *shapes_in, dtype_in : torch.dtype = torch.float32, tracer : callable = None):
+    from quantlib.editing.fx.passes import ShapePropPass
+
+    if tracer is not None:
+        network = tracer(network)
+    spp = ShapePropPass(*shapes_in, dtype_in=dtype_in)
+    gm = spp(network)
+    ident_dict = {}
+    for name, n, m in named_module_nodes(gm):
+        l_ident = ident_of_layer(n, m)
+        if l_ident is not None:
+            ident_dict[name] = l_ident
+
+    return ident_dict
 
 def export_bench_spec(layers : set, export_folder : str, out_fn : str, in_bits : list, wt_bits : list):
     out_df = pd.DataFrame(columns=['groups', 'DW', 'kernel_size', 'chin', 'chout', 'input_size', 'output_size', 'IN_BITS', 'OUT_BITS', 'W_BITS'])

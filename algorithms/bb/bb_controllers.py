@@ -172,13 +172,14 @@ class BBBOPComplexityRegularizer(BBRegularizer):
         self.act_layer = act_layer
 
     def loss_term(self):
-        # this loss term calculates the joint probability distribution of
-        # activation and linop precision gates to find the expected number of
-        # BOPs. this is DIFFERENT from the paper which treats them separately.
-        # for example, if a convolutional layer has only 2 bits with high
-        # probability, having 8-bit input activations has less impact on the
-        # total BOP count than if it has 8. by summing over the joint
-        # distribution of the precision gates, we can account for this.
+        # this loss term can optionally calculate the joint probability
+        # distribution of activation and linop precision gates to find the
+        # expected number of BOPs. this is DIFFERENT from the paper which
+        # treats them separately. for example, if a convolutional layer has
+        # only 2 bits with high probability, having 8-bit input activations has
+        # less impact on the total BOP count than if it has 8. by summing over
+        # the joint distribution of the precision gates, we can account for
+        # this.
 
         # helper to get tensors on the right device
         def move(t : torch.Tensor):
