@@ -158,11 +158,15 @@ class DORYAdder(nn.Module):
             return ret
 
 
-    def __init__(self, in1_requant : Optional[nn.Module], in2_requant : Optional[nn.Module], out_requant : Optional[nn.Module]):
+    def __init__(self, in1_requant : Optional[nn.Module], in2_requant : Optional[nn.Module], out_requant : Optional[nn.Module], in1_n_levels : int = 256, in2_n_levels : int = 256, out_n_levels : int = 256):
         super(DORYAdder, self).__init__()
         self.in1_requant = in1_requant
         self.in2_requant = in2_requant
         self.out_requant = out_requant
+        self.in1_n_levels = in1_n_levels
+        self.in2_n_levels = in2_n_levels
+        self.out_n_levels = out_n_levels
+
 
     def forward(self, x1, x2):
         return self.DORYAdderFun.apply(x1, self.in1_requant, x2, self.in2_requant, self.out_requant)
@@ -189,15 +193,18 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
     def get_input_requant(gm : fx.GraphModule, n : fx.Node):
         # if the input to an adder performs requantization by itself (currently
         # only done by DORYAdders), nothing needs to be done
+        rq_module = module_of_node(gm, n)
         if isinstance(module_of_node(gm, n), DORYReplaceAddersPass.requanting_modules):
-            return (None, None)
+            return (rq_module.out_n_levels, None)
         inp = n.all_input_nodes[0]
         assert inp.op == "call_module", "DORYReplaceAddersPass found a RequantShift node ({n}) with a very strange input node ({inp}) whose op is not 'call_module' but {inp.op}..."
         inp_module = module_of_node(gm, inp)
+        rq_module = module_of_node(gm, n)
         # if the input module is merged with the subsequent Requant module by
-        # DORY, we don't want to perform the input requantization in the adder
+        # DORY, we don't want to perform the input requantization in the adder.
+        # But we want to annotate the adder with the correct `n_levels`.
         if isinstance(inp_module, DORYReplaceAddersPass.mergeable_modules):
-            return (None, None)
+            return (int(rq_module.n_levels_out), None)
         return n, module_of_node(gm, n)
 
 
@@ -215,13 +222,17 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
                 return None
 
         inp_requants = [self.get_input_requant(gm, a) for a in tree.args]
-        self.in_requant_nodes += [ir[0] for ir in inp_requants if ir[0] is not None]
+        in_n_levels = [in_rq[0] if in_rq[1] is None else in_rq[1].n_levels_out for in_rq in inp_requants]
+        self.in_requant_nodes += [ir[0] for ir in inp_requants if ir[1] is not None]
         out_requant_module = None
         if len(tree.users) == 1 and tree.users[0].op == "call_module" and isinstance(module_of_node(gm, tree.users[0]), RequantShift):
             self.out_requant_nodes.append(tree.users[0])
             out_requant_module = module_of_node(gm, tree.users[0])
+            out_n_levels = out_requant_module.n_levels_out
+        else:
+            out_n_levels = max(in_n_levels)
 
-        return DORYAdder(in1_requant=deepcopy(inp_requants[0][1]), in2_requant=deepcopy(inp_requants[1][1]), out_requant=out_requant_module)
+        return DORYAdder(in1_requant=deepcopy(inp_requants[0][1]), in2_requant=deepcopy(inp_requants[1][1]), out_requant=out_requant_module, in1_n_levels=in_n_levels[0], in2_n_levels=in_n_levels[1], out_n_levels=out_n_levels)
 
 
     def __init__(self):
@@ -259,8 +270,8 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
 class DORYHarmonizePass(SequentialPass):
     def __init__(self, in_shape):
         passes = []
-        passes.append(ShapePropPass(in_shape))
         passes.append(DORYReplaceAddersPass())
+        passes.append(ShapePropPass(in_shape))
         passes.append(AlignAvgPoolPass())
         passes.append(RemoveRedundantGlobalPoolingPass())
         super(DORYHarmonizePass, self).__init__(*passes)
