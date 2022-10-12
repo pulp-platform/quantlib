@@ -29,40 +29,19 @@ from torch.overrides import (
     has_torch_function, has_torch_function_unary, has_torch_function_variadic,
     handle_torch_function)
 
-_QTENSOR_OVERRIDES = {}
-
-def qt_implements(torch_func : callable):
-    def inner(f):
-        _QTENSOR_OVERRIDES[torch_func] = f
-        return f
-    return inner
-
-
-@qt_implements(torch.stack)
-def qt_stack(tensors, dim=0, out=None):
-    with torch._C.DisableTorchFunction():
-        stacked = torch.stack(tensors, dim=dim, out=out)
-
-    if all(isinstance(t, QTensor) and t.eps is not None for t in tensors):
-        epses = [t.eps for t in tensors]
-        eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(epses[:-1], epses[1:])]
-        if not all(ed < 1e-8 for ed in eps_diffs):
-            print("Warning: stacking QTensors  with different eps values!! Eps is discarded for resulting QTensor")
-        else:
-            stacked.eps = epses[0]
-    return stacked
 
 
 
 class QTensor(torch.Tensor):
+
+    hookedMethods = {}
+
     @staticmethod
     def __new__(cls, x, eps=None, *args, **kwargs):
-
         if isinstance(x, torch.Tensor):
             inst = x.__deepcopy__(memo={}).as_subclass(cls)
         else:
             inst = super().__new__(cls, x, *args, **kwargs)
-
         return inst
 
     def __init__(self, x, eps=None, *args, **kwargs):
@@ -82,28 +61,34 @@ class QTensor(torch.Tensor):
 
     @eps.setter
     def eps(self, value):
-        self._eps = value
+        if isinstance(value, torch.Tensor):
+            self._eps = value.clone().detach()
+        else:
+            self._eps = torch.as_tensor(value)
+
+    @classmethod
+    def hookMethod(cls, methodName, function):
+        if methodName in cls.getOverriddenMethods():
+            raise KeyError(f"Trying to override method {methodName} of QTensor!")
+        cls.hookedMethods[methodName] = function
 
     @classmethod
     def getOverriddenMethods(cls):
-        parent_attrs = set()
-        for base in cls.__bases__:
-            parent_attrs.update(dir(base))
-
         # find all methods implemented in the class itself
-        methods = {name for name, thing in vars(cls).items() if callable(thing)}
-
-        # return the intersection of both
-        return parent_attrs.intersection(methods)
+        methods = [name for name, thing in vars(cls).items() if callable(thing)]
+        hookedMethodList = list(cls.hookedMethods.keys())
+        return methods+hookedMethodList
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         if kwargs is None:
             kwargs = {}
         if func.__name__ in cls.getOverriddenMethods():
-            return getattr(cls, func.__name__)(*args, **kwargs)
-        elif func in _QTENSOR_OVERRIDES:
-            return _QTENSOR_OVERRIDES[func](*args, **kwargs)
+            print(f"Dispatching {func.__name__}")
+            if func.__name__ not in cls.hookedMethods.keys():
+                return getattr(cls, func.__name__)(*args, **kwargs)
+            else:
+                return cls.hookedMethods[func.__name__](*args, **kwargs)
         else:
             ret = super().__torch_function__(func,types,args,kwargs)
             c = _convert(ret, cls)
@@ -140,14 +125,40 @@ class QTensor(torch.Tensor):
                 qt.eps = self.eps
         return q_spl
 
+def _convert(ret, cls, eps=None):
 
-
-
-def _convert(ret, cls):
     if isinstance(ret, torch.Tensor) and not isinstance(ret, cls):
+        #GEORGR: is this right?
         ret = ret.as_subclass(cls)
+        if eps is not None:
+            ret.eps = eps
     if isinstance(ret, (tuple, list)):
         # Also handles things like namedtuples
         ret = type(ret)(_convert(r, cls) for r in ret)
+        #GEORGR: is this right?
+        if eps is not None:
+            for r in ret:
+                r.eps = eps
 
     return ret
+
+def qt_implements(torch_func : callable):
+    def inner(f):
+        QTensor.hookedMethods[torch_func.__name__] = f
+        return f
+    return inner
+
+
+@qt_implements(torch.stack)
+def qt_stack(tensors, dim=0, out=None):
+    with torch._C.DisableTorchFunction():
+        stacked = torch.stack(tensors, dim=dim, out=out)
+
+    if all(isinstance(t, QTensor) and t.eps is not None for t in tensors):
+        epses = [t.eps for t in tensors]
+        eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(epses[:-1], epses[1:])]
+        if not all(ed < 1e-8 for ed in eps_diffs):
+            print("Warning: stacking QTensors  with different eps values!! Eps is discarded for resulting QTensor")
+        else:
+            stacked.eps = epses[0]
+    return stacked

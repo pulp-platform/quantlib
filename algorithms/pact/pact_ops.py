@@ -45,6 +45,8 @@ __all__ = [
     'PACTAsymmetricAct',
     'PACTConv2d',
     'PACTConv1d',
+    'PACTConstWrap',
+    'PACTIntegerConstWrap',
     'PACTCausalConv1d',
     'PACTLinear',
     'PACTQuantize',
@@ -62,12 +64,20 @@ __all__ = [
     'PACTEmbedding',
     'PACTWrapModule',
     'PACTWrapMHSA',
+    'PACTWrapLinearAttention',
+    'PACTWrapCLCA',
     'RequantShift',
     'HardActRequantShift',
     'PACTHardswish',
     'PACTHardsigmoid',
     'PACTIntegerHardswish',
     'PACTIntegerHardsigmoid',
+    'PACTMean',
+    'PACTIntegerMean',
+    'PACTDiv',
+    'PACTIntegerDiv',
+    'PACTExp',
+    'PACTIntegerExp',
     'ChannelwiseThreshold'
 ]
 
@@ -249,8 +259,9 @@ class RequantShift(nn.Module):
             # division. The rounding in (y / div).round() is folded into the
             # addition.
             if cmsis_requant:
-                y = (x + torch.round(add/mul)) * mul
-                y = torch.round(y / div)
+                y = (x + torch.floor((add/mul) + 0.5)) * mul
+                # Avoid round to even behaviour, friggin pytorch
+                y = torch.floor((y / div) + 0.5)
             # PULP-NN performs multiplication first, then addition and
             # division. Division is with flooring.
             else:
@@ -296,6 +307,8 @@ class RequantShift(nn.Module):
         self.requant_node = requant_node
 
     def forward(self, x):
+        if torch.equal(self.mul.type_as(x), self.div.type_as(x)) and torch.equal(self.add.type_as(x), torch.Tensor((0.,)).type_as(x)):
+            return x
         if self.requant_node:
             return self.MyRequantShift.apply(x, self.mul.type_as(x), self.add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out.type_as(x), self.cmsis_requant)
         else:
@@ -449,18 +462,19 @@ class PACTIntegerEmbedding(torch.nn.Module):
 
         return out
 
-class PACTSoftmax(torch.nn.Module):
+
+class PACTExp(torch.nn.Module):
 
     def __init__(self, n_levels: int = 256, dim: int = 1):
         super().__init__()
         self.n_levels = n_levels
         self.dim = dim
-        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
-        self.register_buffer('coeffB', torch.Tensor((1.353,)))
-        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
-        self.register_buffer('log2',  torch.Tensor((1.,)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
+        self.coeffA = torch.Tensor((0.35815147,))
+        self.coeffB = torch.Tensor((1.353,))
+        self.coeffC =  torch.Tensor((0.344,))
+        self.log2 =  torch.Tensor((1.,))
+        self.clip_gradient = torch.tensor(True)
+        self.floor = torch.tensor(False)
 
 
     def updateCoeffs(self, eps):
@@ -494,30 +508,127 @@ class PACTSoftmax(torch.nn.Module):
 
         """
 
-        clip_lo = -torch.abs(torch.max(x))
-        clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-        eps = (clip_hi-clip_lo)/self.n_levels
+#         clip_lo = -torch.abs(torch.max(x))
+#         clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+#         eps = (clip_hi-clip_lo)/self.n_levels
 
         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
         z = torch.floor(-xTilde / math.log(2))
         p = xTilde + z * math.log(2)
         y = (0.3585*(p + 1.353)**2 + 0.344) / 2**z
+        return y
+
+class PACTIntegerExp(torch.nn.Module):
+
+    def __init__(self, n_levels: int = 256, dim: int = 1):
+        super().__init__()
+        self.n_levels = n_levels
+        self.dim = dim
+        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
+        self.register_buffer('log2',  torch.Tensor((1.,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))
+
+    class MyExp(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
+            z = torch.floor(-xTilde / log2)
+            p = xTilde + z * log2
+            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
+            out = torch.clip(y, zero, n_levels-1)
+
+            return out
+
+        @staticmethod
+        @parse_args('v', 't', 't', 't', 't', 't', 't')
+        def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
+            #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
+
+            log2_ = g.op("Constant", value_t=log2)
+            coeffA_ = g.op("Constant", value_t=coeffA)
+            coeffB_ = g.op("Constant", value_t=coeffB)
+            coeffC_ = g.op("Constant", value_t=coeffC)
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::iExp", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
+
+    def updateCoeffs(self, eps):
+        """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
+
+        :param eps: Input epsilon
+        :returns:
+        :rtype:
+
+        """
+
+        p = 0
+        #eps2 = torch.Tensor((0.35815147 / 2**p,))
+        eps = eps
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+
+        #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def forward(self, x):
+        """Approximate Softmax implementation according to the I-BERT paper:
+        https://arxiv.org/abs/2101.01321
+
+        :param x:
+        :returns:
+        :rtype:
+
+        """
+
+        if self.export_node:
+            return self.MyExp.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+        else:
+            return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+class PACTSoftmax(_PACTEps):
+    def __init__(self, n_levels : int = 256, dim: int = 1):
+        super().__init__()
+        self.n_levels = n_levels
+        self.dim = dim
+        self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
+        self.register_buffer('coeffB', torch.Tensor((1.353,)))
+        self.register_buffer('coeffC',  torch.Tensor((0.344,)))
+        self.register_buffer('log2',  torch.Tensor((1.,)))
+        self.register_buffer('clip_gradient', torch.tensor(True))
+        self.register_buffer('floor', torch.tensor(False))
+
+    def set_eps_in(self, eps_list):
+        super().set_eps_in(eps_list)
+        self.updateCoeffs(self.eps_in)
+
+    def updateCoeffs(self, eps):
+        eps2 = torch.Tensor((0.3585,)).type_as(eps)
+        self.coeffA.data[0] = torch.round(0.3585/eps2) * eps2
+        self.coeffB.data[0] = torch.round(1.353/eps) * eps
+        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
+        self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def forward(self, x):
+
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps+0.5)*eps
+            return x
+
+        xTilde = x - RQ(torch.max(x, -1, keepdim=True)[0], self.eps_in)
+        z = -RQ(xTilde / self.log2, torch.Tensor((1.,)).type_as(x))
+        p = xTilde + z * self.log2
+        y = RQ((self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z, self.coeffA*self.eps_in**2)
         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-        out = y/(ysum)
+        out = RQ(y / (ysum), 1./self.n_levels)
         return out
 
-
-#         self.updateCoeffs(eps)
-
-#         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
-#         # Quantize coeffs
-#         z = torch.floor(-xTilde / self.log2.type_as(x))
-#         p = xTilde + z * self.log2.type_as(x)
-#         y = (self.coeffA.type_as(x)*(p + self.coeffB.type_as(x))**2 + self.coeffC.type_as(x)) / 2**z
-#         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-#         out = y/(ysum)
-#         out = PACTQuantize(out, 1/self.n_levels, torch.Tensor((0,)).type_as(x), torch.Tensor((1.,)).type_as(x), floor=self.floor, clip_gradient=self.clip_gradient)
-#         return out
 
 
 class PACTIntegerSoftmax(torch.nn.Module):
@@ -595,10 +706,10 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
         return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
-class PACTGELU(torch.nn.Module):
+class PACTGELU(_PACTEps):
 
     def __init__(self,  n_levels: int = 256):
-        super().__init__()
+        super().__init__(True)
 
         self.n_levels = n_levels
         self.register_buffer('a',torch.Tensor((-0.288,)))
@@ -824,43 +935,71 @@ class PACTIntegerLayerNorm(torch.nn.Module):
     def forward(self, x):
         return self.MyLayerNorm.apply(x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
 
-class PACTLayerNorm(torch.nn.Module):
+class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
-    def __init__(self, n_levels: int = 256, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), D=2**24):
-        super().__init__()
-
-        self.n_levels = n_levels
-
-        self.register_buffer('totScaler', torch.Tensor((255.,)))
-        self.register_buffer('D', torch.Tensor((D,)))
-        self.register_buffer('maxval', torch.Tensor((1.,)))
-        self.register_buffer('maxval_tot', torch.Tensor((1.,)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
-
-        self.register_buffer('dummyOne', torch.Tensor((1.,)))
-        self.register_buffer('dummyZero', torch.Tensor((0.,)))
+    def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), eps=1e-5, *args, **kwargs):
+        _PACTLinOp.__init__(self)
+        _PACTEps.__init__(self)
+        self.setup_quant_params(*args, **kwargs)
 
         self.normalized_shape = normalized_shape
-
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
 
+        self.register_buffer('eps', torch.Tensor((eps,)))
+        self.register_buffer('eta', torch.Tensor((1.,)))
+
+        self.div = PACTDiv(Delta=1., stable=False, autoscale=True)
+
+    def get_bias_q(self):
+        # we assume that bias gets quantized to a really high bitwidth so don't
+        # clip it
+        eps = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
+        with torch.no_grad():
+            b = PACTQuantize(self.bias, eps, -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+        return b
+
+    # do not use in training!
+    def get_bias_int(self, eps_in):
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
+
+    def get_eps_out(self, eps_in):
+        self.set_eps_in([eps_in])
+        return self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
+
+    def set_eps_in(self, eps_in_list):
+        super().set_eps_in(eps_in_list)
+
+        t = self.eps_in / torch.sqrt(self.eps)
+        self.eta = torch.ceil(t)
+
+        self.div.set_eps_in([self.eps_in*self.get_eps_w(), self.eps_in])
+
     def forward(self, x):
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps)*eps
+            return x
 
-        nom = x - torch.mean(x, -1, keepdim=True)
-        denom = torch.sqrt(torch.mean(torch.pow(nom, 2), -1, keepdim=True)+1e-5)
-        y = torch.div(nom,denom)
+        nom = x - RQ(torch.mean(x, -1, keepdim=True), self.eps_in)
+        var = RQ(torch.mean(torch.pow(nom, 2), -1, keepdim=True), self.eps_in**2 )
+        var = var * self.eta**2
+        nom = nom * self.eta
+        eps = RQ(self.eta**2 * self.eps , self.eps_in**2)
 
-        self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-        scaler = (self.n_levels)/self.maxval
-        self.totScaler.data[0] = math.floor(self.D * scaler)
+        if self.started:
+            assert eps>=self.eps_in**2, "Eps was rounded down in PACTLayerNorm"
 
-        y = y * self.weight
-        y = y + self.bias
+        denom = RQ(torch.sqrt(var + eps), self.eps_in)
 
-        self.maxval_tot.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
+        if self.started:
+            nom = nom*self.weight_q
+        else:
+            nom = nom*self.weight
 
+        b = self.bias
+
+        y = self.div(nom, denom) + b
         return y
 
 
@@ -915,7 +1054,11 @@ class _PACTActivation(nn.Module):
                  tqt : bool = False,
                  tqt_beta : float = 0.9,
                  tqt_clip_grad : bool = True,
-                 signed : bool = True):
+                 signed : bool = True,
+                 upper_percentile : float = 99.5,
+                 lower_percentile : float = 0.5,
+                 num_bins : int = 2**12 # SCHEREMO: Stay below or at 2**12 - everything else is super slow
+                 ):
 
         r"""Constructor.
 
@@ -937,12 +1080,19 @@ class _PACTActivation(nn.Module):
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
         assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const', 'klj', 'percentile'])
+
+        self.upper_percentile = upper_percentile/100
+        self.lower_percentile = lower_percentile/100
 
         self.tqt = tqt
         self.n_levels = n_levels
 
-        self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=(learn_clip and not symm) and not tqt)
+        if act_kind == 'relu6':
+            self.clip_hi  = torch.nn.Parameter(torch.Tensor((6.,)),  requires_grad=(learn_clip and not symm) and not tqt)
+        else:
+            self.clip_hi  = torch.nn.Parameter(torch.Tensor((1.,)),  requires_grad=(learn_clip and not symm) and not tqt)
+
         # to provide convenient access for the controller to the clipping params, store them in a dict.
         self.clipping_params = {'high' : self.clip_hi}
         if signed:
@@ -984,6 +1134,61 @@ class _PACTActivation(nn.Module):
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
         self.register_buffer('clip_gradient', torch.tensor(True))
 
+        self.num_bins = num_bins
+        self.register_buffer("histogram",torch.zeros_like(torch.Tensor(range(self.num_bins))))
+        self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
+        self.truemax          = torch.nn.Parameter(torch.Tensor((1,)), requires_grad=False)
+        self.truemin          = torch.nn.Parameter(torch.Tensor((-1,)), requires_grad=False)
+        self.register_buffer('ready', torch.tensor(False))
+
+    # SCHEREMO: Assume self.histogram magnitude list of data, binned
+    def updateHistogram(self, stat):
+
+        def rebinInt(histogram, factor):
+            factor = min(self.num_bins//2, factor)
+            weight = torch.Tensor([1]*factor).reshape(1,1,-1).type_as(histogram)
+            newHistogram = torch.zeros_like(torch.Tensor(range(self.num_bins))).type_as(histogram)
+            # Downsample histogram
+            res = torch.nn.functional.conv1d(histogram.reshape(1,1,-1), weight, bias=None, stride=factor, padding=0)
+            # Set new downsampled histogram in the middle
+            newHistogram[(self.num_bins//2 - self.num_bins//(2*factor)):(self.num_bins//2 + self.num_bins//(2*factor))] = res.reshape(-1)
+            return newHistogram
+
+        with torch.no_grad():
+            # SCHEREMO: get min and max
+            newTruemax = max(self.truemax.item(), stat.max())
+            newTruemin = min(self.truemin.item(), stat.min())
+
+            # SCHEREMO: only rescale exponentially - allows us to rebin very fast and easy
+            binTop = max(abs(self.truemin), self.truemax)
+            newBinTop = max(abs(newTruemin), newTruemax)
+            expFact = int(max(2**torch.ceil(torch.log2(newBinTop / binTop)),1))
+            expTop =  expFact * binTop
+
+            # SCHEREMO: Calculate new histogram according to new range
+            addHistogram = torch.histc(input=stat, min=-expTop.item(), max=expTop.item(), bins=self.num_bins)
+            resampledHistogram = rebinInt(self.histogram, expFact)
+
+            # SCHEREMO: Add histograms, preserve information about edges
+            self.histogram[:] = resampledHistogram + addHistogram
+            self.truemax[:] = expTop
+            self.truemin[:] = -expTop
+
+    # SCHEREMO: Calculate clipping bounds
+    def updateClipBounds(self):
+        self.prevEdges[:] = torch.linspace(self.truemin[0], self.truemax[0], self.num_bins+1)
+        pdf = self.histogram / (torch.sum(self.histogram))
+        weight = torch.Tensor([1]*len(self.histogram.reshape(-1))).reshape(1,1,-1).type_as(self.histogram)
+        cdf = torch.nn.functional.conv1d(pdf.reshape(1,1,-1), weight, bias=None, stride=1, padding=(len(self.histogram)-1)).reshape(-1)
+        cdf = cdf[:len(self.histogram)]
+        rightMinIdx = torch.sum((cdf<self.lower_percentile))
+        rightMaxIdx = torch.sum((cdf<self.upper_percentile))
+        leftMinIdx = torch.clip(rightMinIdx-1, min=0.)
+        leftMaxIdx = torch.clip(rightMaxIdx-1, min=0.)
+        #assert rightMaxIdx >= rightMinIdx, "PACTActivation: Clipping bounds swapped!"
+        self.min[:] = (self.prevEdges[rightMinIdx]+self.prevEdges[leftMinIdx])/2
+        self.max[:] = (self.prevEdges[rightMaxIdx]+self.prevEdges[leftMaxIdx])/2
+
 
     def get_eps(self, *args):
         return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).detach().clone()
@@ -994,22 +1199,30 @@ class _PACTActivation(nn.Module):
 
     def forward(self, x):
         if not self.started:
-            x_stat = torch.tensor(x, device=self.max.device, dtype=self.max.dtype) if not isinstance(x, torch.Tensor) else x
-            with torch.no_grad():
-                self.max[:] = max(self.max.item(), x_stat.max())
-                self.min[:] = min(self.min.item(), x_stat.min())
-                self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
-                self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
             if self.act_kind == 'identity':
-                return x
+                res =  x
             elif self.act_kind == 'relu':
-                return torch.nn.functional.relu(x)
+                res = torch.nn.functional.relu(x)
             elif self.act_kind == 'relu6':
-                return torch.nn.functional.relu6(x)
+                res = torch.nn.functional.relu6(x)
             elif self.act_kind == 'leaky_relu':
-                return torch.nn.functional.leaky_relu(x, self.leaky)
+                res = torch.nn.functional.leaky_relu(x, self.leaky)
             elif self.act_kind == 'htanh':
-                return torch.nn.functional.hardtanh(x)
+                res = torch.nn.functional.hardtanh(x)
+
+            x_stat = torch.tensor(res, device=self.max.device, dtype=self.max.dtype) if not isinstance(res, torch.Tensor) else res
+            self.updateHistogram(x_stat)
+
+            if self.init_clip == 'percentile' and self.ready:
+                res = torch.clip(res, min=self.min, max=self.max)
+            else:
+                with torch.no_grad():
+                    self.min[:] = min(self.min.item(), x_stat.min())
+                    self.max[:] = max(self.max.item(), x_stat.max())
+                    self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
+                    self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
+
+            return res
         else:
             eps = self.get_eps()
             if self.tqt:
@@ -1250,6 +1463,23 @@ class PACTIntegerMatmul(torch.nn.Module):
             mulresult.eps = x.eps * y.eps
         return mulresult
 
+class _PACTEps(nn.Module):
+    def __init__(self, startedFlag=False):
+        super().__init__()
+        self.register_buffer('_eps_in',torch.Tensor((1.,)))
+        if startedFlag:
+            self.started = False
+        self.locked = False
+
+    def set_eps_in(self, eps_in_list):
+        self._eps_in[:] = eps_in_list[0]
+
+    def get_eps_in(self):
+        return self._eps_in
+
+    @property
+    def eps_in(self):
+        return self.get_eps_in()
 
 class _PACTLinOp:
     # a helper class to provide initialization code common to all PACT/TQT
@@ -1259,6 +1489,8 @@ class _PACTLinOp:
     def __init__(self, *args, **kwargs):
         pass
 
+    def expand_bounds(self, t):
+        return t
 
     # ensure backward compatibility with checkpoints from before the addition
     # of "params_frozen" by adding this as a load_state_dict_pre_hook
@@ -2030,3 +2262,473 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
         return y
 
+class PACTWrapLinearAttention(nn.Module):
+    class LinearAttention(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, q,k,v,
+                    wq_weight, wq_bias,
+                    wk_weight, wk_bias,
+                    wv_weight, wv_bias,
+                    wo_weight, wo_bias,
+                    wq_requant_mul, wq_requant_div,
+                    wk_requant_mul, wk_requant_div,
+                    wv_requant_mul, wv_requant_div,
+                    preattn_requant_mul, preattn_requant_div,
+                    normalizer_requant_mul, normalizer_requant_div,
+                    postattn_requant_mul, postattn_requant_div,
+                    wo_requant_mul, wo_requant_div,
+                    dim, heads, dim_head,
+                    Delta, eps, eta, act_type,
+                    n_levels):
+            return q
+
+        @staticmethod
+        @parse_args('v','v','v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+                    't', 't',
+
+                    't','t','t',
+                    'i', 'i', 'i', 'i',
+                    't')
+
+        def symbolic(g,
+                     q,k,v,
+                     wq_weight, wq_bias,
+                     wk_weight, wk_bias,
+                     wv_weight, wv_bias,
+                     wo_weight, wo_bias,
+                     wq_requant_mul, wq_requant_div,
+                     wk_requant_mul, wk_requant_div,
+                     wv_requant_mul, wv_requant_div,
+                     preattn_requant_mul, preattn_requant_div,
+                     normalizer_requant_mul, normalizer_requant_div,
+                     postattn_requant_mul, postattn_requant_div,
+                     wo_requant_mul, wo_requant_div,
+                     dim, heads, dim_head,
+                     Delta, eps, eta, act_type,
+                     n_levels):
+            return g.op("PACTOps::LinearAttention",
+                        q, k, v,
+                        wq_weight, wq_bias,
+                        wk_weight, wk_bias,
+                        wv_weight, wv_bias,
+                        wo_weight, wo_bias,
+                        wq_requant_mul_t=wq_requant_mul, wq_requant_div_t=wq_requant_div,
+                        wk_requant_mul_t=wk_requant_mul, wk_requant_div_t=wk_requant_div,
+                        wv_requant_mul_t=wv_requant_mul, wv_requant_div_t=wv_requant_div,
+                        wo_requant_mul_t=wo_requant_mul, wo_requant_div_t=wo_requant_div,
+                        preattn_requant_mul_t=preattn_requant_mul, preattn_requant_div_t=preattn_requant_div,
+                        normalizer_requant_mul_t=normalizer_requant_mul, normalizer_requant_div_t=normalizer_requant_div,
+                        postattn_requant_mul_t=postattn_requant_mul, postattn_requant_div_t=postattn_requant_div,
+                        dim_t=dim, heads_t=heads, dim_head_t=dim_head,
+                        Delta_i = Delta, eps_i = eps, eta_i = eta, act_type_i=act_type,
+                        n_levels_t=n_levels)
+
+    def __init__(self, wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+                 wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+                 wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+                 preattn_requant_mul, preattn_requant_div,
+                 normalizer_requant_mul, normalizer_requant_div,
+                 postattn_requant_mul, postattn_requant_div,
+                 wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+                 dim, heads, dim_head,
+                 Delta, eps, eta, act_type,
+                 n_levels, linearattention_node=True):
+        super().__init__()
+        self.wk_weight = nn.Parameter(torch.clone(wk_weight).detach())
+        self.wk_bias = nn.Parameter(torch.clone(wk_bias).detach())
+        self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
+        self.wk_requant_div = torch.clone(wk_requant_div).detach()
+        self.wq_weight = nn.Parameter(torch.clone(wq_weight).detach())
+        self.wq_bias = nn.Parameter(torch.clone(wq_bias).detach())
+        self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
+        self.wq_requant_div = torch.clone(wq_requant_div).detach()
+        self.wv_weight = nn.Parameter(torch.clone(wv_weight).detach())
+        self.wv_bias = nn.Parameter(torch.clone(wv_bias).detach())
+        self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
+        self.wv_requant_div = torch.clone(wv_requant_div).detach()
+        self.wo_weight = nn.Parameter(torch.clone(wo_weight).detach())
+        self.wo_bias = nn.Parameter(torch.clone(wo_bias).detach())
+        self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
+        self.wo_requant_div = torch.clone(wo_requant_div).detach()
+        self.preattn_requant_mul = torch.clone(preattn_requant_mul).detach()
+        self.preattn_requant_div = torch.clone(preattn_requant_div).detach()
+        self.normalizer_requant_mul = torch.clone(normalizer_requant_mul).detach()
+        self.normalizer_requant_div = torch.clone(normalizer_requant_div).detach()
+        self.postattn_requant_mul = torch.clone(postattn_requant_mul).detach()
+        self.postattn_requant_div = torch.clone(postattn_requant_div).detach()
+        self.Delta = Delta
+        self.eps = eps
+        self.eta = eta
+        self.act_type = act_type
+        self.n_levels = torch.clone(torch.Tensor((n_levels,))).detach()
+        self.dim = torch.clone(torch.Tensor((dim,))).detach()
+        self.dim_head = torch.clone(torch.Tensor((dim_head,))).detach()
+        self.heads = torch.clone(torch.Tensor((heads,))).detach()
+        self.linearattention_node = linearattention_node
+
+    def forward(self,q,k,v,**kwargs):
+        if self.linearattention_node:
+            return self.LinearAttention.apply(q,k,v,
+                                              self.wq_weight.type_as(q), self.wq_bias.type_as(q),
+                                              self.wk_weight.type_as(q), self.wk_bias.type_as(q),
+                                              self.wv_weight.type_as(q), self.wv_bias.type_as(q),
+                                              self.wo_weight.type_as(q), self.wo_bias.type_as(q),
+                                              self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
+                                              self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
+                                              self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
+                                              self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
+                                              self.normalizer_requant_mul.type_as(q), self.normalizer_requant_div.type_as(q),
+                                              self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
+                                              self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
+                                              self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
+                                              self.Delta, self.eps, self.eta, self.act_type,
+                                              self.n_levels.type_as(q))
+        else:
+            return self.LinearAttention.forward(None, q,k,v,
+                                                self.wq_weight.type_as(q), self.wq_bias.type_as(q),
+                                                self.wk_weight.type_as(q), self.wk_bias.type_as(q),
+                                                self.wv_weight.type_as(q), self.wv_bias.type_as(q),
+                                                self.wo_weight.type_as(q), self.wo_bias.type_as(q),
+                                                self.wq_requant_mul.type_as(q), self.wq_requant_div.type_as(q),
+                                                self.wk_requant_mul.type_as(q), self.wk_requant_div.type_as(q),
+                                                self.wv_requant_mul.type_as(q), self.wv_requant_div.type_as(q),
+                                                self.preattn_requant_mul.type_as(q), self.preattn_requant_div.type_as(q),
+                                                self.normalizer_requant_mul.type_as(q), self.normalizer_requant_div.type_as(q),
+                                                self.postattn_requant_mul.type_as(q), self.postattn_requant_div.type_as(q),
+                                                self.wo_requant_mul.type_as(q), self.wo_requant_div.type_as(q),
+                                                self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q),
+                                                self.Delta, self.eps, self.eta, self.act_type,
+                                                self.n_levels.type_as(q))
+
+
+class PACTWrapCLCA(nn.Module):
+    class CLCA(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, q,k,
+                    wq_weight, wq_bias,
+                    wkv_weight, wkv_bias,
+                    wo_weight, wo_bias,
+                    wq_requant_mul, wq_requant_add, wq_requant_div,
+                    wk_requant_mul, wk_requant_add, wk_requant_div,
+                    wv_requant_mul, wv_requant_add, wv_requant_div,
+                    kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div,
+                    preattn_requant_mul, preattn_requant_add, preattn_requant_div,
+                    postattn_requant_mul, postattn_requant_add, postattn_requant_div,
+                    wo_requant_mul, wo_requant_add, wo_requant_div,
+                    dim, heads, dim_head, out_dim,
+                    Delta, eps, eta, act_type,
+                    n_levels):
+            z = torch.empty(q.shape[0], out_dim, q.shape[2])
+            return torch.ones_like(z)
+
+        @staticmethod
+        @parse_args('v','v',
+                    'v', 'v',
+                    'v', 'v',
+                    'v', 'v',
+
+                    'v', 'v','v',
+                    'v', 'v','v',
+                    'v', 'v','v',
+                    'v', 'v','v',
+                    'v', 'v','v',
+                    'v', 'v','v',
+                    'v', 'v','v',
+
+                    't','t','t','t',
+                    'i', 'i', 'i', 'i',
+                    't')
+
+        def symbolic(g,
+                     q,k,
+                     wq_weight, wq_bias,
+                     wkv_weight, wkv_bias,
+                     wo_weight, wo_bias,
+                     wq_requant_mul, wq_requant_add, wq_requant_div,
+                     wk_requant_mul, wk_requant_add, wk_requant_div,
+                     wv_requant_mul, wv_requant_add, wv_requant_div,
+                     kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div,
+                     preattn_requant_mul, preattn_requant_add, preattn_requant_div,
+                     postattn_requant_mul, postattn_requant_add, postattn_requant_div,
+                     wo_requant_mul, wo_requant_add, wo_requant_div,
+                     dim, heads, dim_head, out_dim,
+                     Delta, eps, eta, act_type,
+                     n_levels):
+            return g.op("PACTOps::CLCA",
+                        q, k,
+                        wq_weight, wq_bias,
+                        wkv_weight, wkv_bias,
+                        wo_weight, wo_bias,
+                        wq_requant_mul, wq_requant_add, wq_requant_div,
+                        wk_requant_mul, wk_requant_add, wk_requant_div,
+                        wv_requant_mul, wv_requant_add, wv_requant_div,
+                        kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div,
+                        preattn_requant_mul, preattn_requant_add, preattn_requant_div,
+                        postattn_requant_mul, postattn_requant_add, postattn_requant_div,
+                        wo_requant_mul, wo_requant_add, wo_requant_div,
+                        dim_t=dim, heads_t=heads, dim_head_t=dim_head,out_dim_t=out_dim,
+                        Delta_i = Delta, eps_i = eps, eta_i = eta, act_type_i=act_type,
+                        n_levels_t=n_levels)
+
+    def __init__(self, wq_weight, wq_bias, wq_requant_mul, wq_requant_add, wq_requant_div,
+                 wkv_weight, wkv_bias, wk_requant_mul, wk_requant_add, wk_requant_div,
+                 wv_requant_mul, wv_requant_add, wv_requant_div,
+                 kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div,
+                 preattn_requant_mul, preattn_requant_add, preattn_requant_div,
+                 postattn_requant_mul, postattn_requant_add, postattn_requant_div,
+                 wo_weight, wo_bias, wo_requant_mul, wo_requant_add, wo_requant_div,
+                 dim, heads, dim_head,out_dim,
+                 Delta, eps, eta, act_type,
+                 n_levels, linearattention_node=True):
+        super().__init__()
+        self.wkv_weight = nn.Parameter(torch.clone(wkv_weight).detach())
+        self.wkv_bias = nn.Parameter(torch.clone(wkv_bias).detach())
+        self.wk_requant_mul = torch.clone(wk_requant_mul).detach()
+        self.wk_requant_add = torch.clone(wk_requant_add).detach()
+        self.wk_requant_div = torch.clone(wk_requant_div).detach()
+        self.wq_weight = nn.Parameter(torch.clone(wq_weight).detach())
+        self.wq_bias = nn.Parameter(torch.clone(wq_bias).detach())
+        self.wq_requant_mul = torch.clone(wq_requant_mul).detach()
+        self.wq_requant_add = torch.clone(wq_requant_add).detach()
+        self.wq_requant_div = torch.clone(wq_requant_div).detach()
+        self.wv_requant_mul = torch.clone(wv_requant_mul).detach()
+        self.wv_requant_add = torch.clone(wv_requant_add).detach()
+        self.wv_requant_div = torch.clone(wv_requant_div).detach()
+        self.wo_weight = nn.Parameter(torch.clone(wo_weight).detach())
+        self.wo_bias = nn.Parameter(torch.clone(wo_bias).detach())
+        self.wo_requant_mul = torch.clone(wo_requant_mul).detach()
+        self.wo_requant_add = torch.clone(wo_requant_add).detach()
+        self.wo_requant_div = torch.clone(wo_requant_div).detach()
+        self.kdiv_requant_mul = torch.clone(kdiv_requant_mul).detach()
+        self.kdiv_requant_add = torch.clone(kdiv_requant_add).detach()
+        self.kdiv_requant_div = torch.clone(kdiv_requant_div).detach()
+        self.preattn_requant_mul = torch.clone(preattn_requant_mul).detach()
+        self.preattn_requant_add = torch.clone(preattn_requant_add).detach()
+        self.preattn_requant_div = torch.clone(preattn_requant_div).detach()
+        self.postattn_requant_mul = torch.clone(postattn_requant_mul).detach()
+        self.postattn_requant_add = torch.clone(postattn_requant_add).detach()
+        self.postattn_requant_div = torch.clone(postattn_requant_div).detach()
+        self.Delta = Delta
+        self.eps = eps
+        self.eta = eta
+        self.act_type = act_type
+        self.n_levels = torch.clone(torch.Tensor((n_levels,))).detach()
+        self.dim = torch.clone(torch.Tensor((dim,))).detach()
+        self.dim_head = torch.clone(torch.Tensor((dim_head,))).detach()
+        self.out_dim = torch.clone(torch.Tensor((out_dim,))).detach()
+        self.heads = torch.clone(torch.Tensor((heads,))).detach()
+        self.linearattention_node = linearattention_node
+
+    def forward(self,q,k,**kwargs):
+        if self.linearattention_node:
+            return self.CLCA.apply(q,k,
+                                              self.wq_weight.type_as(q), self.wq_bias.type_as(q),
+                                              self.wkv_weight.type_as(q), self.wkv_bias.type_as(q),
+                                              self.wo_weight.type_as(q), self.wo_bias.type_as(q),
+                                              self.wq_requant_mul.type_as(q),self.wq_requant_add.type_as(q), self.wq_requant_div.type_as(q),
+                                              self.wk_requant_mul.type_as(q),self.wk_requant_add.type_as(q), self.wk_requant_div.type_as(q),
+                                              self.wv_requant_mul.type_as(q),self.wv_requant_add.type_as(q), self.wv_requant_div.type_as(q),                        self.kdiv_requant_mul.type_as(q), self.kdiv_requant_add.type_as(q), self.kdiv_requant_div.type_as(q),
+                                              self.preattn_requant_mul.type_as(q),self.preattn_requant_add.type_as(q), self.preattn_requant_div.type_as(q),
+                                              self.postattn_requant_mul.type_as(q),self.postattn_requant_add.type_as(q), self.postattn_requant_div.type_as(q),
+                                              self.wo_requant_mul.type_as(q),self.wo_requant_add.type_as(q), self.wo_requant_div.type_as(q),
+                                              self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q), self.out_dim.type_as(q),
+                                              self.Delta, self.eps, self.eta, self.act_type,
+                                              self.n_levels.type_as(q))
+        else:
+            return self.CLCA.forward(None, q,k,
+                                                self.wq_weight.type_as(q), self.wq_bias.type_as(q),
+                                                self.wkv_weight.type_as(q), self.wkv_bias.type_as(q),
+                                                self.wo_weight.type_as(q), self.wo_bias.type_as(q),
+                                                self.wq_requant_mul.type_as(q), self.wq_requant_add.type_as(q), self.wq_requant_div.type_as(q),
+                                                self.wk_requant_mul.type_as(q), self.wk_requant_add.type_as(q), self.wk_requant_div.type_as(q),
+                                                self.wv_requant_mul.type_as(q), self.wv_requant_add.type_as(q), self.wv_requant_div.type_as(q),self.kdiv_requant_mul.type_as(q), self.kdiv_requant_add.type_as(q), self.kdiv_requant_div.type_as(q),
+                                                self.preattn_requant_mul.type_as(q), self.preattn_requant_add.type_as(q), self.preattn_requant_div.type_as(q),
+                                                self.postattn_requant_mul.type_as(q), self.postattn_requant_add.type_as(q), self.postattn_requant_div.type_as(q),
+                                                self.wo_requant_mul.type_as(q), self.wo_requant_add.type_as(q), self.wo_requant_div.type_as(q),
+                                                self.dim.type_as(q), self.heads.type_as(q), self.dim_head.type_as(q), self.out_dim.type_as(q),
+                                                self.Delta, self.eps, self.eta, self.act_type,
+                                                self.n_levels.type_as(q))
+class PACTDiv(_PACTEps):
+    def __init__(self, Delta=2**16, stable=True, eps_div = 1e-5, autoscale=False):
+
+        assert not ((stable) and (eps_div <= 0.) ), "Either stabilize division and choose eps > 0 or don't stabilize!"
+
+        super().__init__(True)
+
+        self.Delta = Delta
+        self.stable = stable
+        self.autoscale = autoscale
+        self.register_buffer('running_min' , torch.Tensor((1.,)))
+
+        self.register_buffer('eta', torch.Tensor((1.,)))
+        self.register_buffer('eps_div', torch.Tensor((eps_div,)))
+        self.register_buffer('eps_in_x', torch.Tensor((eps_div,)))
+        self.register_buffer('eps_in_y', torch.Tensor((eps_div,)))
+
+        self.set_eps_in([torch.Tensor((eps_div,)), torch.Tensor((eps_div,))])
+
+    def set_eps_in(self, eps_in_list):
+        self.eps_in_x[:] = eps_in_list[0]
+        self.eps_in_y[:] = eps_in_list[1]
+        assert self.eps_in_y > 0, "PACTDiv: Denominator's eps is lt or eq 0!"
+
+        if self.stable:
+            t = self.eps_in_y / self.eps_div
+            self.eta = torch.ceil(t)
+        else:
+            self.eta = torch.Tensor((1.,))
+
+    def get_eps_out(self, eps_in_x=None, eps_in_y=None):
+        if eps_in_x is not None and eps_in_y is not None:
+            self.set_eps_in([eps_in_x, eps_in_y])
+        if not self.locked:
+            return self.eps_in_x / (self.eps_in_y*self.Delta)
+        else:
+            return self.eps_in_x / (self.eps_in_y)
+
+    def get_eps_div(self, eps_in_x=None, eps_in_y=None):
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x / eps+0.5) * eps
+            return x
+
+        if eps_in_x is not None and eps_in_y is not None:
+            self.set_eps_in([eps_in_x, eps_in_y])
+
+        if self.stable:
+            return torch.round(RQ(self.eps_div*self.eta , self.eps_in_y)/self.eps_in_y)
+        else:
+            return 0
+
+    def forward(self,x,y):
+
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x / eps +0.5) * eps
+            return x
+
+        if self.stable:
+            y = y * self.eta
+            x = x * self.eta
+            eps = RQ(self.eta * self.eps_div, self.eps_in_y)
+            if self.started:
+                assert eps>=self.eps_in_y, "Eps was rounded down in PACTDiv"
+
+        else:
+            eps = 0
+
+        y = y + eps
+        assert torch.sum( y > 0 ) == len(y.reshape(-1)), "PACTDiv: Dividing by negative numbers not allowed!"
+        with torch.no_grad():
+            if self.autoscale:
+                x_hat = x/self.eps_in_x
+                y_hat = y/self.eps_in_y
+                div = torch.abs((x_hat)/(y_hat))
+                self.running_min = torch.min(self.running_min, torch.min(torch.where(div > 0, div, div.max())))
+                self.Delta = torch.abs(torch.ceil(self.running_min**(-1)))
+
+        if not self.locked:
+            return RQ(x/y , self.get_eps_out(self.eps_in_x, self.eps_in_y))
+        else:
+            return RQ(x*self.Delta/y , self.get_eps_out(self.eps_in_x, self.eps_in_y))
+
+class PACTIntegerDiv(nn.Module):
+
+    class MyIntegerDiv(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, y, Delta, eps, eta):
+            return torch.floor((x * Delta * eta / (y*eta + eps)) + 0.5)
+
+        @staticmethod
+        @parse_args('v','v','i', 'i', 'i')
+        def symbolic(g, x, y, Delta, eps, eta):
+            return g.op("PACTOps::IntegerDiv", x, y, Delta_i = Delta, eps_i=eps, eta_i = eta)
+
+    def __init__(self, Delta, integer_node=True, eps=1., eta=1.):
+        super().__init__()
+        self.register_buffer('Delta',torch.Tensor((Delta,)))
+        self.register_buffer('eps',torch.Tensor((eps,)))
+        self.register_buffer('eta', torch.Tensor((eta,)))
+        self.integer_node = integer_node
+
+    def forward(self,x,y):
+        # SCHEREMO: Shortcut degenerate cases (y == 1, eps == 0)
+        if torch.prod((y == torch.ones_like(y)) * (self.eps == torch.zeros_like(self.eps))) == 1.:
+            if self.Delta == 1:
+                return x
+            return x * self.Delta
+
+        if self.integer_node:
+            return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
+        else:
+            return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+
+class PACTConstWrap(nn.Module):
+    def __init__(self, eps=1.):
+        super().__init__()
+        self.register_buffer('eps', torch.Tensor((eps,)))
+
+    def set_eps(self, eps):
+        self.eps = torch.Tensor((eps,)).type_as(self.eps)
+
+    def forward(self, x):
+        with torch.no_grad():
+            self.set_eps(x)
+        return self.eps
+
+class PACTIntegerConstWrap(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer('dummy', torch.Tensor((1.,)))
+
+    def forward(self, x):
+
+        return torch.ones_like(torch.Tensor((x,))).type_as(self.dummy)
+
+class PACTIntegerMean(nn.Module):
+
+    class MyIntegerMean(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, dim, keepdim):
+            return torch.floor( torch.mean(x, dim=dim, keepdim=keepdim) + 0.5 )
+
+        @staticmethod
+        @parse_args('v', 'is', 'i')
+        def symbolic(g,x, axes, keepdims):
+            return g.op("PACTOps::IntegerMean", x, axes_i=axes, keepdims_i=keepdims)
+
+
+    def __init__(self, dim, keepdim=False, **kwargs):
+        super().__init__()
+        self.dim = dim
+        self.keepdim = keepdim
+
+    def forward(self, x, *args, **kwargs):
+        return self.MyIntegerMean.apply(x, self.dim, self.keepdim)
+
+class PACTMean(_PACTEps):
+    def __init__(self):
+        super().__init__(True)
+
+    def forward(self, x, **kwargs):
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps + 0.5)*eps
+            return x
+
+        return RQ(torch.mean(x, **kwargs), self.eps_in)

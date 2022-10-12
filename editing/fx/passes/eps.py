@@ -1,28 +1,30 @@
-# 
+#
 # eps.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 import copy
 from typing import Union, Optional
 from dataclasses import dataclass
+
+from collections.abc import Iterable
 
 import numpy as np
 
@@ -42,11 +44,9 @@ __all__ = ['AnnotateEpsPass',
            'extract_eps']
 
 def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor):
-    try:
-        e = m.get_eps_out(eps_in)
-    except RuntimeError:
-        import ipdb; ipdb.set_trace()
-    return m.get_eps_out(eps_in)
+    ret = m.get_eps_out(eps_in)
+    return ret
+
 
 def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor):
     return m.get_eps()
@@ -55,32 +55,34 @@ def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : 
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
 def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
-    #return (1./(m.n_levels//2-1))
-    return torch.Tensor((m.maxval/(m.n_levels//2-1)),)
-    #return torch.Tensor(((m.n_levels//2-1)/m.maxval),)
+    return m.get_eps_out(eps_in)
+
+def eps_conversion_pact_matmul(m : nn.Module, *eps_ins):
+    return eps_ins[0] * eps_ins[1]
 
 def eps_conversion_matmul(*eps_ins):
     return eps_ins[0] * eps_ins[1]
 
 def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
     return torch.Tensor((1./(m.n_levels-1.),))
-    #return torch.Tensor((m.maxval/(m.n_levels-1),))
 
 def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
-    return torch.Tensor(max((m.maxval/(m.n_levels//2-1)), 0.),)
+    return m.get_eps_out(eps_in)
 
 def eps_conversion_identity(*eps_ins):
     return eps_ins[0]
 
-def eps_conversion_truediv(*eps_ins, **kwargs):
-    import IPython; IPython.embed()
+def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
+    return m.get_eps_out(eps_ins[0], eps_ins[1])
+
+def eps_conversion_pact_mean(m : nn.Module, *eps_ins, **kwargs):
     return eps_ins[0]
 
-# def eps_conversion_mul(*eps_ins):
-#     try:
-#         return eps_ins[0]*eps_ins[1]
-#     except:
-#         return eps_ins[0]
+def eps_conversion_pact_constwrap(m : nn.Module, *eps_ins, **kwargs):
+    return m.eps
+
+def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
+    return m.act_out.get_eps()
 
 def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
     return m.maxval/(m.adder.n_levels//2-1)
@@ -90,11 +92,6 @@ def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
 
 def eps_conversion_mul(m : nn.Module, *eps_in):
     return eps_in[0] * eps_in[1]
-
-
-
-#return torch.Tensor((1./m.n_levels,))
-
 
 _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTConv1d : eps_conversion_pact_linears,
@@ -116,14 +113,18 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTSoftmax : eps_conversion_pact_softmax,
                     PACTIntegerLayerNorm : eps_conversion_pact_layernorm,
                     PACTLayerNorm : eps_conversion_pact_layernorm,
-                    PACTIntegerMatmul: eps_conversion_matmul,
+                    PACTIntegerAdd : eps_conversion_pact_integeradd,
+                    PACTIntegerMatmul: eps_conversion_pact_matmul,
+                    PACTConstWrap: eps_conversion_pact_constwrap,
+                    PACTMean: eps_conversion_pact_mean,
 
+                    f'_CALL_FUNCTION_{repr(operator.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
                     '_CALL_METHOD_reshape' : eps_conversion_identity,
 #                     f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
-                    f'_CALL_FUNCTION_{repr(operator.truediv)}' : eps_conversion_truediv,
+                    PACTDiv : eps_conversion_truediv,
                     Multiply : eps_conversion_mul
 }
 
@@ -136,12 +137,16 @@ def n_levels_out_invalid(m : nn.Module, in_levels : list, accumulator_levels : i
 def n_levels_out_pact_linears(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
     return accumulator_levels
 
+def n_levels_out_truediv(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    return accumulator_levels
+
 def n_levels_out_pact_acts(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
     return m.n_levels
 
 def n_levels_out_pact_embedding(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
-    act_type = type(m.adder.act_out)
-    return _N_LEVELS_PROP[act_type](m.adder.act_out, in_levels, accumulator_levels)
+    return m.adder.act_out.n_levels
+    #     act_type = type(m.adder.act_out)
+#     return _N_LEVELS_PROP[act_type](m.adder.act_out, in_levels, accumulator_levels)
 
 
 _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
@@ -151,11 +156,13 @@ _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
                       PACTUnsignedAct : n_levels_out_pact_acts,
                       PACTWrapModule : n_levels_out_pact_acts,
                       PACTEmbedding : n_levels_out_pact_embedding,
-                      PACTGELU : n_levels_out_pact_acts,
+                      PACTGELU : n_levels_out_pact_linears,
                       PACTIntegerGELU : n_levels_out_pact_acts,
                       PACTIntegerMatmul : n_levels_out_pact_linears,
                       PACTSoftmax : n_levels_out_pact_acts,
                       PACTIntegerSoftmax : n_levels_out_pact_acts,
+                      f'_CALL_FUNCTION_{repr(operator.truediv)}' : n_levels_out_truediv,
+                      f'_CALL_FUNCTION_{repr(operator.matmul)}' : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(torch.matmul)}' : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(torch.bmm)}' : n_levels_out_pact_linears,}
 
@@ -216,18 +223,25 @@ class AnnotateEpsPass(FxPass):
     def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32, signed_in : bool = True, prop_eps : bool = True, prop_n_levels : bool = True, prop_sign : bool = True):
         super(AnnotateEpsPass, self).__init__()
         if prop_eps:
-            if not isinstance(eps_in, torch.Tensor) and eps_in is not None:
-                self.eps_in = torch.tensor(eps_in).reshape(-1)
+            if isinstance(eps_in, Iterable):
+                try:
+                    eps_in.__iter__()
+                    self.eps_in = eps_in
+                    self.noeps = False
+                except:
+                    self.eps_in = [eps_in]
+                    self.noeps = False
+            elif not isinstance(eps_in, torch.Tensor) and eps_in is not None:
+                self.eps_in = [torch.tensor(eps_in).reshape(-1)]
                 self.noeps = False
             elif eps_in is None:
-                self.eps_in = torch.tensor(1.0).reshape(1)
+                self.eps_in = [torch.tensor(1.0).reshape(1)]
                 self.noeps = True
             else:
-                self.eps_in = eps_in.reshape(-1)
+                self.eps_in = [eps_in.reshape(-1)]
                 self.noeps = False
         else:
             self.eps_in = None
-            self.noeps = False
 
         if n_levels_in is None:
             # providing no n_levels_in is equivalent to providing no eps_in
@@ -243,13 +257,17 @@ class AnnotateEpsPass(FxPass):
         self.prop_n_levels = prop_n_levels
         self.prop_sign = prop_sign
 
-
     def run_pass(self, gm : fx.GraphModule):
         modules = gm_modules(gm)
+        placeHolderIdx = 0
         for node in gm.graph.nodes:
             if node.op == 'placeholder':
+
                 node.meta['quant'] = QuantInfo(eps_in=self.eps_in, eps_out=self.eps_in, n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in, signed_in=[self.signed_in], signed_out=self.signed_in)
                 # an equivalent for noeps for signedness is not yet supported...
+
+                placeHolderIdx += 1
+
                 for u in node.users:
                     if self.noeps:
                         assert u.op == 'call_module' and isinstance(module_of_node(gm, u), _ORIGINAL_EPS_MODULES), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
@@ -319,6 +337,7 @@ class AnnotateEpsPass(FxPass):
                     node_in_signed = None
                     node_out_signed = None
                 node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels, signed_in=node_in_signed, signed_out=node_out_signed)
+
 
         return gm
 

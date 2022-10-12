@@ -1,24 +1,24 @@
-# 
+#
 # general.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from typing import Union, Optional, Tuple, List
 
@@ -36,6 +36,8 @@ from ..util import module_of_node, get_qualified_prefix
 from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.bb.bb_ops import *
 from quantlib.algorithms.generic.generic_ops import *
+
+from collections.abc import Iterable
 
 __all__ = ['MergeConvBNPass',
            'ModularizeActivationsPass',
@@ -194,6 +196,7 @@ class ModularizeActivationsPass(ModularizePass):
                               F.hardswish : nn.Hardswish,
                               F.relu6 : nn.ReLU6,
                               F.elu : nn.ELU,
+                              torch.exp : PACTExp,
                               F.elu_ : nn.ELU,
                               F.selu : nn.SELU,
                               F.celu : nn.CELU,
@@ -373,7 +376,10 @@ class ShapePropPass(FxPass):
         gm.eval()
         sp = ShapeProp(gm)
         inp = [torch.rand(s, dtype=self.dtype_in) for s in self.shapes_in]
-        sp.run(*inp)
+        try:
+            sp.run(*inp)
+        except Exception as e:
+            import IPython; IPython.embed()
         if training:
             # you really shouldn't be passing over GraphModules in non-eval
             # state, but you do you!

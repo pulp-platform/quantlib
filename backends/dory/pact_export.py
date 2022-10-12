@@ -1,23 +1,23 @@
 #
 # pact_export.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from functools import partial
 from itertools import chain 
@@ -38,7 +38,7 @@ import numpy as np
 import quantlib.editing.fx as qlfx
 from quantlib.editing.fx.util import module_of_node
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.algorithms.pact import RequantShift
+from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule
 from .dory_passes import AvgPoolWrap, DORYAdder, DORYHarmonizePass
 
 def get_input_channels(net : fx.GraphModule):
@@ -116,7 +116,7 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
         mult_attr = onnx.helper.make_attribute(key='mult_bits', value=requant_bits)
         n.attribute.append(mult_attr)
 
-def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False):
+def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False):
     net = net.eval()
 
 
@@ -139,7 +139,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         align_avgpool_pass = DORYHarmonizePass(in_shape=shape_in)
         net_integerized = align_avgpool_pass(net_integerized)
 
-    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap, DORYAdder))
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap, DORYAdder, PACTWrapMHSA))
 
     # the integerization pass annotates the conv layers with the number of
     # weight levels. from this information we can make a dictionary of the number of
@@ -157,9 +157,9 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                       test_input,
                       str(onnx_path),
                       export_params=True,
+                      verbose=False,
                       opset_version=opset_version,
-                      do_constant_folding=True,
-                      enable_onnx_checker=False)
+                      do_constant_folding=True)
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
@@ -169,8 +169,6 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
     # now we pass a test input through the model and log the intermediate
     # activations
 
-
-
     # make a forward hook to dump outputs of RequantShift layers
     acts = []
     def dump_hook(self, inp, outp, name):
@@ -178,25 +176,26 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         acts.append((name, torch.floor(outp[0])))
 
     for n in integerized_nodes:
-        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder)):
+        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
 
     # open the supplied input image
     if in_data is not None:
-        im_tensor = in_data.clone()
+        im_tensor = in_data.clone().to(dtype=torch.float64)
         net_integerized = net_integerized.to(dtype=torch.float64)
-        output = net_integerized(im_tensor.to(dtype=torch.float64))
-
+        output = net_integerized(im_tensor).to(dtype=torch.float64)
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
             t = t.squeeze(0)
+
             if t.dim()==3:
                 # expect a (C, H, W) tensor - DORY expects (H, W, C)
                 t = t.permute(1,2,0)
-            elif t.dim()==2:
-                # expect a (C, D) tensor - DORY expects (D, C)
-                t = t.permute(1,0)
+            #SCHEREMO: HACK HACK HACK HACK HACK HACK
+#             elif t.dim()==2:
+#                 # expect a (C, D) tensor - DORY expects (D, C)
+#                 t = t.permute(1,0)
             else:
                 print(f"Not permuting output of layer {layer_name}...")
 

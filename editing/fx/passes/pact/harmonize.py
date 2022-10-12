@@ -1,25 +1,25 @@
-# 
+#
 # harmonize.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
-
+#
+#
 
 from typing import Optional, Union
 import operator
@@ -40,14 +40,14 @@ from ...util import gm_modules, get_qualified_prefix, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 
-
 from .pact_util import PACT_symbolic_trace
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass, ModularizePass
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
 from functools import partial
 import copy
+
 
 class OpTree:
 
@@ -178,17 +178,76 @@ class OpTreeReplacementPass(FxPass):
         # and we're done...
         return gm
 
-class MatmulReplacementPass(OpTreeReplacementPass):
-    matmul_node_specs = [('call_function', (torch.bmm, torch.matmul)),
-                      ('call_method', ('matmul',))]
+class ConcatTreeReplacementPass(SequentialPass):
+    cat_node_specs = [('call_function', (torch.cat,))]
+    stack_node_specs = [('call_function', (torch.stack,))]
+
+    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3.):
+        self.n_levels = n_levels
+        self.init_clip = init_clip
+        self.nb_std = nb_std
+        passes = []
+        passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT", always_terminate=True))
+        passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
+        super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
+
+    def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
+
+    def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
+
+class TruedivReplacementPass(ModularizePass):
+
+    @staticmethod
+    def truediv_replacement_fn(node, Delta):
+        return (PACTDiv(Delta), node.args, node.kwargs)
+
+    def __init__(self, Delta=2**14, **kwargs):
+        self.kwargs = kwargs
+        target = [operator.truediv]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, Delta=Delta), name="DIV_REPLACEMENT_PASS")
+
+class MeanFunctionReplacementPass(ModularizePass):
+
+    @staticmethod
+    def mean_replacement_fn(node):
+        return (PACTMean(), node.args, node.kwargs)
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        super().__init__(node_specs=self.matmul_node_specs, replacement_fn=self.matmul_replacement_fn, name="MATMUL")
+        target = [torch.mean]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.mean_replacement_fn), name="MEAN_REPLACEMENT_PASS")
 
-    def matmul_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerMatmul(**self.kwargs)
+class MeanMethodReplacementPass(ModularizePass):
 
+    @staticmethod
+    def mean_replacement_fn(node):
+        return (PACTMean(), node.args, node.kwargs)
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        target = ['mean']
+        super().__init__(op='call_method', target=tuple(target), replacement_fn = partial(self.mean_replacement_fn), name="MEAN_REPLACEMENT_PASS")
+
+class MeanReplacementPass(SequentialPass):
+
+    def __init__(self, **kwargs):
+        passes = []
+        passes.append(MeanMethodReplacementPass())
+        passes.append(MeanFunctionReplacementPass())
+        super().__init__(*passes, name_prefix="_MEAN_REPLACEMENT_PASS")
+
+class MatmulReplacementPass(ModularizePass):
+
+    @staticmethod
+    def matmul_replacement_fn(node):
+        return (PACTIntegerMatmul(), node.args, node.kwargs)
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        target = [torch.matmul]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = self.matmul_replacement_fn, name="MATMUL_REPLACEMENT_PASS")
 
 class AddTreeReplacementPass(OpTreeReplacementPass):
     add_node_specs = [('call_function', (torch.add, operator.add)),
@@ -387,158 +446,295 @@ class LayerNormDisassemblePass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
         super().__init__(*passes, name_prefix='_LAYERNORM_DISASSEMBLE_PASS')
 
-def apply_pass_to_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, _tracer = None):
-
+def rqs_merge_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    wrap_node = matched_nodes[0]
+    rqs_1_node = matched_nodes[0]
+    rqs_2_node = matched_nodes[1]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    wrap_module = matched_modules[0]
-    n_levels = wrap_module.n_levels
-    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+    rqs_1 = matched_modules[0]
+    rqs_2 = matched_modules[1]
 
-    cloneModule = copy.deepcopy(wrap_module.module)
+    if not (rqs_1.signed == rqs_2.signed) or not (rqs_1.cmsis_requant == rqs_2.cmsis_requant):
+        return torch.nn.Sequential(rqs_1, rqs_2)
+
+    # If mixed, it's unsigned;
+    mixed = not (rqs_2.signed == rqs_1.signed)
+
+    signed = (rqs_2.signed and rqs_1.signed)
+
+    newMul = ((rqs_1.mul * rqs_2.mul)/min(rqs_1.div, rqs_2.div)).round()
+    newD = max(rqs_2.div, rqs_1.div)
+
+    if not rqs_1.cmsis_requant:
+        add1 = rqs_1.add - (0.5*rqs_1.div)
+        add2 = rqs_2.add - (0.5*rqs_2.div)
+        newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div)/min(rqs_1.div, rqs_2.div)).round() + newD//2
+    else:
+        add1 = rqs_1.add
+        add2 = rqs_2.add
+        newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div)/min(rqs_1.div, rqs_2.div)).round()
+
+    return RequantShift(newMul, newAdd, (rqs_2.n_levels_out)//(2**mixed), signed = signed, D=newD, cmsis_requant=rqs_1.cmsis_requant, requant_node=rqs_1.requant_node)
+
+class RQSMergePass(SequentialPass):
+    def __init__(self, **kwargs):
+        passes = []
+        pattern = nn.Sequential(RequantShift(torch.Tensor((1.,)), torch.Tensor((1.,)),1), RequantShift(torch.Tensor((1.,)),torch.Tensor((1.,)),1))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, rqs_merge_fun, f'_RQS_MERGE_PASS'))
+        super().__init__(*passes, name_prefix='_RQS_MERGE_PASS')
+
+def apply_wrap_module_fun(node, _pass, _tracer):
+
+    module = dict(node.graph._owning_module.named_modules())[node.target]
+
+    cloneModule = copy.deepcopy(module.module)
     fx_graph = _tracer.trace(cloneModule)
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
-
     fx_model = _pass.apply(fx_model)
-    node = PACTWrapModule(fx_model, n_levels, wrap_module._dict)
 
-    return node
+    returnNode = PACTWrapModule(fx_model, module.n_levels, module._dict, module.quantize, **module.actArgs)
+    return returnNode, node.args, node.kwargs
 
-
-class ApplyPassToWrapModule(SequentialPass):
+class ApplyPassToWrapModule(ModularizePass):
     def __init__(self, _pass, name=''):
-        passes = []
-        pattern = nn.Sequential(PACTWrapModule(nn.Identity(), n_levels=256))
-
+        pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
         tracer = LeafTracer(PACT_OPS_INCLUSIVE)
         trace = partial(custom_symbolic_trace, tracer=tracer)
 
-        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(apply_pass_to_wrap_module, _pass=_pass, _tracer=tracer), f'_WRAP_PASS_{name}_subpass'))
-        super().__init__(*passes, name_prefix='_WRAP_PASS_{name}_subpass')
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(apply_wrap_module_fun, _pass=_pass, _tracer=tracer), name=f"APPLY_TO_WRAP_PASS_{name}")
 
-def insert_final_activation(fx_model, n_levels):
+def integerize_wrap_module_fun(node, _pass, _tracer, _shape_fun: lambda node: node.meta['tensor_meta'].shape):
 
-    #     SCHEREMO: That's a hack
-    node = list(fx_model.graph.nodes.__reversed__())[1]
-    totidx = 0
-    with fx_model.graph.inserting_after(node):
+    #shape_in = _shape_fun(node)
+    shape_in = node.meta['shape_in']
+    eps_in = node.meta['quant'].eps_in[0]
+    runnablePass = _pass(shape_in, eps_in)
+    module = dict(node.graph._owning_module.named_modules())[node.target]
 
-        new_node_target = f'__QL__WRAPPASS__PACTAct_{totidx}'
-        target_prefix = get_qualified_prefix(node.target)
-        if type(target_prefix) == str and target_prefix != '':
-            new_node_target = '.'.join([target_prefix, new_node_target])
-
-        fx_model.add_submodule(new_node_target, PACTAsymmetricAct(n_levels, leaky=0, act_kind='identity', symm=True, init_clip='max', learn_clip=True))
-        #fx_model.add_submodule(new_node_target, qa.pact.PACTUnsignedAct(n_levels, leaky=0, act_kind='relu'))
-        new_node = fx_model.graph.call_module(new_node_target, args=tuple([node]))
-        totidx = totidx + 1
-
-    for output_node in list(node.users):
-        helperList = list(output_node.args)
-        for idx, arg in enumerate(helperList):
-            if arg == node:
-                helperList[idx] = new_node
-
-        output_node.args = tuple(helperList)
-
-    new_node.args = tuple([node])
-
-    # re-route the input of the second linop to the output of the asymmetric quant
-    # X ---> Y                X ---> PACTAct ---> Y
-    #    |             ====>
-    #    |--> PACTAct
-
-    fx_model.graph.lint()
-    fx_model.recompile()
-    return fx_model
-
-
-def integerize_wrap_module(gm : fx.GraphModule, match : Match, _pass = None, _tracer = None):
-
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    wrap_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    wrap_module = matched_modules[0]
-    n_levels = wrap_module.n_levels
-    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
-
-    # SCHEREMO: Workaround SPECIFICALLY for MultiHead Self-Attention
-    eps_in = torch.tensor(wrap_node.meta['quant'].eps_in[0])[0]
-    shapes_in = [wrap_node.meta['tensor_meta'].shape]*3
-    cloneModule = copy.deepcopy(wrap_module.module)
-
+    cloneModule = copy.deepcopy(module.module)
     fx_graph = _tracer.trace(cloneModule)
     fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
+    fx_model = runnablePass.apply(fx_model)
+    returnNode = PACTWrapModule(fx_model, module.n_levels, module._dict, False, **module.actArgs)
+    return returnNode, node.args, node.kwargs
 
-    # fx_model = insert_final_activation(fx_model, n_levels)
-
-    IntegerizePass = _pass(shapes_in, eps_in = eps_in)
-    fx_model = IntegerizePass.apply(fx_model)
-    node = PACTWrapModule(fx_model, n_levels, wrap_module._dict)
-
-    return node
-
-
-class IntegerizeWrapModules(SequentialPass):
-    def __init__(self, _pass, name=''):
-        passes = []
-        pattern = nn.Sequential(PACTWrapModule(nn.Identity(), 256))
-
+class IntegerizeWrapModule(ModularizePass):
+    def __init__(self, _pass, name='', shape_fun = None):
+        pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
         tracer = LeafTracer(PACT_OPS_INCLUSIVE)
         trace = partial(custom_symbolic_trace, tracer=tracer)
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(integerize_wrap_module_fun, _pass=_pass, _tracer=tracer, _shape_fun=shape_fun), name=f"APPLY_TO_WRAP_PASS_{name}")
 
-        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(integerize_wrap_module, _pass=_pass, _tracer=tracer), f'_WRAP_PASS_INTEGERIZE_subpass'))
-        super().__init__(*passes, name_prefix='_WRAP_PASS_INTEGERIZE_subpass')
+def wrap_module_fun(node, n_levels, quantize, **actArgs):
+    module = dict(node.graph._owning_module.named_modules())[node.target]
+    returnNode = PACTWrapModule(module, n_levels, module.__dict__, quantize = quantize, **actArgs)
+    return returnNode, node.args, node.kwargs
 
-def wrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None, n_levels=256, _tracer=None, **kwargs):
+class WrapModulePass(ModularizePass):
+    def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, quantize = False, **kwargs):
+        self.kwargs = kwargs
+        pattern = [wrapClassCallable()]
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, **self.kwargs, quantize=quantize), name="WRAP_REPLACEMENT_PASS")
 
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    wrap_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    wrap_module = matched_modules[0]
-    assert isinstance(wrap_module, wrapClass), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+# def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
 
-    cloneModule = copy.deepcopy(wrap_module)
+#     print("Found match!")
 
-    fx_graph = _tracer.trace(cloneModule)
-    fx_model = fx.GraphModule(_tracer.root, fx_graph, _tracer.root.__class__.__name__)
+#     def reqShiftParams(module):
+#         return (module.mul, module.add, module.div)
 
-    x_model = insert_final_activation(fx_model, n_levels)
+#     modules = gm_modules(gm)
+#     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+#     wrap_node = matched_nodes[0]
+#     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+#     wrap_module = matched_modules[0]
+#     assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
 
-    node = PACTWrapModule(fx_model, n_levels, wrap_module.__dict__)
+#     try:
+#         dim = wrap_module._dict['out_dim']
+#         dim_head = wrap_module._dict['dim']
+#         heads = wrap_module._dict['h']
+#     except Exception as e:
+#         import IPython; IPython.embed()
+#     mod = dict(wrap_module.module.named_parameters())
+#     wq_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.weight']
+#     wk_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.weight']
+#     wv_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_2.weight']
+#     wo_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_3.weight']
 
-    return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
+#     try:
+#         wq_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.bias']
+#     except:
+#         wq_bias = torch.Tensor((0,))
+#     try:
+#         wk_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.bias']
+#     except:
+#         wk_bias = torch.Tensor((0,))
+#     try:
+#         wv_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_2.bias']
+#     except:
+#         wv_bias = torch.Tensor((0,))
+#     try:
+#         wo_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_3.bias']
+#     except:
+#         wo_bias = torch.Tensor((0,))
 
-class WrapModulePass(SequentialPass):
-    def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, **kwargs):
-        passes = []
-        pattern = nn.Sequential(wrapClassCallable())
+#     wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
+#     wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
+#     wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
+#     preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
+#     postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_4)
+#     wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_5)
 
-        tracer = LeafTracer(PACT_OPS | set([wrapClass]))
-        trace = partial(custom_symbolic_trace, tracer=tracer)
+#     sm = wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGER_SOFTMAX_PASS_0
 
-        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(wrap_module_fun, wrapClass=wrapClass, n_levels=n_levels, _tracer=tracer), f'_WRAP_{name}_PASS'))
-        super().__init__(*passes, name_prefix='_WRAP_{name}_PASS')
+#     isoftmaxA = sm.coeffA
+#     isoftmaxB = sm.coeffB
+#     isoftmaxC = sm.coeffC
+#     isoftmaxlog2 = sm.log2
+#     n_levels = wrap_module.n_levels
 
-def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
+#     node = PACTWrapMHSA(wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+#                         wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+#                         wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+#                         preattn_requant_mul, preattn_requant_div,
+#                         postattn_requant_mul, postattn_requant_div,
+#                         wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+#                         dim, heads, dim_head,
+#                         isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels)
 
+#     return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
+
+def unwrap_linearattention_fun(wrap_module):
     def reqShiftParams(module):
         return (module.mul, module.add, module.div)
 
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    wrap_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    wrap_module = matched_modules[0]
-    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
+    try:
+        dim = wrap_module._dict['out_dim']
+        dim_head = wrap_module._dict['dim']
+        heads = wrap_module._dict['h']
+    except Exception as e:
+        import IPython; IPython.embed()
+    mod = dict(wrap_module.module.named_parameters())
+    wq_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.weight']
+    wk_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.weight']
+    wv_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_2.weight']
+    wo_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_3.weight']
 
     try:
-        dim = wrap_module._dict['dim']
-        dim_head = wrap_module._dict['inner_dim']
+        wq_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.bias']
+    except:
+        wq_bias = torch.Tensor((0,))
+    try:
+        wk_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.bias']
+    except:
+        wk_bias = torch.Tensor((0,))
+    try:
+        wv_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_2.bias']
+    except:
+        wv_bias = torch.Tensor((0,))
+    try:
+        wo_bias = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_3.bias']
+    except:
+        wo_bias = torch.Tensor((0,))
+
+    #import IPython; IPython.embed()
+
+    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism.kernel_func_1._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
+    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism.kernel_func_2._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_1)
+    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
+    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
+    normalizer_requant_mul, normalizer_requant_add, normalizer_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_2)
+    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
+    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
+
+    div = wrap_module.module._QL_TRUEDIV_REPLACEMENT_PASS_MODULARIZED_0
+    Delta = div.Delta
+    eps = div.eps
+    act_type = 0
+
+    n_levels = wrap_module.n_levels
+
+    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+            wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+            wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+            preattn_requant_mul, preattn_requant_div,
+            normalizer_requant_mul, normalizer_requant_div,
+            postattn_requant_mul, postattn_requant_div,
+            wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+            dim, heads, dim_head,
+            Delta, eps, act_type, n_levels), {}
+
+def unwrap_clca_fun(wrap_module):
+    def reqShiftParams(module):
+        return (module.mul, module.add, module.div)
+
+    try:
+        dim = wrap_module._dict['out_dim']
+        dim_head = wrap_module._dict['dim']
+        heads = wrap_module._dict['h']
+        out_dim = wrap_module._dict['out_dim']
+    except Exception as e:
+        import IPython; IPython.embed()
+    mod = dict(wrap_module.module.named_parameters())
+    wq_weight = mod['WQ._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_0.weight']
+    wkv_weight = mod['WKV._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_1.weight']
+    wo_weight = mod['out._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_2.weight']
+
+    try:
+        wq_bias = mod['WQ._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_0.bias']
+    except:
+        wq_bias = torch.Tensor((0,))
+    try:
+        wkv_bias = mod['WKV._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_1.bias']
+    except:
+        wkv_bias = torch.Tensor((0,))
+    try:
+        wo_bias = mod['out._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_2.bias']
+    except:
+        wo_bias = torch.Tensor((0,))
+
+    #import IPython; IPython.embed()
+
+    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module.WQ._QL_REPLACED__INTEGERIZE_BN1D_UNSIGNED_ACT_PASS_0)
+    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
+    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module.WKV._QL_REPLACED__INTEGERIZE_BN1D_SIGNED_ACT_PASS_0)
+
+    kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
+
+    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
+
+    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
+
+    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module.out._QL_REPLACED__INTEGERIZE_BN1D_SIGNED_ACT_PASS_1)
+
+    div = wrap_module.module._QL_TRUEDIV_REPLACEMENT_PASS_MODULARIZED_1
+    Delta = div.Delta
+    eps = div.eps
+    eta = div.eta
+    act_type = 0
+
+    n_levels = wrap_module.n_levels
+
+    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_add, wq_requant_div,
+            wkv_weight, wkv_bias, wk_requant_mul, wk_requant_add, wk_requant_div,
+            wv_requant_mul, wv_requant_add, wv_requant_div,
+            kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div,
+            preattn_requant_mul, preattn_requant_add, preattn_requant_div,
+            postattn_requant_mul, postattn_requant_add, postattn_requant_div,
+            wo_weight, wo_bias, wo_requant_mul, wo_requant_add, wo_requant_div,
+            dim, heads, dim_head, out_dim,
+            Delta, eps, eta, act_type, n_levels), {}
+
+
+def unwrap_mhsa_fun(wrap_module):
+    def reqShiftParams(module):
+        return (module.mul, module.add, module.div)
+
+    try:
+        dim = wrap_module._dict['out_dim']
+        dim_head = wrap_module._dict['dim']
         heads = wrap_module._dict['h']
     except Exception as e:
         import IPython; IPython.embed()
@@ -580,24 +776,29 @@ def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
     isoftmaxlog2 = sm.log2
     n_levels = wrap_module.n_levels
 
-    node = PACTWrapMHSA(wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
-                        wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
-                        wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
-                        preattn_requant_mul, preattn_requant_div,
-                        postattn_requant_mul, postattn_requant_div,
-                        wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
-                        dim, heads, dim_head,
-                        isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels)
+    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
+            wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+            wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
+            preattn_requant_mul, preattn_requant_div,
+            postattn_requant_mul, postattn_requant_div,
+            wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
+            dim, heads, dim_head,
+            isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels, wrap_module), {}
 
-    return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
+def unwrap_module_fun(node, wrapClass = None, modules = None, unwrapFunction = None):
+    wrap_module = modules[node.target]
+    assert isinstance(wrap_module, PACTWrapModule), f"_replacement_fun got bad match - expected LayerNorm, got {type()}"
 
-class UnwrapModulePass(SequentialPass):
-    def __init__(self, ReplacementClass, name=''):
+    args, kwargs = unwrapFunction(wrap_module)
+
+    retNode = wrapClass(*args, **kwargs)
+
+    return retNode, node.args, node.kwargs
+
+class UnwrapModulePass(ModularizePass):
+    def __init__(self, ReplacementClass, ReplacementFunction = unwrap_mhsa_fun, modules = None, name=''):
         passes = []
         pattern = nn.Sequential(PACTWrapModule(nn.Identity(), 256))
-
         tracer = LeafTracer(PACT_OPS)
         trace = partial(custom_symbolic_trace, tracer=tracer)
-
-        passes.append(ReplaceSequentialPatternPass(pattern, trace, partial(unwrap_module_fun, wrapClass=ReplacementClass), f'_UNWRAP_{name}_PASS'))
-        super().__init__(*passes, name_prefix='_UNWRAP_{name}_PASS')
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(unwrap_module_fun, wrapClass = ReplacementClass, modules=modules, unwrapFunction= ReplacementFunction), name=f"UNWRAP_PASS_{name}")
