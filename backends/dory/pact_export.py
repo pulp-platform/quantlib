@@ -210,7 +210,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
         for i, (lname, t) in enumerate(acts):
             save_beautiful_text(t, lname, f"out_layer{i}")
 
-        
+
     cnn_dory_config = {"BNRelu_bits": 32,
                        "onnx_file": str(onnx_path.resolve()),
                        "code reserved space": 195000,
@@ -218,7 +218,7 @@ def export_net(net : nn.Module, name : str, out_dir : str, eps_in : float, in_da
                        "input_bits": 8,
                        "input_signed": True}
 
-    with open(out_path.joinpath(f"config_{name}_cnn.json"), "w") as fp:
+    with open(out_path.joinpath(f"config_{name}.json"), "w") as fp:
         json.dump(cnn_dory_config, fp, indent=4)
 
     #done!
