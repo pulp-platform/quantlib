@@ -222,26 +222,23 @@ class QuantInfo:
 class AnnotateEpsPass(FxPass):
     def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32, signed_in : bool = True, prop_eps : bool = True, prop_n_levels : bool = True, prop_sign : bool = True):
         super(AnnotateEpsPass, self).__init__()
+        self.noeps = False
         if prop_eps:
             if isinstance(eps_in, Iterable):
                 try:
                     eps_in.__iter__()
                     self.eps_in = eps_in
-                    self.noeps = False
                 except:
                     self.eps_in = [eps_in]
-                    self.noeps = False
             elif not isinstance(eps_in, torch.Tensor) and eps_in is not None:
                 self.eps_in = [torch.tensor(eps_in).reshape(-1)]
-                self.noeps = False
             elif eps_in is None:
                 self.eps_in = [torch.tensor(1.0).reshape(1)]
                 self.noeps = True
             else:
                 self.eps_in = [eps_in.reshape(-1)]
-                self.noeps = False
         else:
-            self.eps_in = None
+            self.eps_in = [None]
 
         if n_levels_in is None:
             # providing no n_levels_in is equivalent to providing no eps_in
@@ -263,13 +260,13 @@ class AnnotateEpsPass(FxPass):
         for node in gm.graph.nodes:
             if node.op == 'placeholder':
 
-                node.meta['quant'] = QuantInfo(eps_in=self.eps_in, eps_out=self.eps_in, n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in, signed_in=[self.signed_in], signed_out=self.signed_in)
+                node.meta['quant'] = QuantInfo(eps_in=[self.eps_in[placeHolderIdx]], eps_out=self.eps_in[placeHolderIdx], n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in, signed_in=[self.signed_in], signed_out=self.signed_in)
                 # an equivalent for noeps for signedness is not yet supported...
 
                 placeHolderIdx += 1
 
                 for u in node.users:
-                    if self.noeps:
+                    if self.noeps and self.prop_eps:
                         assert u.op == 'call_module' and isinstance(module_of_node(gm, u), _ORIGINAL_EPS_MODULES), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
                     #u.meta['quant'] = QuantInfo(eps_in=torch.tensor(1.0), eps_out=torch.tensor(-1.0))
             else:

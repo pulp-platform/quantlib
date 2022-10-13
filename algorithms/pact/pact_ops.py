@@ -591,6 +591,25 @@ class PACTIntegerExp(torch.nn.Module):
             return self.MyExp.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
         else:
             return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+
+class _PACTEps(nn.Module):
+    def __init__(self, startedFlag=False):
+        super().__init__()
+        self.register_buffer('_eps_in',torch.Tensor((1.,)))
+        if startedFlag:
+            self.started = False
+        self.locked = False
+
+    def set_eps_in(self, eps_in_list):
+        self._eps_in[:] = eps_in_list[0]
+
+    def get_eps_in(self):
+        return self._eps_in
+
+    @property
+    def eps_in(self):
+        return self.get_eps_in()
+
 class PACTSoftmax(_PACTEps):
     def __init__(self, n_levels : int = 256, dim: int = 1):
         super().__init__()
@@ -934,6 +953,163 @@ class PACTIntegerLayerNorm(torch.nn.Module):
 
     def forward(self, x):
         return self.MyLayerNorm.apply(x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+class _PACTLinOp:
+    # a helper class to provide initialization code common to all PACT/TQT
+    # linear operators in the setup_quant_params() function.
+    # always call nn.Module.__init__() before calling setup_quant_params()!
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def expand_bounds(self, t):
+        return t
+
+    # ensure backward compatibility with checkpoints from before the addition
+    # of "params_frozen" by adding this as a load_state_dict_pre_hook
+    def make_state_dicts_compat(self, state_dict, prefix, _, strict, *args, **kwargs):
+        if strict:
+            to_fix = ["params", "weight"]
+            try:
+                if self.bias is not None:
+                    to_fix.append("bias")
+            except AttributeError:
+                pass
+            for p in to_fix:
+                if prefix+p+"_frozen" not in state_dict.keys():
+                    state_dict[prefix+p+"_frozen"] = getattr(self, p+"_frozen")
+
+    def setup_quant_params(
+            self,
+            n_levels : int = 256,
+            quantize : str = 'per_layer',
+            init_clip : str= 'sawb_asymm',
+            learn_clip : bool = False,
+            symm_wts : bool = True,
+            nb_std : Union[int, float]= 3,
+            tqt : bool = False,
+            tqt_beta : float = 0.9,
+            tqt_clip_grad : bool = True,
+            rounding : bool = True
+    ):
+        """
+        :param n_levels: Number of weight quantization levels
+        :param quantize: how to quantize weights - 'per_layer' or 'per_channel'
+        :param init_clip: how weight clipping parameters should be initialized - 'sawb_symm', 'sawb_asymm', 'max' or 'std'
+        :param learn_clip: whether clipping bound(s) should be learned
+        :param symm_wts: Indicates that the weights should cover a symmetrical range around 0. If n_levels is an odd number,
+               the integer representations of the weights will go from -n_levels/2 to n_levels/2-1, and the clipping range will
+               be set accordingly. If init_clip is 'sawb_symm'/'sawb_asymm', and `learn_clip` or `tqt` are True, the symm_wts parameter has no effect.
+        """
+
+        quantize = quantize.lower()
+        init_clip = init_clip.lower()
+        assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
+        if init_clip == 'const':
+            assert not symm_wts, f"{self.__class__.__name__}: argument combination init_clip='const' and symm_wts=True not supported!"
+
+        super(_PACTLinOp, self).__init__()
+        self.n_levels = n_levels
+        self.quantize = quantize
+        self.init_clip = init_clip
+        self.learn_clip = learn_clip
+        self.rounding = rounding
+        # this member indicates that quantization is enabled
+        self.register_buffer('started', torch.tensor(False))
+        self.symm_wts = symm_wts
+        self.nb_std = nb_std
+        clip_lo = torch.tensor(-1.)
+        # clip_lo & clip_hi should have dimension (out_channels, 1, 1, 1) in case of per-channel quantization.
+        # The PACTController will take care of managing them according to the configuration (per-channel, per-layer)
+        clip_lo = self.expand_bounds(clip_lo)
+        self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip and not tqt)
+        self.register_buffer('clip_gradient', torch.tensor(True))
+
+
+        clip_hi = torch.tensor(1.)
+        clip_hi = self.expand_bounds(clip_hi)
+        # in the case when learn_clip and symm_wts are both True, clip_hi is not actually used;
+        # instead the upper clipping bound is calculated from clip_lo with AlmostSymmQuantFunc.
+        # This way, only the lower clip bound is
+        self.clip_hi = nn.Parameter(clip_hi, requires_grad=((learn_clip and not tqt) and not symm_wts))
+        # to provide convenient access for the controller to the clipping params, store them in a dict.
+        self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
+
+        if tqt:
+            assert (learn_clip and symm_wts), f"{self.__class__.__name__}: TQT quantization requires learn_clip=True and symm_wts=True, you provided learn_clip={learn_clip}, symm_wts={symm_wts}"
+            self.register_parameter("log_t", nn.Parameter(torch.zeros_like(self.clip_lo.data), requires_grad=True))
+            self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
+            self.register_buffer("tqt_running_beta", torch.tensor(1.))
+            self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
+            self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
+            self.clipping_params["log_t"] = self.log_t
+        else:
+            self.tqt_beta = torch.tensor(tqt_beta)
+            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
+        self.tqt = tqt
+
+        # this member indicates that the module's clipping bounds should not be
+        # touched. it is set by the controller
+        self.register_buffer('frozen', torch.tensor(False))
+        # this member indicates that parameters (weight + bias) of the layer
+        # are frozen
+        self.register_buffer('params_frozen', torch.tensor(False))
+
+    def get_eps_w(self):
+        """
+        :return: epsilon of the weight quantization.
+        """
+        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).clone().detach()
+
+    def get_eps_out(self, eps_in, *args, **kwargs):
+        """
+        :return: epsilons of the output pre-activations
+        """
+        return self.get_eps_w()*eps_in
+
+    @property
+    def pact_repr_str(self):
+        return f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
+
+    def extra_repr(self):
+        # this might be a little bit dangerous - always inherit from the
+        # nn.Module you're extending FIRST and PACTLinOp SECOND
+        r = super(self.__class__, self).extra_repr()
+        r += self.pact_repr_str
+        return r
+
+    @property
+    def weight_q(self):
+        if self.params_frozen:
+            wt = self.weight_frozen
+        else:
+            wt = self.weight
+        if not self.tqt:
+            if self.learn_clip and self.symm_wts:
+                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
+            else:
+                clip_upper = self.clip_hi
+
+            return PACTQuantize(wt, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
+        else:
+            return TQTQuantize(wt, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, rounding=True)
+
+    @property
+    def weight_int(self):
+        return (self.weight_q / self.get_eps_w()).detach().clone().round()
+
+    # not nice: inheriting classes must set up weight_frozen/bias_frozen in
+    # their constructors!!!
+    def freeze_params(self):
+        self.weight_frozen.copy_(self.weight.data)
+        if self.bias is not None:
+            self.bias_frozen.copy_(self.bias.data)
+
+        self.params_frozen |= True
+
+    def unfreeze_params(self):
+        self.params_frozen &= False
+
 
 class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
@@ -1463,180 +1639,7 @@ class PACTIntegerMatmul(torch.nn.Module):
             mulresult.eps = x.eps * y.eps
         return mulresult
 
-class _PACTEps(nn.Module):
-    def __init__(self, startedFlag=False):
-        super().__init__()
-        self.register_buffer('_eps_in',torch.Tensor((1.,)))
-        if startedFlag:
-            self.started = False
-        self.locked = False
 
-    def set_eps_in(self, eps_in_list):
-        self._eps_in[:] = eps_in_list[0]
-
-    def get_eps_in(self):
-        return self._eps_in
-
-    @property
-    def eps_in(self):
-        return self.get_eps_in()
-
-class _PACTLinOp:
-    # a helper class to provide initialization code common to all PACT/TQT
-    # linear operators in the setup_quant_params() function.
-    # always call nn.Module.__init__() before calling setup_quant_params()!
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def expand_bounds(self, t):
-        return t
-
-    # ensure backward compatibility with checkpoints from before the addition
-    # of "params_frozen" by adding this as a load_state_dict_pre_hook
-    def make_state_dicts_compat(self, state_dict, prefix, _, strict, *args, **kwargs):
-        if strict:
-            to_fix = ["params", "weight"]
-            try:
-                if self.bias is not None:
-                    to_fix.append("bias")
-            except AttributeError:
-                pass
-            for p in to_fix:
-                if prefix+p+"_frozen" not in state_dict.keys():
-                    state_dict[prefix+p+"_frozen"] = getattr(self, p+"_frozen")
-
-    def setup_quant_params(
-            self,
-            n_levels : int = 256,
-            quantize : str = 'per_layer',
-            init_clip : str= 'sawb_asymm',
-            learn_clip : bool = False,
-            symm_wts : bool = True,
-            nb_std : Union[int, float]= 3,
-            tqt : bool = False,
-            tqt_beta : float = 0.9,
-            tqt_clip_grad : bool = True,
-            rounding : bool = True
-    ):
-        """
-        :param n_levels: Number of weight quantization levels
-        :param quantize: how to quantize weights - 'per_layer' or 'per_channel'
-        :param init_clip: how weight clipping parameters should be initialized - 'sawb_symm', 'sawb_asymm', 'max' or 'std'
-        :param learn_clip: whether clipping bound(s) should be learned
-        :param symm_wts: Indicates that the weights should cover a symmetrical range around 0. If n_levels is an odd number,
-               the integer representations of the weights will go from -n_levels/2 to n_levels/2-1, and the clipping range will
-               be set accordingly. If init_clip is 'sawb_symm'/'sawb_asymm', and `learn_clip` or `tqt` are True, the symm_wts parameter has no effect.
-        """
-
-        quantize = quantize.lower()
-        init_clip = init_clip.lower()
-        assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
-        if init_clip == 'const':
-            assert not symm_wts, f"{self.__class__.__name__}: argument combination init_clip='const' and symm_wts=True not supported!"
-
-        super(_PACTLinOp, self).__init__()
-        self.n_levels = n_levels
-        self.quantize = quantize
-        self.init_clip = init_clip
-        self.learn_clip = learn_clip
-        self.rounding = rounding
-        # this member indicates that quantization is enabled
-        self.register_buffer('started', torch.tensor(False))
-        self.symm_wts = symm_wts
-        self.nb_std = nb_std
-        clip_lo = torch.tensor(-1.)
-        # clip_lo & clip_hi should have dimension (out_channels, 1, 1, 1) in case of per-channel quantization.
-        # The PACTController will take care of managing them according to the configuration (per-channel, per-layer)
-        clip_lo = self.expand_bounds(clip_lo)
-        self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip and not tqt)
-        self.register_buffer('clip_gradient', torch.tensor(True))
-
-
-        clip_hi = torch.tensor(1.)
-        clip_hi = self.expand_bounds(clip_hi)
-        # in the case when learn_clip and symm_wts are both True, clip_hi is not actually used;
-        # instead the upper clipping bound is calculated from clip_lo with AlmostSymmQuantFunc.
-        # This way, only the lower clip bound is
-        self.clip_hi = nn.Parameter(clip_hi, requires_grad=((learn_clip and not tqt) and not symm_wts))
-        # to provide convenient access for the controller to the clipping params, store them in a dict.
-        self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
-
-        if tqt:
-            assert (learn_clip and symm_wts), f"{self.__class__.__name__}: TQT quantization requires learn_clip=True and symm_wts=True, you provided learn_clip={learn_clip}, symm_wts={symm_wts}"
-            self.register_parameter("log_t", nn.Parameter(torch.zeros_like(self.clip_lo.data), requires_grad=True))
-            self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
-            self.register_buffer("tqt_running_beta", torch.tensor(1.))
-            self.register_buffer("tqt_running_grad_var", torch.zeros_like(self.clip_lo.data))
-            self.register_buffer("tqt_clip_grad", torch.tensor(tqt_clip_grad))
-            self.clipping_params["log_t"] = self.log_t
-        else:
-            self.tqt_beta = torch.tensor(tqt_beta)
-            self.tqt_clip_grad = torch.tensor(tqt_clip_grad)
-        self.tqt = tqt
-
-        # this member indicates that the module's clipping bounds should not be
-        # touched. it is set by the controller
-        self.register_buffer('frozen', torch.tensor(False))
-        # this member indicates that parameters (weight + bias) of the layer
-        # are frozen
-        self.register_buffer('params_frozen', torch.tensor(False))
-
-    def get_eps_w(self):
-        """
-        :return: epsilon of the weight quantization.
-        """
-        return ((self.clip_hi-self.clip_lo)/(self.n_levels-1)).clone().detach()
-
-    def get_eps_out(self, eps_in, *args, **kwargs):
-        """
-        :return: epsilons of the output pre-activations
-        """
-        return self.get_eps_w()*eps_in
-
-    @property
-    def pact_repr_str(self):
-        return f", n_levels={self.n_levels}, quantize='{self.quantize}', init_clip='{self.init_clip}', learn_clip={self.learn_clip}, symm_wts={self.symm_wts}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
-
-    def extra_repr(self):
-        # this might be a little bit dangerous - always inherit from the
-        # nn.Module you're extending FIRST and PACTLinOp SECOND
-        r = super(self.__class__, self).extra_repr()
-        r += self.pact_repr_str
-        return r
-
-    @property
-    def weight_q(self):
-        if self.params_frozen:
-            wt = self.weight_frozen
-        else:
-            wt = self.weight
-        if not self.tqt:
-            if self.learn_clip and self.symm_wts:
-                clip_upper = AlmostSymmQuantFunc.apply(self.clip_lo, self.n_levels)
-            else:
-                clip_upper = self.clip_hi
-
-            return PACTQuantize(wt, self.get_eps_w(), self.clip_lo, clip_upper, floor=False, clip_gradient=self.clip_gradient)
-        else:
-            return TQTQuantize(wt, self.get_eps_w(), self.log_t, self.clip_lo, self.clip_hi, self.tqt_beta, self.tqt_running_grad_var, self.tqt_running_beta, self.tqt_clip_grad, rounding=True)
-
-    @property
-    def weight_int(self):
-        return (self.weight_q / self.get_eps_w()).detach().clone().round()
-
-    # not nice: inheriting classes must set up weight_frozen/bias_frozen in
-    # their constructors!!!
-    def freeze_params(self):
-        self.weight_frozen.copy_(self.weight.data)
-        if self.bias is not None:
-            self.bias_frozen.copy_(self.bias.data)
-
-        self.params_frozen |= True
-
-    def unfreeze_params(self):
-        self.params_frozen &= False
 
 
 
