@@ -161,12 +161,14 @@ class BBBOPComplexityRegularizer(BBRegularizer):
     def register_layers(self, layers : dict):
         assert len(layers) in [1,2], f"BBBOPComplexityRegularizer must take 1 or 2 layers - got {len(layers)} instead!"
         print(f"BBBOPComplexityRegularizer for layers {[k for k in layers.keys()]} registered")
-        op_layer_and_props = [l for l in layers.values() if isinstance(l[0], tuple(_BB_LINOPS))][0]
+        self.op_layer_name, op_layer_and_props = [(k, l) for k, l in layers.items() if isinstance(l[0], tuple(_BB_LINOPS))][0]
         self.op_layer = op_layer_and_props[0]
         self.loss_scale = op_layer_and_props[1]['macs']/op_layer_and_props[1]['max_macs']
+        #print(f"loss_scale: {self.loss_scale}, nmacs: {op_layer_and_props[1]['macs']}, max_macs: {op_layer_and_props[1]['max_macs']}")
+        self.act_layer_name = None
         act_layer = None
         if len(layers) != 1:
-            act_layer_and_props = [v for k, v in layers.items() if v[0] is not self.op_layer][0]
+            self.act_layer_name, act_layer_and_props = [(k, v) for k, v in layers.items() if v[0] is not self.op_layer][0]
             act_layer = act_layer_and_props[0]
 
         self.act_layer = act_layer
@@ -215,8 +217,11 @@ class BBBOPComplexityRegularizer(BBRegularizer):
             loss_term = torch.sum(joint_ccdf * bop_per_mac)
         else:
             loss_term = torch.sum(cum_op_ccdfs * op_precs)
+            #print(f"op loss term for layer {self.op_layer_name}: {loss_term}")
             if self.act_layer is not None and isinstance(self.act_layer, BBAct):
-                loss_term += torch.sum(cum_act_ccdfs * act_precs)
+                act_loss_term = torch.sum(cum_act_ccdfs * act_precs)
+                #print(f"activation loss term for layer {self.act_layer_name}: {act_loss_term}")
+                loss_term += act_loss_term
 
         #finally, weight everything by #MACs/#max_MACS
         return self.loss_scale * loss_term
