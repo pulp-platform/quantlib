@@ -145,7 +145,8 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
                       export_params=True,
                       verbose=False,
                       opset_version=opset_version,
-                      do_constant_folding=True)
+                      do_constant_folding=True,
+                      keep_initializers_as_inputs=True)
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
@@ -170,7 +171,7 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     if in_data is not None:
         im_tensor = in_data.clone().to(dtype=torch.float64)
         net_integerized = net_integerized.to(dtype=torch.float64)
-        output = net_integerized(im_tensor).to(dtype=torch.float64)
+        output = net_integerized(im_tensor)[2].to(dtype=torch.float64)
         # now, save everything into beautiful text files
         def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
             t = t.squeeze(0)
@@ -179,9 +180,9 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
                 # expect a (C, H, W) tensor - DORY expects (H, W, C)
                 t = t.permute(1,2,0)
             #SCHEREMO: HACK HACK HACK HACK HACK HACK
-#             elif t.dim()==2:
+            elif t.dim()==2:
 #                 # expect a (C, D) tensor - DORY expects (D, C)
-#                 t = t.permute(1,0)
+                t = t.permute(1,0)
             else:
                 print(f"Not permuting output of layer {layer_name}...")
 

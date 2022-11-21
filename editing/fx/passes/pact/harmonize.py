@@ -45,6 +45,9 @@ from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_t
 
 from functools import partial
 import copy
+from collections import OrderedDict
+
+import operator
 
 
 class OpTree:
@@ -189,6 +192,46 @@ class ConcatTreeReplacementPass(SequentialPass):
 
     def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
+
+class Conv2DModularizePass(ModularizePass):
+
+    @staticmethod
+    def conv2dreplacement(node):
+        # SCHEREMO: Introspection seems to fail for some reason? Workaround:
+
+        default_conv2dargs = OrderedDict({'input': None, 'weight': None, 'bias': None, 'stride':1, 'padding': 0, 'dilation': 1, 'groups': 1})
+        conv2dargs = copy.deepcopy(default_conv2dargs)
+        for idx, (key, arg) in enumerate(zip(list(default_conv2dargs.keys())[:len(node.args)], node.args)):
+            conv2dargs[key] = arg
+        for key, value in node.kwargs.items():
+            conv2dargs[key] = value
+
+        _input = conv2dargs['input']
+        weight = conv2dargs['weight']
+
+        del conv2dargs['input']
+        del conv2dargs['weight']
+
+        weightTensor = operator.attrgetter(weight.target)(weight.graph._owning_module)
+
+        in_channels = weightTensor.shape[1]*conv2dargs['groups']
+        out_channels = weightTensor.shape[0]
+        kernel_size = (weightTensor.shape[2], weightTensor.shape[3])
+
+        conv2dargs['in_channels'] = in_channels
+        conv2dargs['out_channels'] = out_channels
+        conv2dargs['kernel_size'] = kernel_size
+
+        replacement_node = torch.nn.Conv2d(**conv2dargs)
+        replacement_node._parameters['weight'] = weightTensor
+
+        return (replacement_node, (_input,), {})
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        target = [torch.nn.functional.conv2d]
+        super().__init__(op='call_function', target=tuple(target), replacement_fn = self.conv2dreplacement, name="CONV2D_REPLACEMENT_PASS")
+
 
 class TruedivReplacementPass(ModularizePass):
 
@@ -762,6 +805,6 @@ class UnwrapModulePass(ModularizePass):
     def __init__(self, ReplacementClass, ReplacementFunction = unwrap_mhsa_fun, modules = None, name=''):
         passes = []
         pattern = nn.Sequential(PACTWrapModule(nn.Identity(), 256))
-        tracer = LeafTracer(PACT_OPS)
+        tracer = LeafTracer(PACT_OPS_INCLUSIVE)
         trace = partial(custom_symbolic_trace, tracer=tracer)
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(unwrap_module_fun, wrapClass = ReplacementClass, modules=modules, unwrapFunction= ReplacementFunction), name=f"UNWRAP_PASS_{name}")

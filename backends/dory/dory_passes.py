@@ -12,7 +12,6 @@ from quantlib.editing.fx.passes import SequentialPass, ReplaceSequentialPatternP
 from quantlib.editing.fx.util import get_ordered_active_nodes, module_of_node
 from quantlib.editing.fx.passes.pact import PACT_symbolic_trace, OpTree, OpTreeReplacementPass
 
-
 class AvgPoolWrap(nn.Sequential):
     # the avg pool wrapper is identical to nn.Sequential, we just need it to
     # distinguish wrapped AvgPool nodes
@@ -128,6 +127,7 @@ class DORYAdder(nn.Module):
 
     def forward(self, x1, x2):
         return self.DORYAdderFun.apply(x1, self.in1_requant, x2, self.in2_requant, self.out_requant)
+        #return self.DORYAdderFun.forward(None, x1, self.in1_requant, x2, self.in2_requant, self.out_requant)
 
 
 class DORYReplaceAddersPass(OpTreeReplacementPass):
@@ -148,12 +148,15 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
     @staticmethod
     def get_input_requant(gm : fx.GraphModule, n : fx.Node):
         inp = n.all_input_nodes[0]
-        assert inp.op == "call_module", "DORYReplaceAddersPass found a RequantShift node ({n}) with a very strange input node ({inp}) whose op is not 'call_module' but {inp.op}..."
+        assert inp.op == "call_module", f"DORYReplaceAddersPass found a RequantShift node ({n}) with a very strange input node ({inp}) whose op is not 'call_module' but {inp.op}..."
         inp_module = module_of_node(gm, inp)
-        try:
-            assert len(n.users) == 1, f"DORYReplaceAddersPass found a RequantShift going into an adder with <1 ({len(inp.users)}) users at node {inp}"
-        except AssertionError:
-            import ipdb; ipdb.set_trace()
+        # try:
+        # SCHEREMO: This checks on the input node!
+        # assert len(n.users) == 1, f"DORYReplaceAddersPass found a RequantShift going into an adder with <1 ({len(inp.users)}) users at node {inp}, checked {len(n.users)}"
+        if len(n.users) > 1:
+            return (None, None)
+        # except AssertionError as e:
+        #     import IPython; IPython.embed()
         if isinstance(inp_module, DORYReplaceAddersPass.mergeable_modules):
             return (None, None)
         return n, module_of_node(gm, n)
@@ -221,5 +224,3 @@ class DORYHarmonizePass(SequentialPass):
         passes.append(DORYReplaceAddersPass())
         passes.append(AlignAvgPoolPass())
         super(DORYHarmonizePass, self).__init__(*passes)
-
-

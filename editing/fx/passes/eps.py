@@ -91,6 +91,9 @@ def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
 def eps_conversion_mul(m : nn.Module, *eps_in):
     return eps_in[0] * eps_in[1]
 
+def eps_conversion_method_mul(*eps_in):
+    return eps_in[0] * eps_in[1]
+
 _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTConv1d : eps_conversion_pact_linears,
                     PACTConv2d : eps_conversion_pact_linears,
@@ -121,7 +124,8 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
                     '_CALL_METHOD_reshape' : eps_conversion_identity,
-#                     f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
+                    f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
+                    '_CALL_METHOD_mul' : eps_conversion_method_mul,
                     PACTDiv : eps_conversion_truediv,
                     Multiply : eps_conversion_mul
 }
@@ -227,7 +231,7 @@ class AnnotateEpsPass(FxPass):
                     conversion_args = [m] + arg_eps_ins + other_args
 
                 else:
-                    assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
+                    #assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
                     conversion_args = arg_eps_ins
                     if node.op == 'call_function':
                         k = f'_{node.op.upper()}_{repr(node.target)}'
@@ -243,7 +247,10 @@ class AnnotateEpsPass(FxPass):
                         print(e)
                         import IPython; IPython.embed()
                     #print(f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
-                    eps_out = all_eps[0]
+                    if all_eps:
+                        eps_out = all_eps[0]
+                    else:
+                        eps_out = None
 
                 node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
                 try:
@@ -251,7 +258,10 @@ class AnnotateEpsPass(FxPass):
                 except KeyError:
                     #print(f"key {k} not found in _N_LEVELS_OUT_PROP!")
                     #assert node_in_levels[1:] == node_in_levels[:-1], "Mismatching input n_levels in node with no n_levels_out propagation function! "
-                    node_out_levels = node_in_levels[0]
+                    if node_in_levels:
+                        node_out_levels = node_in_levels[0]
+                    else:
+                        node_out_levels = None
 
                 node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels)
 

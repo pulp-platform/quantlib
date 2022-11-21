@@ -436,7 +436,7 @@ class ModularizeNodePass(FxPass):
 
         gm.add_submodule(self.new_target, self.module)
         with gm.graph.inserting_before(self.node):
-            new_node = gm.graph.call_module(self.new_target, args=self.node.args, kwargs=self.node_kwargs)
+            new_node = gm.graph.call_module(self.new_target, args=self.node_args, kwargs=self.node_kwargs)
 
         if self.node.op == 'call_module':
             gm.delete_submodule(self.node.target)
