@@ -1310,12 +1310,13 @@ class _PACTActivation(nn.Module):
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
         self.register_buffer('clip_gradient', torch.tensor(True))
 
-        self.num_bins = num_bins
-        self.register_buffer("histogram",torch.zeros_like(torch.Tensor(range(self.num_bins))))
-        self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
-        self.truemax          = torch.nn.Parameter(torch.Tensor((1,)), requires_grad=False)
-        self.truemin          = torch.nn.Parameter(torch.Tensor((-1,)), requires_grad=False)
-        self.register_buffer('ready', torch.tensor(False))
+        if init_clip == "percentile":
+            self.num_bins = num_bins
+            self.register_buffer("histogram",torch.zeros_like(torch.Tensor(range(self.num_bins))))
+            self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
+            self.truemax          = torch.nn.Parameter(torch.Tensor((1,)), requires_grad=False)
+            self.truemin          = torch.nn.Parameter(torch.Tensor((-1,)), requires_grad=False)
+            self.register_buffer('ready', torch.tensor(False))
 
     # SCHEREMO: Assume self.histogram magnitude list of data, binned
     def updateHistogram(self, stat):

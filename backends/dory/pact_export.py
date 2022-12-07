@@ -116,7 +116,7 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
         mult_attr = onnx.helper.make_attribute(key='mult_bits', value=requant_bits)
         n.attribute.append(mult_attr)
 
-def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False):
+def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False, code_size : int = 160000):
     net = net.eval()
 
 
@@ -153,13 +153,16 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
 
     #first export an unannotated ONNX graph
     test_input = torch.rand(shape_in)
-    torch.onnx.export(net_integerized.to('cpu'),
-                      test_input,
-                      str(onnx_path),
-                      export_params=True,
-                      verbose=False,
-                      opset_version=opset_version,
-                      do_constant_folding=True)
+    try:
+        torch.onnx.export(net_integerized.to('cpu'),
+                          test_input,
+                          str(onnx_path),
+                          export_params=True,
+                          verbose=False,
+                          opset_version=opset_version,
+                          do_constant_folding=True)
+    except torch.onnx.CheckerError:
+        print("Disregarding PyTorch ONNX CheckerError...")
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
@@ -212,7 +215,7 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
 
     cnn_dory_config = {"BNRelu_bits": 32,
                        "onnx_file": str(onnx_path.resolve()),
-                       "code reserved space": 195000,
+                       "code reserved space": code_size,
                        "n_inputs": 1,
                        "input_bits": 8,
                        "input_signed": True}
@@ -223,7 +226,7 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     #done!
 
 
-def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, change_n_levels : int = None):
+def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, change_n_levels : int = None, code_size : int = 310000):
     if isinstance(net_cnn, fx.GraphModule):
         cnn_window = get_input_channels(net_cnn)
     else:
@@ -340,10 +343,12 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
         acts = []
     cnn_dory_config = {"BNRelu_bits": 32,
                        "onnx_file": str(onnx_path_cnn.resolve()),
-                       "code reserved space": 310000,
+                       "code reserved space": code_size,
                        "n_inputs": tcn_window,
                        "input_bits": 2,
-                       "input_signed": True}
+                       "input_signed": True,
+                       "input_shape": list(shape_in_cnn[-3:]),
+                       "output_shape": list(cnn_outs[0].shape[-2:])}
     with open(out_path_cnn.joinpath(f"config_{name}_cnn.json"), "w") as fp:
         json.dump(cnn_dory_config, fp, indent=4)
 
@@ -376,12 +381,15 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
 
     int_net_tcn = int_net_tcn.to(torch.float64)
 
+    print(f"tcn input shape: {tcn_input.shape}")
     tcn_dory_config = {"BNRelu_bits": 32,
                        "onnx_file": str(onnx_path_tcn.resolve()),
-                       "code reserved space": 310000,
+                       "code reserved space": code_size,
                        "n_inputs": 1,
                        "input_bits": 2,
-                       "input_signed": False}
+                       "input_signed": False,
+                       "input_shape": list(tcn_input.shape[-2:]),
+                       "output_shape": output.shape[-1]}
 
     with open(out_path_tcn.joinpath(f"config_{name}_tcn.json"), "w") as fp:
         json.dump(tcn_dory_config, fp, indent=4)
