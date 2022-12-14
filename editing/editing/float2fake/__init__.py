@@ -1,7 +1,11 @@
+from typing import Callable
+import quantlib.algorithms as qa
 from quantlib.editing.editing.float2fake.quantisation.activationrounder import ActivationRounder
 from quantlib.editing.editing.float2fake.quantisation.weightrounder import WeightRounder
 from . import canonicalisation
 from . import quantisation
+from contextlib import contextmanager
+import torch.nn as nn
 
 #
 # In the following, we define high-level `Editor`s (i.e., `ComposedEditor`s)
@@ -153,3 +157,23 @@ class F2F8bitPACTRounder(ComposedEditor):
             WeightRounder(),
             ActivationRounder()
         ])
+
+@contextmanager
+def calibration(net : nn.Module, verbose : bool = False):
+    """Statistics-based calibration context.
+
+    """
+
+    if verbose:
+        print("[Entering calibration mode]")
+    for m in net.modules():
+        if isinstance(m, tuple(qa.qalgorithms.qatalgorithms.pact.NNMODULE_TO_PACTMODULE.values())):
+            m.start_observing()
+    try:
+        yield
+    finally:
+        if verbose:
+            print("[Exiting calibration mode]")
+        for m in net.modules():
+            if isinstance(m, tuple(qa.qalgorithms.qatalgorithms.pact.NNMODULE_TO_PACTMODULE.values())):
+                m.stop_observing()
