@@ -16,18 +16,20 @@ class DORYExporter(ONNXExporter):
         annotator = DORYAnnotator()
         super(DORYExporter, self).__init__(annotator=annotator)
 
+    @staticmethod    
     def export_json_config(
         self,
         code_size:  int = 160000,
         nb_inputs:  int = 1,
         input_bits: int = 8,
         input_signed: bool = True,
-        name = "DEFAULT"
+        name: str = "DEFAULT",
+        onnx_file: os.PathLike = self._onnxfilepath
     ):
 
         cnn_dory_config = {
             "BNRelu_bits": 32,
-            "onnx_file": self._onnxfilepath,
+            "onnx_file": onnx_file,
             "code reserved space": code_size,
             "n_inputs": nb_inputs, # TODO retrieve this info from QL graph
             "input_bits": input_bits, # TODO retrieve this info from QL graph
