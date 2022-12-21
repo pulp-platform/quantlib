@@ -24,6 +24,7 @@ class DORYExporter(ONNXExporter):
     ):
         
         onnx_file = self._onnxfilepath
+        name = self._onnxname
 
         cnn_dory_config = {
             "BNRelu_bits": 32,
