@@ -16,6 +16,28 @@ class DORYExporter(ONNXExporter):
         annotator = DORYAnnotator()
         super(DORYExporter, self).__init__(annotator=annotator)
 
+    def export_json_config(
+        self,
+        code_size:  int = 160000,
+        nb_inputs:  int = 1,
+        input_bits: int = 8,
+        input_signed: bool = True,
+        name = "DEFAULT"
+    ):
+
+        cnn_dory_config = {
+            "BNRelu_bits": 32,
+            "onnx_file": self._onnxfilepath,
+            "code reserved space": code_size,
+            "n_inputs": nb_inputs, # TODO retrieve this info from QL graph
+            "input_bits": input_bits, # TODO retrieve this info from QL graph
+            "input_signed": input_signed # TODO retrieve this info from QL graph
+        }
+
+        jsonfilepath = Path(self._onnxfilepath).parent
+        with open(jsonfilepath.joinpath(f"config_{name}.json"), "w") as fp:
+            json.dump(cnn_dory_config, fp, indent=4)
+
     @staticmethod
     def dump_features(network: nn.Module,
                       x:       torch.Tensor,
@@ -33,26 +55,6 @@ class DORYExporter(ONNXExporter):
         class Features(NamedTuple):
             module_name: str
             features:    torch.Tensor
-
-        def export_json_config(
-            code_size:  int = 160000,
-            nb_inputs:  int = 1,
-            input_bits: int = 8,
-            input_signed: bool = True
-        ):
-
-            cnn_dory_config = {
-                "BNRelu_bits": 32,
-                "onnx_file": self._onnxfilepath,
-                "code reserved space": code_size,
-                "n_inputs": nb_inputs, # TODO retrieve this info from QL graph
-                "input_bits": input_bits, # TODO retrieve this info from QL graph
-                "input_signed": input_signed # TODO retrieve this info from QL graph
-            }
-
-            jsonfilepath = Path(self._onnxfilepath).parent
-            with open(jsonfilepath.joinpath(f"config_{name}.json"), "w") as fp:
-                json.dump(cnn_dory_config, fp, indent=4)
 
         def export_to_txt(module_name: str, filename: str, t: torch.Tensor):
 
@@ -73,7 +75,6 @@ class DORYExporter(ONNXExporter):
         features: List[Features] = []
 
         def hook_fn(self, in_: torch.Tensor, out_: torch.Tensor, module_name: str):
-            assert (out_.ndim == 4) and (out_.shape[0] == 1)  # TODO: we are tacitly assuming that we will capture only features of 2D-conv networks (i.e., 4D feature arrays)
             # DORY wants HWC tensors
             features.append(Features(module_name=module_name, features=out_.squeeze(0)))
 
