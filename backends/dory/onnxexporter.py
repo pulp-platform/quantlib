@@ -15,6 +15,7 @@ class DORYExporter(ONNXExporter):
 
         
     def export_json_config(
+        self,
         code_size:  int = 160000,
         nb_inputs:  int = 1,
         input_bits: int = 8,
