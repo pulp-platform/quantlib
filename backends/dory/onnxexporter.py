@@ -3,19 +3,17 @@ import os
 import torch
 import torch.nn as nn
 from typing import List, NamedTuple
-
 from .onnxannotator import DORYAnnotator
 from quantlib.backends.base import ONNXExporter
 import quantlib.editing.graphs as qg
 import json
 from pathlib import Path
-
 class DORYExporter(ONNXExporter):
-
     def __init__(self):
         annotator = DORYAnnotator()
         super(DORYExporter, self).__init__(annotator=annotator)
 
+    @staticmethod    
     def export_json_config(
         self,
         code_size:  int = 160000,
@@ -23,33 +21,31 @@ class DORYExporter(ONNXExporter):
         input_bits: int = 8,
         input_signed: bool = True,
         name = "DEFAULT"
+        name: str = "DEFAULT",
+        onnx_file: os.PathLike = self._onnxfilepath
     ):
 
         cnn_dory_config = {
             "BNRelu_bits": 32,
             "onnx_file": self._onnxfilepath,
+            "onnx_file": onnx_file,
             "code reserved space": code_size,
             "n_inputs": nb_inputs, # TODO retrieve this info from QL graph
             "input_bits": input_bits, # TODO retrieve this info from QL graph
             "input_signed": input_signed # TODO retrieve this info from QL graph
         }
-
         jsonfilepath = Path(self._onnxfilepath).parent
         with open(jsonfilepath.joinpath(f"config_{name}.json"), "w") as fp:
             json.dump(cnn_dory_config, fp, indent=4)
-
     @staticmethod
     def dump_features(network: nn.Module,
                       x:       torch.Tensor,
                       path:    os.PathLike) -> None:
         """Given a network, export the features associated with a given input.
-
         To verify the correctness of an ONNX export, DORY requires text files
         containing the values of the features for each layer in the target
         network. The format of these text files is exemplified here:
-
         https://github.com/pulp-platform/dory_examples/tree/master/examples/Quantlab_examples .
-
         """
 
         class Features(NamedTuple):
