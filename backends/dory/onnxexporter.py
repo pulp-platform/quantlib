@@ -13,7 +13,7 @@ class DORYExporter(ONNXExporter):
         annotator = DORYAnnotator()
         super(DORYExporter, self).__init__(annotator=annotator)
 
-    @staticmethod    
+        
     def export_json_config(
         code_size:  int = 160000,
         nb_inputs:  int = 1,
