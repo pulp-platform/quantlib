@@ -13,6 +13,7 @@ class ONNXExporter(object):
         super(ONNXExporter, self).__init__()
         self._annotator = annotator
         self._onnxfilepath = None
+        self._onnxname = None
 
     def export(self,
                network:       nn.Module,
@@ -26,6 +27,7 @@ class ONNXExporter(object):
         onnxfilename = onnxname + '_QL_NOANNOTATION.onnx'  # TODO: should the name hint at whether the network is FP, FQ, or TQ? How can we derive this information (user-provided vs. inferred from the network)?
         onnxfilepath = os.path.join(path, onnxfilename)
         self._onnxfilepath = onnxfilepath
+        self._onnxname = onnxname
 
         # export the network (https://pytorch.org/docs/master/onnx.html#torch.onnx.export)
         torch.onnx.export(network,
