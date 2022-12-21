@@ -20,9 +20,10 @@ class DORYExporter(ONNXExporter):
         nb_inputs:  int = 1,
         input_bits: int = 8,
         input_signed: bool = True,
-        name: str = "DEFAULT",
-        onnx_file: os.PathLike = self._onnxfilepath
+        name: str = "DEFAULT"
     ):
+        
+        onnx_file = self._onnxfilepath
 
         cnn_dory_config = {
             "BNRelu_bits": 32,
