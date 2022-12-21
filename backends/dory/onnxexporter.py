@@ -7,7 +7,8 @@ from typing import List, NamedTuple
 from .onnxannotator import DORYAnnotator
 from quantlib.backends.base import ONNXExporter
 import quantlib.editing.graphs as qg
-
+import json
+from pathlib import Path
 
 class DORYExporter(ONNXExporter):
 
@@ -32,6 +33,26 @@ class DORYExporter(ONNXExporter):
         class Features(NamedTuple):
             module_name: str
             features:    torch.Tensor
+
+        def export_json_config(
+            code_size:  int = 160000,
+            nb_inputs:  int = 1,
+            input_bits: int = 8,
+            input_signed: bool = True
+        ):
+
+            cnn_dory_config = {
+                "BNRelu_bits": 32,
+                "onnx_file": self._onnxfilepath,
+                "code reserved space": code_size,
+                "n_inputs": nb_inputs, # TODO retrieve this info from QL graph
+                "input_bits": input_bits, # TODO retrieve this info from QL graph
+                "input_signed": input_signed # TODO retrieve this info from QL graph
+            }
+
+            jsonfilepath = Path(self._onnxfilepath).parent
+            with open(jsonfilepath.joinpath(f"config_{name}.json"), "w") as fp:
+                json.dump(cnn_dory_config, fp, indent=4)
 
         def export_to_txt(module_name: str, filename: str, t: torch.Tensor):
 
