@@ -36,6 +36,8 @@ def verify_avgpoolnd(n: fx.Node) -> bool:
 
 
 whitelist_call_module = OrderedDict([
+    # flatten
+    (nn.Flatten, []),
     # max pooling
     (nn.MaxPool1d, []),
     (nn.MaxPool2d, []),

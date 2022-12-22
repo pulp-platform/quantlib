@@ -49,8 +49,8 @@ class Requantisation(nn.Module):
         x = x * self.mul
         x = x + self.add
         x = torch.floor(x / self.div)  # This operation can be implemented in integer digital arithmetic as a right-shift by :math:`\log_{2}(D)` places; divisions can be avoided.
-        lo = float(self.zero)
-        hi = float(self.zero + self.n_levels - 1)
+        lo = torch.float(self.zero)
+        hi = torch.float(self.zero + self.n_levels - 1)
         x = RequantClipFn.apply(x, lo, hi)
 
         return x

@@ -46,6 +46,7 @@ from .epstunnels import EpsTunnelInserter
 from .integerisation import F2TIntegeriser
 from .epstunnels import EpsTunnelConstructSimplifier
 from .epstunnels import EpsTunnelRemover
+from .epstunnels import FinalEpsTunnelRemover
 import torch.fx as fx
 from quantlib.editing.editing.editors import ComposedEditor
 from quantlib.editing.editing.editors.base.editor import Editor
