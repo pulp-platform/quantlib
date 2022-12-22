@@ -1,5 +1,6 @@
 from .activationmodulariser import *
 from .linearopbnbiasfolder import *
+from .flattencanonicaliser import *
 
 #
 # In the following, we define a high-level `Editor` (i.e., a `ComposedEditor`)
@@ -35,4 +36,5 @@ class F2FCanonicaliser(ComposedEditor):
             ActivationModulariser(),
             QuantLibRetracer(),
             LinearOpBNBiasFolder(),
+            FlattenCanonicaliser()
         ])
