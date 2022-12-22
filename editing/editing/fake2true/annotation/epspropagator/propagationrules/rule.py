@@ -164,6 +164,7 @@ EpsPropagationSpec = collections.namedtuple('EpsPropagationSpec', ['function', '
 _module_2_epspec = {
     nn.ReLU:      EpsPropagationSpec(function=propagate_under_tolerance, args=[], kwargs={'tolerance': ZERO_TOLERANCE}),  # TODO: I assume that zero is a valid quantisation level; e.g., the quantum of {-0.33, 0.17, 0.67} is 0.5, but the quantum of ReLU({-0.33, 0.17, 0.67}) = {0.0, 0.17, 0.67} is 0.01.
     nn.Identity:  EpsPropagationSpec(function=propagate_under_tolerance, args=[], kwargs={'tolerance': ZERO_TOLERANCE}),
+    nn.Flatten:   EpsPropagationSpec(function=propagate_under_tolerance, args=[], kwargs={'tolerance': ZERO_TOLERANCE}),
     nn.MaxPool1d: EpsPropagationSpec(function=propagate_under_tolerance, args=[], kwargs={'tolerance': ZERO_TOLERANCE}),
     nn.MaxPool2d: EpsPropagationSpec(function=propagate_under_tolerance, args=[], kwargs={'tolerance': ZERO_TOLERANCE}),
     nn.MaxPool3d: EpsPropagationSpec(function=propagate_under_tolerance, args=[], kwargs={'tolerance': ZERO_TOLERANCE}),
