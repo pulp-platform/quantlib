@@ -1,6 +1,31 @@
 import torch
 import torch.nn as nn
 
+class RequantClipFn(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        x: torch.Tensor,
+        lo : float,
+        hi : float
+    ) -> torch.Tensor:
+        ctx.save_for_backward(x)
+        return x.clip(min=lo, max=hi)
+
+    @staticmethod
+    def symbolic(
+        g:  torch.Graph,
+        x:  torch.Value,
+        lo: float,
+        hi: float
+    ) -> torch.Value:
+
+        return g.op(
+            "Clip",
+            x,
+            min_f=lo,
+            max_f=hi
+        )
 
 class Requantisation(nn.Module):
 
@@ -24,6 +49,8 @@ class Requantisation(nn.Module):
         x = x * self.mul
         x = x + self.add
         x = torch.floor(x / self.div)  # This operation can be implemented in integer digital arithmetic as a right-shift by :math:`\log_{2}(D)` places; divisions can be avoided.
-        x = torch.clip(x, self.zero, self.zero + self.n_levels - 1)
+        lo = float(self.zero)
+        hi = float(self.zero + self.n_levels - 1)
+        x = RequantClipFn.apply(x, lo, hi)
 
         return x
