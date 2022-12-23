@@ -27,7 +27,10 @@ class LinearOpIntegeriserApplier(NNModuleApplier):
             class_ = nn.Linear
             new_module = class_(in_features=qlinear.in_features,
                                 out_features=qlinear.out_features,
-                                bias=qlinear.bias)
+                                bias=True)
+            if not qlinear.bias:
+                with torch.no_grad():
+                    new_module.bias[:] = 0
 
         elif isinstance(qlinear, (nn.Conv1d, nn.Conv2d, nn.Conv3d,)):
             if isinstance(qlinear, nn.Conv1d):
