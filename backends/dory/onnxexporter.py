@@ -23,7 +23,7 @@ class DORYExporter(ONNXExporter):
         name: str = "DEFAULT"
     ):
         
-        onnx_file = self._onnxfilepath
+        onnx_file = self._onnxfilepath.rsplit('.', 1)[0].rstrip('_NOANNOTATION') + '_DORY.onnx'  # TODO: generate the backend-annotated filename more elegantly
         name = self._onnxname
 
         cnn_dory_config = {
@@ -90,4 +90,5 @@ class DORYExporter(ONNXExporter):
         export_to_txt('input', 'input', x)
         for i, (module_name, f) in enumerate(features):
             export_to_txt(module_name, f"out_layer{i}", f)
+        export_to_txt('output', f"out_layer{len(features)}", y)
         export_to_txt('output', 'output', y)
