@@ -21,7 +21,7 @@ class FinalEpsTunnelRemoverApplier(Applier):
             s.replace_input_with(node, p)
         torch.set_printoptions(precision=16)
         print("[FinalEpsTunnelRemover] %s: removing EpsTunnel with scaling factor %s" % (s, g.get_submodule(node.target).eps_out/g.get_submodule(node.target).eps_in))
-        print("[FinalEpsTunnelRemover] %s: outputs will need to be scaled *externally* to maintain program semantics.")
+        print("[FinalEpsTunnelRemover] %s: outputs will need to be scaled *externally* to maintain program semantics." % (s,))
         torch.set_printoptions()
 
         g.delete_submodule(node.target)

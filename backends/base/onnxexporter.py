@@ -2,6 +2,7 @@ import os
 import torch
 import torch.nn as nn
 from typing import Optional
+import warnings
 
 from .onnxannotator import ONNXAnnotator
 
@@ -29,13 +30,15 @@ class ONNXExporter(object):
         self._onnxfilepath = onnxfilepath
         self._onnxname = onnxname
 
-        # export the network (https://pytorch.org/docs/master/onnx.html#torch.onnx.export)
-        torch.onnx.export(network,
-                          torch.randn(input_shape),  # a dummy input to trace the `nn.Module`
-                          onnxfilepath,
-                          export_params=True,
-                          do_constant_folding=True,
-                          opset_version=opset_version)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # export the network (https://pytorch.org/docs/master/onnx.html#torch.onnx.export)
+            torch.onnx.export(network,
+                            torch.randn(input_shape),  # a dummy input to trace the `nn.Module`
+                            onnxfilepath,
+                            export_params=True,
+                            do_constant_folding=True,
+                            opset_version=opset_version)
 
-        # annotate the ONNX model with backend-specific information
-        self._annotator.annotate(network, onnxfilepath)
+            # annotate the ONNX model with backend-specific information
+            self._annotator.annotate(network, onnxfilepath)
