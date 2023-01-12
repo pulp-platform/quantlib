@@ -150,24 +150,25 @@ def trace_quantlib_modules():
 
     quantizer_spec = {'nbits': 2, 'signed': True, 'balanced': True, 'eps': 1.0}
     noise_type     = 'uniform'
+    strategy       = 'expectation'
 
-    mod_ANAActivation = qa.ana.ANAActivation(quantizer_spec, noise_type)
+    mod_ANAActivation = qa.ana.ANAActivation(quantizer_spec, noise_type, strategy)
     dummy_input = torch.ones((_batch_size, _n_input_channels))
     trace_module(library, algorithm, mod_ANAActivation, dummy_input)
 
-    mod_ANALinear = qa.ana.ANALinear(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, bias=False)
+    mod_ANALinear = qa.ana.ANALinear(quantizer_spec, noise_type, strategy, _n_input_channels, _n_output_channels, bias=False)
     dummy_input = torch.ones((_batch_size, _n_input_channels))
     trace_module(library, algorithm, mod_ANALinear, dummy_input)
 
-    mod_ANAConv1d = qa.ana.ANAConv1d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    mod_ANAConv1d = qa.ana.ANAConv1d(quantizer_spec, noise_type, strategy, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
     dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1))
     trace_module(library, algorithm, mod_ANAConv1d, dummy_input)
 
-    mod_ANAConv2d = qa.ana.ANAConv2d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    mod_ANAConv2d = qa.ana.ANAConv2d(quantizer_spec, noise_type, strategy, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
     dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2))
     trace_module(library, algorithm, mod_ANAConv2d, dummy_input)
 
-    mod_ANAConv3d = qa.ana.ANAConv3d(quantizer_spec, noise_type, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
+    mod_ANAConv3d = qa.ana.ANAConv3d(quantizer_spec, noise_type, strategy, _n_input_channels, _n_output_channels, kernel_size=_kernel_size, stride=_stride, padding=_padding, bias=False)
     dummy_input = torch.ones((_batch_size, _n_input_channels, _dim1, _dim2, _dim3))
     trace_module(library, algorithm, mod_ANAConv3d, dummy_input)
 
