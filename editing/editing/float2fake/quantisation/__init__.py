@@ -4,6 +4,7 @@ from .addtreeharmoniser import *
 from .quantiserinterposer import *
 from .activationrounder import *
 from .weightrounder import *
+from .addcalibrator import *
 
 #
 # In the following, we define a high-level `Editor` (i.e., a `ComposedEditor`)
