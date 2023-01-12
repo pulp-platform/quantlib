@@ -29,7 +29,7 @@ class Applier(object):
 
         # create a unique application identifier
         self._counter += 1
-        id_ = id_ + f'[{str(self._counter)}]'
+        id_ = id_ + f'_{str(self._counter)}_'
 
         # modify the graph
         g = self._apply(g, ap, id_)

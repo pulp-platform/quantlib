@@ -12,7 +12,7 @@ class BaseEditor(Editor):
 
         super(BaseEditor, self).__init__()
 
-        self._id: str = '_'.join(['QL', name + f'[{str(id(self))}]'])  # we use this attribute to uniquely identify the edits made using this `Editor`
+        self._id: str = '_'.join(['QL', name + f'_{str(id(self))}_'])  # we use this attribute to uniquely identify the edits made using this `Editor`
         self._symbolic_trace_fn = symbolic_trace_fn                    # we assume that the `fx.GraphModule`s processed by this `Editor` have been obtained using this tracing function
 
     @property

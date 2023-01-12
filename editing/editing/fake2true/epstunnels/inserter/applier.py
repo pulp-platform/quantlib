@@ -36,7 +36,7 @@ class EpsTunnelInserterApplier(Applier):
             local_counter: int = 0
             for u in downstream_nodes:
 
-                new_target_copy = id_ + f'[{str(local_counter)}]'
+                new_target_copy = id_ + f'_{str(local_counter)}_'
                 new_module_copy = EpsTunnel(node.meta['eps'])
 
                 g.add_submodule(new_target_copy, new_module_copy)
