@@ -1,7 +1,27 @@
+# 
+# Author(s):
+# Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
+# 
+# Copyright (c) 2020-2022 ETH Zurich and University of Bologna.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+# http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# 
+
 from typing import Callable
 import quantlib.algorithms as qa
 from quantlib.editing.editing.float2fake.quantisation.activationrounder import ActivationRounder
 from quantlib.editing.editing.float2fake.quantisation.weightrounder import WeightRounder
+from quantlib.editing.editing.float2fake.quantisation.addcalibrator import AddCalibrator
 from . import canonicalisation
 from . import quantisation
 from contextlib import contextmanager
@@ -140,22 +160,19 @@ class F2F8bitPACTRounder(ComposedEditor):
     This rounder should be used after the network has been quantized (e.g.,
     with `F2F8bitPACTRoundingConverter`) and calibrated using 
     ```
-    for m in net.modules():
-        if isinstance(m, tuple(qa.qalgorithms.qatalgorithms.pact.NNMODULE_TO_PACTMODULE.values())):
-            m.start_observing()
-    validate(net)
-    for m in net.modules():
-        if isinstance(m, tuple(qa.qalgorithms.qatalgorithms.pact.NNMODULE_TO_PACTMODULE.values())):
-            m.stop_observing()
+    with qe.float2fake.calibration(net):
+        validate(net)
     ```
-    applied *after* the quantization hyperparameters have been calibrated).
+    Besides rounding, it also harmonizes add nodes.
+    FIXME: maybe change the name to Calibrator or similar.
 
     """
     def __init__(self):
 
         super(F2F8bitPACTRounder, self).__init__([
             WeightRounder(),
-            ActivationRounder()
+            ActivationRounder(),
+            AddCalibrator()
         ])
 
 @contextmanager
