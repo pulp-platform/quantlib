@@ -33,7 +33,6 @@ import math
 import copy
 
 from torch.onnx.symbolic_helper import parse_args
-import torch.onnx.symbolic_registry as sym_registry
 from torch.onnx import register_custom_op_symbolic
 
 from inspect import signature
