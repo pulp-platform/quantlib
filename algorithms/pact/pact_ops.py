@@ -98,12 +98,9 @@ class RequantShift(nn.Module):
             # PULP-NN performs multiplication first, then addition and
             # division. Division is with flooring.
             else:
-                try:
-                    y = x * mul + add
-                    y = (y/div).floor()
-                except Exception as e:
-                    print(e)
-                    import IPython; IPython.embed()
+                y = x * mul + add
+                # Avoid round to even behaviour, friggin pytorch
+                y = torch.floor((y / div) + 0.5)
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
