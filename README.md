@@ -23,7 +23,7 @@ $ conda activate quantlab
 ```
 
 ### Usage examples
-- [MNIST example (first usage)](examples/mnist/MNIST_example.ipynb)
+- [MNIST example (first usage)](examples/mnist/MNIST_Example.ipynb)
 
 ## Notice
 
