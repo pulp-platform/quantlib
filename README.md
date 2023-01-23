@@ -22,6 +22,9 @@ $ conda activate quantlab
 (quantlab) $ cd ..
 ```
 
+### Usage examples
+- [MNIST example (first usage)](examples/mnist/MNIST_Example.ipynb)
+
 ## Notice
 
 ### Licensing information
