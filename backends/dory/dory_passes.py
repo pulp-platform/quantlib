@@ -133,7 +133,7 @@ class DORYAdder(nn.Module):
         def symbolic(g, x1, rq1, x2, rq2, rq_out):
 
             params = {}
-            params_list = []
+            out_signed_inferred = False
             for module, name in [(rq1, "in1"), (rq2, "in2"), (rq_out, "out")]:
                 if module:
                     mul = int(module.mul.item())
@@ -141,13 +141,19 @@ class DORYAdder(nn.Module):
                     shift = int(np.log2(module.div.item()))
                     n_l = int(module.n_levels_out.item())
                     requant = 1
+                    out_signed_inferred |= module.signed
                 else:
                     mul = 1
                     add = 0
                     shift = 0
                     n_l = 256
                     requant = 0
-
+                if name == "out":
+                    if module:
+                        params["out_signed_i"] = int(module.signed)
+                    else:
+                        params["out_signed_i"] = int(out_signed_inferred)
+                
                 params[f"{name}_mul_i"] = mul
                 params[f"{name}_add_i"] = add
                 params[f"{name}_shift_i"] = shift

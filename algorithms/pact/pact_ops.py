@@ -1320,6 +1320,8 @@ class _PACTActivation(nn.Module):
 
     # SCHEREMO: Assume self.histogram magnitude list of data, binned
     def updateHistogram(self, stat):
+        if self.init_clip != "percentile":
+            return
 
         def rebinInt(histogram, factor):
             factor = min(self.num_bins//2, factor)

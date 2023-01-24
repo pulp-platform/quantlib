@@ -69,7 +69,7 @@ class BBAddTreeReplacementPass(OpTreeReplacementPass):
                 else:
                     n_levels[-1] = 0
                 pact_kwargs_to_pass['n_levels'] = n_levels
-                return PACTIntegerAdd(**pact_kwargs_to_pass, **kwargs_to_pass)
+                return PACTIntegerAdd(num_args=len(tree.args), **pact_kwargs_to_pass, **kwargs_to_pass)
 
 
         kwargs_to_pass = {k : v for k,v in kwargs_to_pass.items() if k not in  ['force_out_eps']}
@@ -119,6 +119,6 @@ class HarmonizeBBNetPass(SequentialPass):
         else:
             passes.append(AddTreeReplacementPass(**pact_kwargs, **kwargs))
         passes.append(MulReplacementPass())
-        actpass_kwargs = {k:v for k,v in bb_kwargs.items() if k not in ['signed']}
+        actpass_kwargs = {k:v for k,v in bb_kwargs.items() if k not in ['signed', 'act_kind']}
         passes.append(InsertBBActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
         super(HarmonizeBBNetPass, self).__init__(*passes, name_prefix='_HARMONIZE_BB_NET_PASS')
