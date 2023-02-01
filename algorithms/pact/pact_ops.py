@@ -33,8 +33,8 @@ import math
 import copy
 
 from torch.onnx.symbolic_helper import parse_args
-# import torch.onnx.symbolic_registry as sym_registry
-# from torch.onnx import register_custom_op_symbolic
+import torch.onnx.symbolic_registry as sym_registry
+from torch.onnx import register_custom_op_symbolic
 
 from inspect import signature
 
@@ -99,8 +99,12 @@ class RequantShift(nn.Module):
             # PULP-NN performs multiplication first, then addition and
             # division. Division is with flooring.
             else:
-                y = x * mul + add
-                y = (y/div).floor()
+                try:
+                    y = x * mul + add
+                    y = (y/div).floor()
+                except Exception as e:
+                    print(e)
+                    import IPython; IPython.embed()
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
@@ -148,13 +152,22 @@ class RequantShift(nn.Module):
         self.requant_node = requant_node
 
     def forward(self, x):
-        if torch.equal(self.mul.type_as(x), self.div.type_as(x)) and torch.equal(self.add.type_as(x), torch.Tensor((0.,)).type_as(x)):
+
+        mul = self.mul
+        add = self.add
+
+        if len(self.mul.shape) == 1:
+            mul = self.mul.reshape([-1]+[1]*(len(x.shape)-2))
+        if len(self.add.shape) == 1:
+            add = self.add.reshape([-1]+[1]*(len(x.shape)-2))
+
+        if torch.equal(mul.type_as(x), self.div.type_as(x)) and torch.equal(add.type_as(x), torch.Tensor((0.,)).type_as(x)):
             return x
         if self.requant_node:
-            return self.MyRequantShift.apply(x, self.mul.type_as(x), self.add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out.type_as(x), self.cmsis_requant)
+            return self.MyRequantShift.apply(x, mul.type_as(x), add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out.type_as(x), self.cmsis_requant)
         else:
             # calling `forward` directly does not trigger the symbolic export
-            return self.MyRequantShift.forward(None, x, self.mul.type_as(x), self.add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out, self.cmsis_requant)
+            return self.MyRequantShift.forward(None, x, mul.type_as(x), add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out, self.cmsis_requant)
 
 class HardActRequantShift(nn.Module):
     #def __init__(self, gamma_h : torch.Tensor, beta_h : torch.Tensor, three :
@@ -1519,7 +1532,7 @@ class PACTIntegerExp(torch.nn.Module):
 
 class PACTSoftmax(_PACTEps):
     def __init__(self, n_levels : int = 256, dim: int = 1):
-        super().__init__()
+        super().__init__(True)
         self.n_levels = n_levels
         self.dim = dim
         self.register_buffer('coeffA', torch.Tensor((0.35815147,)))
@@ -1614,7 +1627,8 @@ class PACTIntegerSoftmax(torch.nn.Module):
         self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2))
 
         #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
-        self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
+        #self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps))
 
     def forward(self, x):
         """Approximate Softmax implementation according to the I-BERT paper:
@@ -1834,7 +1848,7 @@ class PACTIntegerLayerNorm(torch.nn.Module):
 
 class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
-    def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), eps=1e-5, *args, **kwargs):
+    def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), eps=1e-3, *args, **kwargs):
         _PACTLinOp.__init__(self)
         _PACTEps.__init__(self)
         self.setup_quant_params(*args, **kwargs)
@@ -1842,6 +1856,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         self.normalized_shape = normalized_shape
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
+
 
         self.register_buffer('eps', torch.Tensor((eps,)))
         self.register_buffer('eta', torch.Tensor((1.,)))
@@ -1862,7 +1877,8 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
     def get_eps_out(self, eps_in):
         self.set_eps_in([eps_in])
-        return self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
+        eps_out_div = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
+        return eps_out_div
 
     def set_eps_in(self, eps_in_list):
         super().set_eps_in(eps_in_list)
@@ -1885,7 +1901,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         eps = RQ(self.eta**2 * self.eps , self.eps_in**2)
 
         if self.started:
-            assert eps>=self.eps_in**2, "Eps was rounded down in PACTLayerNorm"
+            assert eps>=self.eps_in**2, f"Eps was rounded down in PACTLayerNorm, eta = {self.eta}, eps = {self.eps}, eps_in = {self.eps_in}"
 
         denom = RQ(torch.sqrt(var + eps), self.eps_in)
 
@@ -2380,7 +2396,7 @@ class PACTDiv(_PACTEps):
             t = self.eps_in_y / self.eps_div
             self.eta = torch.ceil(t)
         else:
-            self.eta = torch.Tensor((1.,))
+            self.eta = torch.Tensor((1.,)).type_as(self.eps_in_x)
 
     def get_eps_out(self, eps_in_x=None, eps_in_y=None):
         if eps_in_x is not None and eps_in_y is not None:
@@ -2402,7 +2418,7 @@ class PACTDiv(_PACTEps):
         if self.stable:
             return torch.round(RQ(self.eps_div*self.eta , self.eps_in_y)/self.eps_in_y)
         else:
-            return 0
+            return torch.Tensor((0,)).type_as(self.eta)
 
     def forward(self,x,y):
 
@@ -2419,7 +2435,7 @@ class PACTDiv(_PACTEps):
                 assert eps>=self.eps_in_y, "Eps was rounded down in PACTDiv"
 
         else:
-            eps = 0
+            eps = max(torch.Tensor((self.eps_in_y,)).type_as(x), RQ(self.eps_div, self.eps_in_y))
 
         y = y + eps
         assert torch.sum( y > 0 ) == len(y.reshape(-1)), "PACTDiv: Dividing by negative numbers not allowed!"
@@ -2458,10 +2474,11 @@ class PACTIntegerDiv(nn.Module):
 
     def forward(self,x,y):
         # SCHEREMO: Shortcut degenerate cases (y == 1, eps == 0)
-        if torch.prod((y == torch.ones_like(y)) * (self.eps == torch.zeros_like(self.eps))) == 1.:
-            if self.Delta == 1:
-                return x
-            return x * self.Delta
+        # y = torch.Tensor((y,))
+        # if torch.prod((y == torch.ones_like(y)) * (self.eps == torch.zeros_like(self.eps))) == 1.:
+        #     if self.Delta == 1:
+        #         return x
+        #     return x * self.Delta
 
         if self.integer_node:
             return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))

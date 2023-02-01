@@ -56,10 +56,10 @@ def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
     return m.get_eps_out(eps_in)
 
 def eps_conversion_pact_matmul(m : nn.Module, *eps_ins):
-    return eps_ins[0] * eps_ins[1]
+    return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
 def eps_conversion_matmul(*eps_ins):
-    return eps_ins[0] * eps_ins[1]
+    return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
 def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
     return torch.Tensor((1./(m.n_levels-1.),))
@@ -83,16 +83,13 @@ def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
     return m.act_out.get_eps()
 
 def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
-    return m.maxval/(m.adder.n_levels//2-1)
+    return m.adder.act_out.get_eps()
 
 def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
     return m.statTracker.get_eps()
 
 def eps_conversion_mul(m : nn.Module, *eps_in):
-    return eps_in[0] * eps_in[1]
-
-def eps_conversion_method_mul(*eps_in):
-    return eps_in[0] * eps_in[1]
+    return eps_in[0] * eps_in[1].type_as(eps_ins[0])
 
 _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTConv1d : eps_conversion_pact_linears,
@@ -124,8 +121,7 @@ _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
                     '_CALL_METHOD_view' : eps_conversion_identity,
                     '_CALL_METHOD_reshape' : eps_conversion_identity,
-                    f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
-                    '_CALL_METHOD_mul' : eps_conversion_method_mul,
+#                     f'_CALL_FUNCTION_{repr(operator.mul)}' : eps_conversion_mul,
                     PACTDiv : eps_conversion_truediv,
                     Multiply : eps_conversion_mul
 }
@@ -231,7 +227,10 @@ class AnnotateEpsPass(FxPass):
                     conversion_args = [m] + arg_eps_ins + other_args
 
                 else:
-                    #assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
+                    try:
+                        assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
+                    except:
+                        import IPython; IPython.embed()
                     conversion_args = arg_eps_ins
                     if node.op == 'call_function':
                         k = f'_{node.op.upper()}_{repr(node.target)}'
@@ -247,10 +246,7 @@ class AnnotateEpsPass(FxPass):
                         print(e)
                         import IPython; IPython.embed()
                     #print(f"Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
-                    if all_eps:
-                        eps_out = all_eps[0]
-                    else:
-                        eps_out = None
+                    eps_out = all_eps[0]
 
                 node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
                 try:
@@ -258,10 +254,7 @@ class AnnotateEpsPass(FxPass):
                 except KeyError:
                     #print(f"key {k} not found in _N_LEVELS_OUT_PROP!")
                     #assert node_in_levels[1:] == node_in_levels[:-1], "Mismatching input n_levels in node with no n_levels_out propagation function! "
-                    if node_in_levels:
-                        node_out_levels = node_in_levels[0]
-                    else:
-                        node_out_levels = None
+                    node_out_levels = node_in_levels[0]
 
                 node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels)
 

@@ -83,22 +83,6 @@ def integerize_gelu_fun(gm : fx.GraphModule, match : Match, D=2**14, export_node
 
     return new_gelu
 
-def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, D=2**12, export_node=False):
-    modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    layernorm_node = matched_nodes[0]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
-    module = matched_modules[0]
-    eps_in = extract_eps(layernorm_node.meta['quant'].eps_in)
-    assert isinstance(module, PACTLayerNorm), f"integerize_layernorm_fun got bad match - expected PACTLayerNorm, got {type(module)}"
-
-    if affine:
-        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, weight=module.weight, bias=module.bias, D=D, export_node=export_node)
-    else:
-        new_layernorm = PACTIntegerLayerNorm(n_levels=module.n_levels, eps_in=eps_in, maxval=module.maxval, D=D, export_node=export_node)
-
-    return new_layernorm
-
 class IntegerizeConstWrapPass(ModularizePass):
     @staticmethod
     def constwrap_replacement_fn(node):
@@ -134,10 +118,31 @@ class IntegerizeTrueDivPass(ModularizePass):
         target = [PACTDiv(Delta)]
         super().__init__(op='call_module', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, integer_node=export_div_node), name="TRUEDIV_REPLACEMENT_PASS")
 
+def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, D=2**12, export_node=False):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    layernorm_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    layernorm = matched_modules[0]
+    requant = matched_modules[1]
+    eps_in = extract_eps(layernorm_node.meta['quant'].eps_in)
+    assert isinstance(layernorm, PACTLayerNorm), f"integerize_layernorm_fun got bad match - expected PACTLayerNorm, got {type(module)}"
+
+    maxval = max(requant.max, -requant.min)
+
+    if affine:
+        new_weight = layernorm.weight
+        new_bias = layernorm.bias
+        new_layernorm = PACTIntegerLayerNorm(n_levels=requant.n_levels, eps_in=eps_in, maxval=maxval, weight=new_weight, bias=new_bias, D=D, export_node=export_node)
+    else:
+        new_layernorm = PACTIntegerLayerNorm(n_levels=requant.n_levels, eps_in=eps_in, maxval=maxval, weight = 1., bias = 0., D=D, export_node=export_node)
+
+    return new_layernorm
+
 class IntegerizeLayerNormPass(SequentialPass):
     def __init__(self, affine = True, D=2**12, export_layernorm_node = False, **kwargs):
         passes = []
-        pattern = nn.Sequential(PACTLayerNorm())
+        pattern = nn.Sequential(PACTLayerNorm(), PACTAsymmetricAct(256, 'max', True, 'relu'))
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D, export_node=export_layernorm_node), f'_INTEGER_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
 
