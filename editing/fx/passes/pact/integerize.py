@@ -36,7 +36,7 @@ from quantlib.algorithms.pact.pact_ops import *
 from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass, ModularizePass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
-from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBNBetweenBiasedConvAndActsPass
+from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBNBetweenBiasedConvAndActsPass, RQSMergePass
 from ...util import gm_modules, module_of_node, get_ordered_active_nodes
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
@@ -824,4 +824,5 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeTrueDivPass(export_div_node=export_div_node))
         passes.append(IntegerizeMeanPass())
         passes.append(IntegerizeConstWrapPass())
+        passes.append(RQSMergePass())
         super(IntegerizePACTNetPass, self).__init__(*passes, name_prefix="_INTEGERIZE_PACT_NET_PASS")
