@@ -29,7 +29,7 @@ from quantlib.editing.lightweight import LightweightGraph
 from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, SubTypeFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d, PACTGELU
+from .pact_ops import _PACTEps, _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d, PACTGELU
 from .util import assert_param_valid, almost_symm_quant
 
 import copy
@@ -84,10 +84,11 @@ _sawb_asymm_lut = {
 }
 
 class PACTEpsController(Controller):
-    def __init__(self, fx_model, modules, schedule, tracer, eps_pass):
+    def __init__(self, fx_model, modules, schedule, tracer, eps_pass, verbose = False):
         self.model = fx_model
         self.modules = modules
-        self.schedule = schedule
+        self.schedule = {int(k):v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
+        self.verbose = verbose
 
         self.eps_pass = eps_pass
         # Choose a tracer that doesn't have PACTWrapModule!
@@ -105,21 +106,28 @@ class PACTEpsController(Controller):
                 nm[node.target].set_eps_in(arg_eps_ins)
 
     def step_pre_training_epoch(self, epoch, *args, **kwargs):
-
         if epoch in self.schedule.keys():
             cur_cmds = self.schedule[epoch]
             if not isinstance(cur_cmds, list):
                 cur_cmds = [cur_cmds]
             for cmd in cur_cmds:
-                if cmd == 'start':
+                self.log("Epoch {} - running command {}".format(epoch, cmd))
+                if cmd == 'verbose_on':
+                    self.verbose = True
+                    self.log("Verbose mode enabled!")
+                elif cmd == 'verbose_off':
+                    self.verbose = False
+                elif cmd == 'start':
                     for m in self.modules:
                         m.started |= True
-                        pass
+                    self.log("Started epsilon propagation!")
                 elif cmd == 'start_no_init':
-                        m.started |= True
+                    m.started |= True
+                    self.log("Started epsilon propagation!")
                 elif cmd == 'stop':
                     for m in self.modules:
                         m.started &= False
+                    self.log("Stopped epsilon propagation!")
 
     def step_pre_validation_epoch(self, epoch, *args, **kwargs):
         self.step_pre_training_batch(self, *args, **kwargs)
@@ -131,6 +139,30 @@ class PACTEpsController(Controller):
                 if cmd == 'lock':
                     for m in self.modules:
                         m.locked |= True
+                    self.log("Locked epsilon!")
+
+    def state_dict(self):
+        return {'verbose':self.verbose}
+
+    def load_state_dict(self, state_dict : dict):
+        try:
+            self.verbose = state_dict['verbose']
+        except KeyError:
+            vo = self.verbose
+            self.verbose = True
+            self.log("Got a bad state_dict - ignoring!")
+            self.verbose = vo
+
+    def log(self, msg : str):
+        if self.verbose:
+            print("[PACTEpsController]   ", msg)
+
+    @staticmethod
+    def get_modules(net : nn.Module):
+        net_nodes = LightweightGraph.build_nodes_list(net)
+        filter_eps = SubTypeFilter(_PACTEps)
+        return [n.module for n in filter_eps(net_nodes)]
+
 
 class PACTActController(Controller):
     """
