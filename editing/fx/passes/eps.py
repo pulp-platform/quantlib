@@ -43,17 +43,17 @@ __all__ = ['AnnotateEpsPass',
            'extract_eps']
 
 def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor):
-    ret = m.get_eps_out(eps_in)
+    ret = m.get_eps_out(eps_in).type_as(eps_in)
     return ret
 
 def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor):
-    return m.get_eps()
+    return m.get_eps().type_as(eps_in)
 
 def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : torch.Tensor):
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
 def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
-    return m.get_eps_out(eps_in)
+    return m.get_eps_out(eps_in).type_as(eps_in)
 
 def eps_conversion_pact_matmul(m : nn.Module, *eps_ins):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
@@ -62,34 +62,34 @@ def eps_conversion_matmul(*eps_ins):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
 def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
-    return torch.Tensor((1./(m.n_levels-1.),))
+    return torch.Tensor((1./(m.n_levels-1.),)).type_as(eps_in)
 
 def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
-    return m.get_eps_out(eps_in)
+    return m.get_eps_out(eps_in).type_as(eps_in)
 
 def eps_conversion_identity(*eps_ins):
     return eps_ins[0]
 
 def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
-    return m.get_eps_out(eps_ins[0], eps_ins[1])
+    return m.get_eps_out(eps_ins[0], eps_ins[1]).type_as(eps_ins[0])
 
 def eps_conversion_pact_mean(m : nn.Module, *eps_ins, **kwargs):
     return eps_ins[0]
 
 def eps_conversion_pact_constwrap(m : nn.Module, *eps_ins, **kwargs):
-    return m.eps
+    return m.eps.type_as(eps_ins[0])
 
 def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
-    return m.act_out.get_eps()
+    return m.act_out.get_eps().type_as(eps_ins[0])
 
 def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
-    return m.adder.act_out.get_eps()
+    return m.adder.act_out.get_eps().type_as(eps_in)
 
 def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
     return m.statTracker.get_eps()
 
 def eps_conversion_mul(m : nn.Module, *eps_in):
-    return eps_in[0] * eps_in[1].type_as(eps_ins[0])
+    return eps_in[0] * eps_in[1].type_as(eps_in[0])
 
 _EPS_CONVERSIONS = {PACTLinear : eps_conversion_pact_linears,
                     PACTConv1d : eps_conversion_pact_linears,
@@ -138,13 +138,14 @@ def n_levels_out_pact_linears(m : nn.Module, in_levels : list, accumulator_level
 def n_levels_out_truediv(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
     return accumulator_levels
 
+def n_levels_out_unchanged(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    return in_levels
+
 def n_levels_out_pact_acts(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
     return m.n_levels
 
 def n_levels_out_pact_embedding(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
     return m.adder.act_out.n_levels
-    #     act_type = type(m.adder.act_out)
-#     return _N_LEVELS_PROP[act_type](m.adder.act_out, in_levels, accumulator_levels)
 
 
 _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
@@ -162,7 +163,8 @@ _N_LEVELS_OUT_PROP = {PACTLinear : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(operator.truediv)}' : n_levels_out_truediv,
                       f'_CALL_FUNCTION_{repr(operator.matmul)}' : n_levels_out_pact_linears,
                       f'_CALL_FUNCTION_{repr(torch.matmul)}' : n_levels_out_pact_linears,
-                      f'_CALL_FUNCTION_{repr(torch.bmm)}' : n_levels_out_pact_linears,}
+                      f'_CALL_FUNCTION_{repr(torch.bmm)}' : n_levels_out_pact_linears,
+                      '_CALL_METHOD_view' : n_levels_out_unchanged,}
 
 @dataclass
 class QuantInfo:

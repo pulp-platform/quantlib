@@ -804,7 +804,7 @@ class _PACTLinOp:
         """
         :return: epsilons of the output pre-activations
         """
-        return self.get_eps_w()*eps_in
+        return self.get_eps_w().type_as(eps_in)*eps_in
 
     @property
     def pact_repr_str(self):
@@ -1247,7 +1247,7 @@ class PACTHardswish(nn.Module):
         return inp * x
 
     def get_eps_out(self, eps_in):
-        return self.eps_s * eps_in * eps_in
+        return self.eps_s.type_as(eps_in) * eps_in * eps_in
 
 
 class PACTIntegerHardswish(nn.Module):
@@ -1301,7 +1301,7 @@ class PACTHardsigmoid(nn.Module):
         return x * one_over_six
 
     def get_eps_out(self, eps_in):
-        return self.eps_s * eps_in
+        return self.eps_s.type_as(eps_in) * eps_in
 
 
 class PACTIntegerHardsigmoid(nn.Module):
@@ -1657,7 +1657,7 @@ class PACTGELU(_PACTEps):
     def get_eps_out(self, eps_in=None):
         if eps_in is not None:
             self.set_eps_in(eps_in)
-        return self.epsOut
+        return self.epsOut.type_as(eps_in)
 
     def set_eps_in(self, eps_in_list):
         super().set_eps_in(eps_in_list)
@@ -1874,7 +1874,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
     def get_eps_out(self, eps_in):
         self.set_eps_in([eps_in])
         eps_out_div = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
-        return eps_out_div
+        return eps_out_div.type_as(eps_in)
 
     def set_eps_in(self, eps_in_list):
         super().set_eps_in(eps_in_list)
@@ -2384,8 +2384,12 @@ class PACTDiv(_PACTEps):
         self.set_eps_in([torch.Tensor((eps_div,)), torch.Tensor((eps_div,))])
 
     def set_eps_in(self, eps_in_list):
-        self.eps_in_x[:] = eps_in_list[0]
-        self.eps_in_y[:] = eps_in_list[1]
+        if len(eps_in_list) == 2:
+            self.eps_in_x[:] = eps_in_list[0]
+            self.eps_in_y[:] = eps_in_list[1]
+        else:
+            self.eps_in_x[:] = eps_in_list[0]
+            self.eps_in_y[:] = eps_in_list[0]
         assert self.eps_in_y > 0, "PACTDiv: Denominator's eps is lt or eq 0!"
 
         if self.stable:
@@ -2514,7 +2518,7 @@ class PACTIntegerMean(nn.Module):
         @staticmethod
         @parse_args('v', 'is', 'i')
         def symbolic(g,x, axes, keepdims):
-            return g.op("PACTOps::IntegerMean", x, axes_i=axes, keepdims_i=keepdims)
+            return g.op("PACTOps::IntegerMean", x, axes_i=[axes], keepdims_i=keepdims)
 
 
     def __init__(self, dim, keepdim=False, **kwargs):
