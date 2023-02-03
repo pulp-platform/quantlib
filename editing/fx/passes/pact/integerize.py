@@ -801,7 +801,7 @@ class IntegerizePACTNetPass(SequentialPass):
         # convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
         # second step: annotate epsilons and n_levels
-        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in))
+        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=True))
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
             passes.append(FixChannelNumbersPass())

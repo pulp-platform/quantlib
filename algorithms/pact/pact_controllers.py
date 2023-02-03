@@ -123,7 +123,7 @@ class PACTEpsController(Controller):
                     self.log("Started epsilon propagation!")
                 elif cmd == 'start_no_init':
                     m.started |= True
-                    self.log("Started epsilon propagation!")
+                    self.log("Started epsilon propagation without initialization!")
                 elif cmd == 'stop':
                     for m in self.modules:
                         m.started &= False
@@ -235,7 +235,7 @@ class PACTActController(Controller):
                 elif cmd == 'start_no_init':
                     for m in self.modules:
                         m.started |= True
-                    self.log("Started activation quantization!")
+                    self.log("Started activation quantization without initialization!")
 
                 elif cmd == 'freeze':
                     for m in self.modules:
