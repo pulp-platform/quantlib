@@ -21,24 +21,108 @@
 #
 
 from functools import partial
-from itertools import chain
 from pathlib import Path
 import numpy as np
-import json
 
 import torch
-from torch.onnx.utils import _model_to_graph as mtg
 from torch import nn
-import torchvision
 
 import onnx
-from onnx import shape_inference
 
 import quantlib.editing.fx as qlfx
-from quantlib.editing.fx.util import module_of_node
 from quantlib.editing.lightweight import LightweightGraph
 from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule
 
+# Import ONNX runtime
+from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
+from onnxruntime.transformers.optimizer import optimize_model
+from dataclasses import dataclass
+
+@dataclass
+class OptimizationConfig:
+    enable_gelu: bool = True
+    enable_layer_norm: bool = True
+    enable_attention: bool = True
+    enable_skip_layer_norm: bool = False
+    enable_embed_layer_norm: bool = False
+    enable_bias_skip_layer_norm: bool = False
+    enable_bias_gelu: bool = False
+    enable_gelu_approximation: bool = False
+    enable_qordered_matmul: bool = False
+    enable_shape_inference: bool = True
+    attention_mask_format: int = 3
+
+# By default all attributes of the original node are removed and replaced 
+# with the default attributes of the temporary replacement node.
+NODES_MAPPING = {
+    # Replace nodes with 3 inputs with LayerNorm
+    "iLayerNorm": {
+        "op_type": "LayerNormalization",
+    },
+    "RequantShift": {
+        "op_type": "LayerNormalization",
+    },
+    # Replace nodes with 1 input with ReLU
+    "iSoftmax": {
+        "op_type": "Relu",
+    },
+    "iGELU": {
+        "op_type": "Relu",
+    },
+    "IntegerDiv": {
+        "op_type": "Div",
+    },
+    # Copy original attribute to replaced node
+    "IntegerMean": {
+        "op_type": "ReduceMean",
+        "attr": "copy"
+    },
+    # # Set custom attributes in replaced node
+    # "IntegerMean": {
+    #     "op_type": "ReduceMean",
+    #     "attr": {
+    #         "axes": [1],
+    #         "keepdims": 0
+    #     }
+    # },
+}
+
+
+def save_beautiful_text(t: np.ndarray, layer_name: str, filepath: str):
+    with open(str(filepath), 'w') as fp:
+        fp.write(f"# {layer_name} (shape {list(t.shape)}),\n")
+
+        if t.ndim == 3:
+            t = t.reshape(1, t.shape[0], t.shape[1], t.shape[2])
+        elif t.ndim == 2:
+            t = t.reshape(1, 1, t.shape[0], t.shape[1])
+        elif t.ndim == 1:
+            t = t.reshape(1, 1, 1, t.shape[0])
+
+        print(layer_name, t.max())
+        for batch in t:
+            if t.ndim >= 4: fp.write("[\n")
+            for channel in batch:
+                if t.ndim >= 4:
+                    fp.write("  [\n  ")
+                elif t.ndim >= 3:
+                    fp.write(" [\n")
+                for row in channel:
+                    for i in row:
+                        if batch.max() == 0 or np.log2(np.abs(batch.max())) <= 8:
+                            fp.write(f"{int(i):4d} ")
+                        elif np.log2(np.abs(batch.max())) <= 16:
+                            fp.write(f"{int(i):6d} ")
+                        else:
+                            fp.write(f"{int(i):11d} ")
+
+                    if t.ndim >= 4:
+                        fp.write("\n  ")
+                    elif t.ndim >= 3:
+                        fp.write("\n")
+
+                if t.ndim >= 3: fp.write("]\n")
+            if t.ndim >= 4: fp.write("]\n")
 
 def export_net(net: nn.Module,
                name: str,
@@ -65,7 +149,11 @@ def export_net(net: nn.Module,
             eps_in=eps_in,
             D=D,
             n_levels_in=n_levels_in,
-            requant_node=True)
+            requant_node=True,
+            export_layernorm_node = True, 
+            export_softmax_node = True,
+            export_gelu_node = True, 
+            export_div_node = True)
         net_integerized = int_pass(net_traced)
     else:
         net_integerized = net
@@ -75,48 +163,114 @@ def export_net(net: nn.Module,
         "input_names": ["input"],
         "output_names": ["output"],
         "do_constant_folding": True,
-        "_retain_param_name": True
     }
     try:
         torch.onnx._export(net_integerized.to('cpu'), (in_data, ),
-                            str(onnx_path),
-                            opset_version=opset_version,
-                            custom_opsets={"PACTOps": 1},
-                            onnx_shape_inference=False,
-                            **kwargs)
-        graph, _, _ = mtg(net_integerized.to('cpu'), in_data, **kwargs)
+                           str(onnx_path),
+                           opset_version=opset_version,
+                           custom_opsets={"PACTOps": 1},
+                           onnx_shape_inference=False,
+                           verbose=False,
+                           keep_initializers_as_inputs = False,
+                           **kwargs)
 
     except torch.onnx.CheckerError:
         print("Disregarding PyTorch ONNX CheckerError...")
-
-    # Infer the shapes on the ONNX graph
-    varDict = {}
-    for i in graph.nodes():
-        varDict[i.output().debugName()] = i.output().type().sizes()
-
+    
     onnxModel = onnx.load_model(str(onnx_path))
-    for key,value in varDict.items():
-        onnxModel.graph.value_info.append(onnx.helper.make_tensor_value_info(key, onnx.TensorProto.FLOAT, value))
+
+    # Rename nodes 
+    if torch.__version__ < '1.13':
+        pass
+        # For pytorch < 1.13 overwrite name with name of the traced nodes
+        # WIESEP: Be careful, I am not sure if the order of the nodes in the onnx model and traced net is always the same!
+        # for i, node in enumerate(net_integerized.graph.nodes):
+        #     if i == 0: continue  # First node is the input
+        #     if i > len(onnxModel.graph.node): break  # Last node is the ouput
+        #     onnxModel.graph.node[i - 1].name = node.name
+    else:
+        # # For pytorch >= 1.13 preserves the original scope names with some changes
+        # # Replace "/" characters
+        for n in onnxModel.graph.node:
+            n.name = n.name.replace("/", "_")
+
+            for i, name in enumerate(n.input):
+                n.input[i] = name.replace("/", "_")
+
+            for i, name in enumerate(n.output):
+                n.output[i] = name.replace("/", "_")
+
+        for i, info in enumerate(onnxModel.graph.value_info):
+            onnxModel.graph.value_info[i].name = info.name.replace("/", "_")
+
+
+    # Replace custom nodes with standard ones for optimization
+    replaced_nodes = {}    
+    for n in onnxModel.graph.node:
+        if n.op_type in NODES_MAPPING:
+            replaced_nodes[n.name] = n.__deepcopy__()
+            replace_node = NODES_MAPPING[n.op_type]
+            n.op_type = replace_node["op_type"]
+            n.domain = ""
+            # Remove original attributes
+            if "attr" in replace_node:
+                if replace_node["attr"] == "copy":
+                    pass
+                else:
+                    for att in n.attribute.__deepcopy__():
+                        n.attribute.remove(att)
+                    for key in replace_node["attr"]:
+                        att = onnx.helper.make_attribute(key, replace_node["attr"][key])
+                        n.attribute.append(att)
+            else:
+                for att in n.attribute.__deepcopy__():
+                    n.attribute.remove(att)
+
+    onnx.save_model(onnxModel, str(onnx_path))
+
+    # Optimize ONNX model with replaced nodes
+    optimization_config = OptimizationConfig(
+        enable_skip_layer_norm=False, 
+        enable_bias_gelu=False,
+    )
+    optimizer = optimize_model(str(onnx_path), optimization_options=optimization_config)
+    optimizer.save_model_to_file(str(onnx_path))
+
+    # Run shape inference
+    onnxModel = onnx.load_model(onnx_path)
+    onnxModel = SymbolicShapeInference.infer_shapes(onnxModel)
+    onnx.save_model(onnxModel, onnx_path)
+
+    # Switch back custom nodes
+    for n in onnxModel.graph.node:
+        if n.name in replaced_nodes:
+            n.op_type = replaced_nodes[n.name].op_type
+            # Remove attributes of the standard nodes
+            for att in n.attribute.__deepcopy__():
+                n.attribute.remove(att)
+            # Restore original attributes
+            for att in replaced_nodes[n.name].attribute:
+                n.attribute.append(att)
 
     onnx.save_model(onnxModel, str(onnx_path))
 
     # Pass a test input through the model and log the intermediate activations
-
     # Make a forward hook to dump outputs of RequantShift layers
-    integerized_nodes = LightweightGraph.build_nodes_list(
-        net_integerized, leaf_types=(PACTWrapMHSA, ))
     acts = []
 
     def dump_hook(self, inp, outp, name):
-        acts.append((name, torch.floor(outp)))
+        name = name.lower().replace(".", "_")
+        acts.append((name, torch.round(outp)))
 
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(PACTWrapMHSA, ))
     for n in integerized_nodes:
         if isinstance(
                 n.module,
-            (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d,
-             nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d,
-             nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear,
-             PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA)):
+            (RequantShift, nn.Conv2d, nn.Conv1d, nn.AdaptiveAvgPool1d,
+             nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d,
+             nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d,
+             nn.MaxPool3d, nn.Linear, PACTIntegerLayerNorm, PACTIntegerGELU,
+             PACTWrapMHSA)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
 
@@ -126,13 +280,11 @@ def export_net(net: nn.Module,
         net_integerized = net_integerized.to(dtype=torch.float64)
         output = net_integerized(input).to(dtype=torch.float64)
 
-        input_np = torch.round(input.detach()).numpy()
-        output_np = torch.round(output.detach()).numpy()
+        input_np = torch.round(input.detach()).numpy().astype(np.int64)
+        output_np = torch.round(output.detach()).numpy().astype(np.int64)
 
-        np.savez(out_path.joinpath("inputs.npz"),
-                 input=input_np.astype(np.int64))
-        np.savez(out_path.joinpath("outputs.npz"),
-                 output=output_np.astype(np.int64))
+        np.savez(out_path.joinpath("inputs.npz"), input=input_np)
+        np.savez(out_path.joinpath("outputs.npz"), output=output_np)
 
         acts_np = {}
         for _, (lname, t) in enumerate(acts):
@@ -140,16 +292,7 @@ def export_net(net: nn.Module,
 
         np.savez(out_path.joinpath("activations.npz"), **acts_np)
 
-        def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
-            t = t.squeeze(0)
-
-            filepath = out_path.joinpath(f"{filename}.txt")
-            with open(str(filepath), 'w') as fp:
-                fp.write(f"# {layer_name} (shape {list(t.shape)}),\n")
-                for el in t.flatten():
-                    fp.write(f"{int(el)},\n")
-                    
-        save_beautiful_text(input_np, "input", "input")
-        save_beautiful_text(output_np, "output", "output")
-
-        print("Done")
+        # save_beautiful_text(input_np, "input_0", out_path.joinpath("input.txt"))
+        # save_beautiful_text(output_np, "output_0", out_path.joinpath("output.txt"))
+        # for jdx, lname in enumerate(acts_np):
+        #     save_beautiful_text(acts_np[lname], lname, out_path.joinpath(f"activations{jdx:02d}.txt"))
