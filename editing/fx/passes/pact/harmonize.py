@@ -21,7 +21,7 @@
 #
 #
 
-from typing import Optional, Union
+from typing import Optional, Union, Dict, List
 import operator
 
 import torch
@@ -33,13 +33,13 @@ from quantlib.algorithms.generic.generic_ops import *
 
 
 from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, ReplaceSequentialPatternPass
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, ReplaceSequentialPatternPass, InsertModuleAfterNodePass
 from ...util import gm_modules, get_qualified_prefix
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 
 from .pact_util import PACT_symbolic_trace
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, RetracePass, ModularizePass
+from .. import RetracePass, ModularizePass
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
@@ -296,6 +296,92 @@ class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
                                                                   make_module_fn=self.inserted_module,
                                                                   name=name,
                                                                   combine='force')
+
+    def inserted_module(self, *args, **kwargs):
+        if self.signed:
+            return PACTAsymmetricAct(**self.kwargs)
+        else:
+            module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
+            return PACTUnsignedAct(**module_kwargs)
+
+class InsertActivationsAfterLinearsPass(SequentialPass):
+    before_modules = (
+        nn.Conv1d,
+        nn.Conv2d,
+        nn.Conv3d,
+        nn.Linear,
+        PACTLayerNorm,
+        PACTLayerNorm, 
+        PACTIntegerMatmul, 
+        PACTDiv,
+        PACTSoftmax, 
+        PACTGELU,
+    )
+
+    activation_nodes = (
+        PACTUnsignedAct,
+        PACTUnsignedAct,
+    )
+
+    def __init__(self, signed : bool = True, **kwargs):
+        self.name = "PACT_LINEAR_ACTIVATIONS"
+        super(InsertActivationsAfterLinearsPass, self).__init__(name_prefix=self.name)
+        
+        self.signed = signed
+        default_kwargs = {'learn_clip' : True, 'tqt' : True, 'init_clip' : 'max', 'act_kind' : 'identity'}
+        default_kwargs.update(kwargs)
+        self.kwargs = default_kwargs
+
+    def retarget(self, gm : fx.GraphModule):
+        for k in self.named_subpasses().keys():
+            self.remove_subpass(k)
+
+        passes = []
+
+        modules = dict(gm.named_modules())
+        output_node = list(gm.graph.nodes.__reversed__())[0]
+        node_list = self.find_unactivated_linops(output_node, modules, self.before_modules , self.activation_nodes, outputQuant=True)
+
+        idx = 0
+        for node in node_list:
+            new_module = self.inserted_module(node)
+            if new_module is not None:
+                passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
+                idx += 1
+
+
+        super(InsertActivationsAfterLinearsPass, self).setup_passes(passes)
+
+    def find_unactivated_linops(self, output_node: torch.fx.Node, modules: Dict[str, torch.nn.Module], linear_op_nodes: List[torch.nn.Module], act_nodes: List[torch.nn.Module], outputQuant: bool = False) -> List[torch.fx.Node]:
+
+        node = output_node
+        linop_list = []
+        offenders = []
+
+        while node.op != 'placeholder':
+            if (node.target in modules.keys()) and any(isinstance(modules[node.target], pattern) for pattern in linear_op_nodes):
+                linop_list.append(node)
+            node = node._prev
+
+        for node in linop_list:
+            if not self.has_trailing_acts_or_output(node, modules, linear_op_nodes, act_nodes, outputQuant):
+                offenders.append(node)
+
+        return offenders
+
+    def has_trailing_acts_or_output(self, node: torch.fx.Node, modules: Dict[str, torch.nn.Module], linear_op_nodes: List[torch.nn.Module], act_nodes: List[torch.nn.Module], outputQuant: bool = False) -> bool:
+
+        nodeBool = True
+
+        for output_node in node.users.keys():
+            if (outputQuant and output_node.op == 'output') or output_node.op == 'placeholder' or (output_node.target in modules.keys() and isinstance(modules[output_node.target], tuple(linear_op_nodes))):
+                return False
+            elif (output_node.target in modules.keys()) and isinstance(modules[output_node.target], tuple(act_nodes)):
+                continue
+            else:
+                nodeBool &= self.has_trailing_acts_or_output(output_node, modules, linear_op_nodes, act_nodes, outputQuant)
+
+        return nodeBool
 
     def inserted_module(self, *args, **kwargs):
         if self.signed:
