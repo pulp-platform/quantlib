@@ -679,7 +679,7 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
             return g.op("PACTOps::iSoftmax", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
 
-    def __init__(self, n_levels: int = 256, eps_in: float = 1./255):
+    def __init__(self, n_levels: int = 256, eps_in: float = 1./255, export_node=False):
         super().__init__()
 
         self.eps_in = eps_in
@@ -691,6 +691,7 @@ class PACTIntegerSoftmax(torch.nn.Module):
         self.zero = torch.Tensor((0.,))
 
         self.updateCoeffs(eps_in)
+        self.export_node = export_node
 
     def updateCoeffs(self, eps):
         """Updates the coefficients, usually only done with the IntegerizeSoftmax pass
@@ -700,9 +701,6 @@ class PACTIntegerSoftmax(torch.nn.Module):
         :rtype:
 
         """
-
-        p = 0
-        #eps2 = torch.Tensor((0.35815147 / 2**p,))
         eps = eps
         eps2 = torch.Tensor((0.3585,))
 
@@ -711,7 +709,8 @@ class PACTIntegerSoftmax(torch.nn.Module):
         self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2))
 
         #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
-        self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
+        #self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
+        self.log2.data[0] = torch.round(math.log2(2)/(eps))
 
     def forward(self, x):
         """Approximate Softmax implementation according to the I-BERT paper:
@@ -722,151 +721,121 @@ class PACTIntegerSoftmax(torch.nn.Module):
         :rtype:
 
         """
+        if self.export_node:
+            return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+        else:
+            return self.MySoftmax.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
-        return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
 class PACTGELU(_PACTEps):
 
-    def __init__(self,  n_levels: int = 256):
+    def __init__(self):
         super().__init__(True)
-
-        self.n_levels = n_levels
-        self.register_buffer('a',torch.Tensor((-0.288,)))
+        self.register_buffer('a',torch.Tensor((-0.2888,)))
         self.register_buffer('b',torch.Tensor((-1.769,)))
         self.register_buffer('one', torch.Tensor((1.,)))
-        self.register_buffer('sqrttwo', torch.Tensor((4,)))
-        self.register_buffer('clip_gradient', torch.tensor(True))
-        self.register_buffer('floor', torch.tensor(False))
-        # Maxval is used to gather statistics
-        self.register_buffer('maxval', torch.Tensor((0.,)))
+        self.register_buffer('sqrttwo', torch.Tensor((math.sqrt(2),)))
+
+        self.register_buffer('epsA',torch.Tensor((1.,)))
+        self.register_buffer('epsB',torch.Tensor((1.,)))
+        self.register_buffer('epsOne', torch.Tensor((1.,)))
+        self.register_buffer('epsOut', torch.Tensor((1.,)))
+
+    def get_eps_out(self, eps_in=None):
+        if eps_in is not None:
+            self.set_eps_in(eps_in)
+        return self.epsOut.type_as(eps_in)
+
+    def set_eps_in(self, eps_in_list):
+        super().set_eps_in(eps_in_list)
+        self.updateCoeffs(self.eps_in)
 
     def updateCoeffs(self, eps_in):
-        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
+        def RQ(x,eps):
+            if self.started:
+                x = torch.floor(x/eps+0.5)*eps
+            return x
 
-        :param eps_in: Input epsilon
-        :returns:
-        :rtype:
-
-        """
-        epsX = eps_in * (math.sqrt(2))
-
-        r = 8
-        p = 0
-
-        #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
         with torch.no_grad():
-            epsB = epsX
-            epsA = torch.Tensor(((0.288)/2**p,)).type_as(eps_in)
-            self.epsB = epsB.detach()
-            self.epsA = epsA.detach()
+            epsB = eps_in / math.sqrt(2.)
+            epsA = torch.Tensor(((0.2888),)).type_as(eps_in)
             epsOne = epsB**2*epsA
             epsOut = epsOne * eps_in
 
-            #import IPython; IPython.embed()
+            self.epsB = epsB
+            self.epsA = epsA
+            self.epsOne = epsOne
+            self.epsOut = epsOut
 
-            self.a.data[0] = torch.round(-0.288/epsA) * epsA
-            self.b.data[0] = torch.round(-1.769/epsB) * epsB
-            self.one.data[0] = torch.round(1./(epsB**2*epsA)) * epsB**2*epsA
-            self.sqrttwo.data[0] = torch.round(math.sqrt(2)/(eps_in/epsB))/(eps_in/epsB)
+            self.a = RQ(torch.Tensor((-0.2888,)).type_as(self.a), epsA)
+            self.b = RQ(torch.Tensor((-1.769,)).type_as(self.b), epsB)
+            self.one = RQ(torch.Tensor((1.,)).type_as(self.one),epsB**2*epsA)
+            self.sqrttwo = RQ(torch.Tensor((math.sqrt(2.),)).type_as(self.sqrttwo),torch.Tensor((math.sqrt(2.),)).type_as(self.sqrttwo))
 
     def forward(self, x):
-        """Approximate floating point GELU implementation according to the I-BERT paper:
-        https://arxiv.org/abs/2101.01321
+        def RQ(x,eps):
+            if self.started:
+                x = torch.floor(x/eps+0.5)*eps
+            return x
 
-        :param x:
-        :returns:
-        :rtype:
+        q = RQ(torch.clip(torch.abs(x/self.sqrttwo), max=-self.b), self.epsB)
+        L = torch.sign(x) * (self.a * (q + self.b)**2 + self.one)
 
-        """
-        #Estimate epsilon
-        with torch.no_grad():
-            if torch.min(x) >= 0:
-                clip_lo = torch.Tensor((0,)).type_as(x)
-                clip_hi = torch.abs(torch.max(x))
-            else:
-                clip_lo = -torch.abs(torch.max(x))
-                clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-
-            eps = (clip_hi-clip_lo)/(self.n_levels-1)
-
-        L = torch.sign(x) * (-0.2888*(torch.clip(torch.abs(x/math.sqrt(2)), min=0, max=1.769) - 1.769)**2 + 1)
-        y = x*((1+L)/2)
-
-        self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-
+        y = x * RQ(((self.one+L)/2),self.epsOne)
         return y
 
+
 class PACTIntegerGELU(torch.nn.Module):
+
 
     class MyGELU(torch.autograd.Function):
 
         @staticmethod
-        def forward(ctx, x, b, one, totScaler, D, n_levels, zero):
-            L = torch.sign(x) * (-(torch.clip(torch.abs(x), min=zero, max=-b) + b)**2 + one)
-            y = x*((one+L)>>1)
-
-            y = torch.floor((y * totScaler)/D)
-            y = torch.clip(y, min=-n_levels//2, max = n_levels//2-1)
+        def forward(ctx, x, b, one):
+            L = torch.sign(x) * ( - (torch.clip(torch.abs(x), max=-b) + b)**2 + one)
+            y = x*torch.floor(((one+L)/2))
 
             return y
 
         @staticmethod
-        @parse_args('v', 't','t','t','t','t','t')
-        def symbolic(g, x, b, one, totScaler, D, n_levels, zero):
+        @parse_args('v', 'i','i')
+        def symbolic(g, x, b, one):
+            return g.op("PACTOps::iGELU", x, b_i=b, one_i=one)
 
-            b_ = g.op("Constant", value_t=b)
-            one_ = g.op("Constant", value_t=one)
-            totScaler_ = g.op("Constant", value_t=totScaler)
-            D_ = g.op("Constant", value_t=D)
-            n_levels_ = g.op("Constant", value_t=n_levels)
-
-            return g.op("PACTOps::iGELU", x, b_t=b, one_t=one, totScaler_t=totScaler, D_t=D, n_levels_t=n_levels)
-
-    def __init__(self, n_levels: int = 256, eps_in = 1., maxval = 1.):
+    def __init__(self, eps_in = 1., D=2**14, export_node = False):
         super().__init__()
 
-        self.n_levels = torch.Tensor((n_levels,)).detach()
+        self.register_buffer('a',torch.Tensor((-0.288,)))
+        self.register_buffer('b',torch.Tensor((-1.769,)))
+        self.register_buffer('one',torch.Tensor((1.,)))
+        self.register_buffer('sqrttwo',torch.Tensor((math.sqrt(2.),)))
+        self.register_buffer('D', torch.Tensor((D,)))
+        self.export_node = export_node
 
-        self.a = torch.Tensor((-0.288,)).detach()
-        self.b = torch.Tensor((-1.769,)).detach()
-        self.one = torch.Tensor((1.,)).detach()
-        self.sqrttwo = torch.Tensor((4,)).detach()
-
-        self.D = torch.Tensor((2.**16,)).detach()
-        self.totScaler = torch.Tensor((255.,)).detach()
-        self.maxval = torch.Tensor((maxval,)).detach()
-
-        self.zero = torch.Tensor((0.,)).detach()
+        self.register_buffer("eps_out",torch.Tensor((0,)))
 
         self.updateCoeffs(eps_in)
 
     def updateCoeffs(self, eps_in):
-        """Updates the polynomial coefficients, usually only done by the IntegerizeGELU pass
+        def RQ(x,eps):
+            x = torch.floor(x/eps + 0.5)
+            return x
 
-        :param eps_in: Input epsilon
-        :returns:
-        :rtype:
+        with torch.no_grad():
+            epsB = eps_in / math.sqrt(2.)
+            epsA = torch.Tensor(((0.2888),)).type_as(eps_in)
+            epsOne = epsB**2*epsA
+            epsOut = epsOne * eps_in
 
-        """
-        epsX = eps_in * (math.sqrt(2))
+            self.epsB = epsB
+            self.epsA = epsA
+            self.epsOne = epsOne
+            self.epsOut = epsOut
 
-        r = 8
-        p = 0
-
-        #epsB = torch.Tensor((max(epsX, (2*1.769)/(2**r)),))
-        epsB = torch.Tensor((epsX,))
-        epsA = torch.Tensor(((0.288)/2**p,))
-        epsOne = epsB**2*epsA
-        epsOut = epsOne * eps_in
-
-        self.eps_out = self.maxval/(self.n_levels//2-1) #epsOut
-
-        self.a.data[0] = torch.round(-0.288/epsA)
-        self.b.data[0] = torch.round(-1.769/epsB)
-        self.one.data[0] = torch.round(1./(epsB**2*epsA))
-        self.sqrttwo.data[0] = torch.round(torch.Tensor((2.,)))
-
-        self.totScaler.data[0] = torch.round((self.D * epsOut) / self.eps_out)
+            self.a = RQ(torch.Tensor((-0.2888,)).type_as(self.a), epsA)
+            self.b = RQ(torch.Tensor((-1.769,)).type_as(self.b), epsB)
+            self.one = RQ(torch.Tensor((1.,)).type_as(self.one),epsB**2*epsA)
+            self.sqrttwo = RQ(torch.Tensor((math.sqrt(2.),)).type_as(self.sqrttwo),torch.Tensor((math.sqrt(2.),)).type_as(self.sqrttwo))
 
     def forward(self, x):
 
@@ -878,7 +847,12 @@ class PACTIntegerGELU(torch.nn.Module):
         :rtype:
 
         """
-        return self.MyGELU.apply(x, self.b.type_as(x), self.one.type_as(x), self.totScaler.type_as(x), self.D.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+        if self.export_node:
+            return self.MyGELU.apply(x, int(self.b.item()), int(self.one.item()))
+        else:
+            return self.MyGELU.forward(None, x, self.b.type_as(x), self.one.type_as(x))
+
+
 
 class PACTIntegerLayerNorm(torch.nn.Module):
 
@@ -886,12 +860,12 @@ class PACTIntegerLayerNorm(torch.nn.Module):
 
         @staticmethod
         def forward(ctx, x, weight, bias, D, n_levels):
-            nom = x - torch.floor(torch.mean(x, len(x.shape)-1, keepdim=True))
+            nom = x - (torch.mean(x, len(x.shape)-1, keepdim=True).int().float())
             denom = torch.floor(torch.sqrt(torch.floor(torch.mean(nom**2, len(x.shape)-1, keepdim=True))+1))
 
             nom = nom * weight
 
-            y = (torch.floor(torch.div(nom,denom)))
+            y = (torch.div(nom,denom)).int().float()
 
             y = y + (bias)
 
@@ -909,7 +883,7 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             return g.op("PACTOps::iLayerNorm", x, weight, bias, D_t=D, n_levels_t=n_levels)
 
 
-    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,)), D=2**24):
+    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), bias : torch.Tensor = torch.Tensor((0.,)), D=2**24, export_node=False, **kwargs):
         super().__init__()
 
         self.n_levels = torch.Tensor((n_levels,)).detach()
@@ -929,6 +903,8 @@ class PACTIntegerLayerNorm(torch.nn.Module):
         dummyOne =  torch.Tensor((1.,)).type_as(weight)
         dummyZero = torch.Tensor((0.,)).type_as(bias)
 
+        self.export_node = export_node
+
         if not torch.equal(weight, dummyOne) and not torch.equal(bias, dummyZero):
             clip_lo = -max(torch.max(torch.abs(bias)), torch.max(torch.abs(weight)))
             clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
@@ -936,23 +912,28 @@ class PACTIntegerLayerNorm(torch.nn.Module):
             eps_weights = (clip_hi-clip_lo)/(n_levels-1)
             eps_bias = eps_weights
 
-            self.eps_weights = eps_weights
+            self.eps_weights =  eps_weights.detach()
 
-            self.weight = nn.Parameter(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach(), requires_grad=False)
-            self.bias = nn.Parameter(torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach(), requires_grad=False)
-            self.totScaler = torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach()
+            self.register_buffer("weight", torch.Tensor(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()))
+            self.register_buffer("bias", torch.Tensor(torch.round(PACTQuantize(bias, eps_bias, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_bias).detach()))
+            self.register_buffer("totScaler", torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach())
 
             self.weight *= self.totScaler
             self.bias *= self.totScaler
 
         else:
 
-            self.bias = torch.Tensor((0.,)).detach()
-            self.totScaler = torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach()
-            self.weight = self.totScaler
+            self.register_buffer("bias", torch.Tensor((0.,)).detach())
+            self.register_buffer("totScaler",torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach())
+            self.register_buffer("weight",self.totScaler)
 
     def forward(self, x):
-        return self.MyLayerNorm.apply(x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+        if self.export_node:
+            return self.MyLayerNorm.apply(x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+        else:
+            return self.MyLayerNorm.forward(None, x, self.weight.type_as(x), self.bias.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+
+
 class _PACTLinOp:
     # a helper class to provide initialization code common to all PACT/TQT
     # linear operators in the setup_quant_params() function.
@@ -1113,7 +1094,8 @@ class _PACTLinOp:
 
 class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
-    def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), eps=1e-5, *args, **kwargs):
+
+    def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), bias = torch.Tensor((0.,)), eps=1e-3, *args, **kwargs):
         _PACTLinOp.__init__(self)
         _PACTEps.__init__(self)
         self.setup_quant_params(*args, **kwargs)
@@ -1121,6 +1103,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         self.normalized_shape = normalized_shape
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
+
 
         self.register_buffer('eps', torch.Tensor((eps,)))
         self.register_buffer('eta', torch.Tensor((1.,)))
@@ -1141,7 +1124,8 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
     def get_eps_out(self, eps_in):
         self.set_eps_in([eps_in])
-        return self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
+        eps_out_div = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
+        return eps_out_div.type_as(eps_in)
 
     def set_eps_in(self, eps_in_list):
         super().set_eps_in(eps_in_list)
@@ -1154,7 +1138,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
     def forward(self, x):
         def RQ(x, eps):
             if self.started:
-                x = torch.floor(x/eps)*eps
+                x = torch.floor(x/eps+0.5)*eps
             return x
 
         nom = x - RQ(torch.mean(x, -1, keepdim=True), self.eps_in)
@@ -1164,7 +1148,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         eps = RQ(self.eta**2 * self.eps , self.eps_in**2)
 
         if self.started:
-            assert eps>=self.eps_in**2, "Eps was rounded down in PACTLayerNorm"
+            assert eps>=self.eps_in**2, f"Eps was rounded down in PACTLayerNorm, eta = {self.eta}, eps = {self.eps}, eps_in = {self.eps_in}"
 
         denom = RQ(torch.sqrt(var + eps), self.eps_in)
 
@@ -2201,72 +2185,6 @@ class PACTIntegerHardsigmoid(nn.Module):
         x = torch.clip(x, z, self.six)
         return x * self.one_over_six
 
-
-class PACTIntegerLayerNorm(torch.nn.Module):
-
-    def __init__(self, module, n_levels: int = 256):
-        super().__init__()
-
-        self.n_levels = n_levels
-        self.frozen = False
-        self.eps_in = 1.
-        self.eps = 1.
-        self.module = copy.deepcopy(module)
-
-        self.register_buffer('totScaler', torch.Tensor((255.,)))
-        self.register_buffer('D', torch.Tensor((2**16,)))
-        self.register_buffer('maxval', torch.Tensor((1.,)))
-
-    def forward(self, x):
-        if self.frozen:
-            nom = x - torch.floor(torch.mean(x, -1, keepdim=True))
-            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(torch.pow(nom, 2), -1, keepdim=True))+self.eps))
-            y = torch.floor((torch.floor(torch.div(self.totScaler*nom,denom)))/self.D)
-            y = torch.clip(y, -self.n_levels//2, self.n_levels//2-1)
-        else:
-            y = self.module(x)
-
-            self.maxval.data[0] = max(torch.max(torch.abs(y)).item(), self.maxval)
-            scaler = (self.n_levels)/self.maxval
-            self.totScaler.data[0] = math.floor(self.D * scaler)
-
-        return y
-
-class PACTIntegerSoftmax(torch.nn.Module):
-
-    def __init__(self, module, eps_in: float = 1./255, n_levels: int = 256):
-        super().__init__()
-        self.n_levels = n_levels
-        self.module = copy.deepcopy(module)
-        self.frozen = False
-        self.eps_in = eps_in
-
-        self.register_buffer('coeffA', torch.Tensor((0.3585,)))
-        self.register_buffer('coeffB', torch.Tensor((1.353,)))
-        self.register_buffer('coeffC', torch.Tensor((0.344,)))
-        self.register_buffer('log2', torch.Tensor((4.,)))
-
-    def updateCoeffs(self, eps):
-        eps2 = (1./(2**8))/(eps**2)
-
-        self.coeffA.data[0] = math.floor(0.3585/eps2)
-        self.coeffB.data[0] = math.floor(1.353/eps)
-        self.coeffC.data[0] = math.floor(0.344/(eps**2*eps2))
-        self.log2.data[0] = 2**math.floor(math.log2(math.log2(2)/(eps)))
-
-    def forward(self, x):
-        if self.frozen:
-            xTilde = (x - torch.max(x))
-            z = torch.floor(-xTilde / self.log2)
-            p = xTilde + z * self.log2
-            y = (self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z
-            ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
-            out = torch.floor(y*(self.n_levels-1)/ysum)
-            return out
-        else:
-            y = self.module(x)
-
-        return y
 
 class PACTWrapLinearAttention(nn.Module):
     class LinearAttention(torch.autograd.Function):
