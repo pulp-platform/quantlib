@@ -24,6 +24,8 @@
 from typing import Optional, Union, Dict, List
 import operator
 
+from copy import deepcopy
+
 import torch
 from torch import nn, fx
 from torch.fx.subgraph_rewriter import Match
@@ -33,8 +35,8 @@ from quantlib.algorithms.generic.generic_ops import *
 
 
 from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, ReplaceSequentialPatternPass, InsertModuleAfterNodePass
-from ...util import gm_modules, get_qualified_prefix
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, InsertModuleAfterNodePass,ReplaceSequentialPatternPass, AnnotateEpsPass
+from ...util import gm_modules, get_qualified_prefix, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 
@@ -164,6 +166,11 @@ class OpTreeReplacementPass(FxPass):
                     new_node = gm.graph.call_module(new_target, args=tree.args)
                 # attach the module to the previous users of the tree's end node
                 tree.end_node.replace_all_uses_with(new_node)
+                #TODO add possibility to modify this as the pass is run - for
+                #now, we assume the output of the new node has the same "quant"
+                #meta properties as the output of the tree that is being
+                #replaced
+                new_node.meta['quant'] = deepcopy(tree.end_node.meta['quant'])
                 # finally, delete the nodes in the tree
                 for node in tree.nodes:
                     gm.graph.erase_node(node)
@@ -227,16 +234,42 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
     add_node_specs = [('call_function', (torch.add, operator.add)),
                       ('call_method', ('add',))]
 
-    def __init__(self, **kwargs):
-        default_kwargs = {'learn_clip': True, 'init_clip': 'max', 'act_kind': 'identity'}
+    def __init__(self, infer_sign : bool = False, infer_outact : bool = False, **kwargs):
+        default_kwargs = {'learn_clip': True, 'init_clip': 'max', 'act_kind': 'identity', 'tqt': True}
         # overwrite defaults with supplied kwargs
         default_kwargs.update(kwargs)
         self.kwargs = default_kwargs
+        self.infer_sign = infer_sign
+        self.infer_outact = infer_outact
         super(AddTreeReplacementPass, self).__init__(node_specs=self.add_node_specs, replacement_fn=self.add_replacement_fn, name="ADDITION")
 
-
     def add_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerAdd(num_args=len(tree.args),  **self.kwargs)
+        kwargs_to_pass = self.kwargs
+        if self.infer_sign:
+            signed_out = False
+            signed = []
+            for n in tree.args:
+                try:
+                    signed.append(n.meta['quant'].signed_out)
+                except KeyError:
+                    import ipdb; ipdb.set_trace()
+                signed_out = signed_out or signed[-1]
+            signed.append(signed_out)
+            kwargs_to_pass['signed'] = signed
+        if self.infer_outact:
+            if len(tree.users) == 1 and isinstance(module_of_node(gm, tree.users[0]), (PACTUnsignedAct, PACTAsymmetricAct)):
+                try:
+                    n_levels = kwargs_to_pass['n_levels']
+                except KeyError:
+                    n_levels = 256
+                if isinstance(n_levels, int):
+                    n_levels = [n_levels, 0]
+                else:
+                    n_levels[-1] = 0
+                kwargs_to_pass['n_levels'] = n_levels
+
+
+        return PACTIntegerAdd(num_args=len(tree.args),  **kwargs_to_pass)
 
 class MulReplacementPass(OpTreeReplacementPass):
     mul_node_specs = [('call_function', (torch.mul, operator.mul)),
@@ -426,13 +459,17 @@ class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
 class HarmonizePACTNetPass(SequentialPass):
     def __init__(self, **kwargs):
         passes = []
+
         passes.append(RetracePass(PACT_symbolic_trace))
+        passes.append(AnnotateEpsPass(eps_in=1.0, n_levels_in=256, signed_in=True, prop_n_levels=False, prop_eps=False))
         passes.append(AddTreeReplacementPass(**kwargs))
         passes.append(MulReplacementPass())
         passes.append(MeanReplacementPass())
         passes.append(MatmulReplacementPass())
         passes.append(TruedivReplacementPass())
-        actpass_kwargs = {k:v for k,v in kwargs.items() if k != 'force_out_eps'}
+        actpass_kwargs = {k:v for k,v in kwargs.items() if k not in ['force_out_eps', 'infer_outact', 'infer_sign']}
+        if 'n_levels' in kwargs.keys():
+            actpass_kwargs['n_levels'] = kwargs['n_levels'][0] if not isinstance(kwargs['n_levels'], int) else kwargs['n_levels']
         passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
         super(HarmonizePACTNetPass, self).__init__(*passes, name_prefix='_HARMONIZE_PACT_NET_PASS')
 

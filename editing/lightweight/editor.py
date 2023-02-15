@@ -109,12 +109,13 @@ class LightweightEditor(object):
 
         if self._in_session:
             try:
-                applications = self._rho.apply(self._graph)
-                commit = Commit(rho=self._rho, applications=applications)
-                self._history.push(commit)
-
+                rule = self._rho
             except AttributeError:
                 print("Rule not set: define a rule before issuing a graph editing instruction.")
+                return
+            applications = self._rho.apply(self._graph)
+            commit = Commit(rho=self._rho, applications=applications)
+            self._history.push(commit)
 
         else:
             print("Graph editing denied: {} object is non in an editing session.".format(self.__class__.__name__))

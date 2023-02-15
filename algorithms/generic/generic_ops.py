@@ -24,7 +24,19 @@ class CausalConv1d(nn.Conv1d):
              groups=1,
                  bias=True,
                  padding_mode='zeros'):
-        self.__padding = (kernel_size - 1) * dilation
+
+        if isinstance(kernel_size, tuple):
+            assert len(kernel_size) == 1, "Invalid Kernel Size in CausalConv1d: {}".format(kernel_size)
+            k = kernel_size[0]
+        else:
+            k = kernel_size
+        if isinstance(dilation, tuple):
+            assert len(dilation) == 1, "Invalid Dilation in CausalConv1d: {}".format(dilation)
+            dil = dilation[0]
+        else:
+            dil = dilation
+        
+        self.__padding = (k - 1) * dil
 
         super(CausalConv1d, self).__init__(
             in_channels,
@@ -32,7 +44,7 @@ class CausalConv1d(nn.Conv1d):
             kernel_size=kernel_size,
             stride=stride,
             padding=0,
-            dilation=dilation,
+            dilation=dil,
             groups=groups,
             bias=bias,
             padding_mode=padding_mode)

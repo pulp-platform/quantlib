@@ -190,6 +190,7 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     assert isinstance(conv, (PACTConv1d, PACTConv2d)), f"integerize_pact_conv_fun got bad match - expected PACTConv, got {type(conv)}"
     assert conv.bias is None, "integerize_pact_conv_fun: Conv layer has bias"
     conv_type = nn.Conv2d if isinstance(conv, PACTConv2d) else nn.Conv1d
+    pm = 'zeros' if conv.padding_mode == 'eps' else conv.padding_mode
     new_conv = conv_type(in_channels=conv.in_channels,
                          out_channels=conv.out_channels,
                          kernel_size=conv.kernel_size,
@@ -198,7 +199,7 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          dilation=conv.dilation,
                          groups=conv.groups,
                          bias=None,
-                         padding_mode=conv.padding_mode)
+                         padding_mode=pm)
     try:
         new_conv.weight.data.copy_(conv.weight_int)
     except RuntimeError as e:
@@ -243,6 +244,7 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
             new_bias = torch.diagonal(new_bias,0,dim1=-2, dim2=-1)
         new_lin.bias.data.copy_(new_bias)
 
+
     new_lin.n_levels = lin.n_levels
 
     return new_lin
@@ -282,10 +284,9 @@ def replace_pact_causalconv1d_padconv1d_fun(gm : fx.GraphModule, match : Match):
     causalconv_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     causalconv = matched_modules[0]
-
     new_module = nn.Sequential(
         nn.ConstantPad1d(
-            padding=(causalconv.__padding__, 0),
+            padding=(causalconv._PACTCausalConv1d__padding, 0),
             value=0
         ),
         PACTConv1d(
@@ -547,12 +548,16 @@ class IntegerizeEmbeddingsPass(SequentialPass):
 
 class FixChannelNumbersPass(FxPass):
 
+    def __init__(self, word_align : bool=False):
+        super(FixChannelNumbersPass, self).__init__()
+        self.word_align = word_align
     def retarget(self, gm : fx.GraphModule):
         self.visited_nodes = set()
 
     def fix_conv_channels(self, gm : fx.GraphModule, node : fx.Node, force_out_channels : int):
         if node.op == 'call_module' and node not in self.visited_nodes:
             module = module_of_node(gm, node)
+            alignment = 32 if self.word_align else 8
             if isinstance(module, (PACTConv1d, PACTConv2d)):
                 conv_levels = module.n_levels
                 bw_in = int(np.ceil(np.log2(node.meta['quant'].n_levels_in)))
@@ -561,7 +566,7 @@ class FixChannelNumbersPass(FxPass):
                 assert module.groups in [1, module.in_channels], f"fix_conv_channels: Unsupported groups config for conv {module}; {module.groups} groups not supported"
                 if min_bw not in [2,4,8]:
                     print(f"modify_convs: minimum bitwidth {min_bw} will not give sensible result")
-                channel_multiple = int(np.ceil(8/min_bw))
+                channel_multiple = int(np.ceil(alignment/min_bw))
                 in_ch = module.in_channels
                 out_ch = module.out_channels
                 extra_in_channels = (-in_ch) % channel_multiple
@@ -573,7 +578,7 @@ class FixChannelNumbersPass(FxPass):
                 if force_out_channels > 0:
                     new_out_ch = force_out_channels
                 new_weights = torch.zeros(tuple([new_out_ch, (new_in_ch//new_groups)]+[k for k in module.kernel_size])).type_as(module.weight.data)
-                new_weights[:out_ch, :in_ch, :, :] = module.weight.data
+                new_weights[:out_ch, :in_ch, ...] = module.weight.data
                 module.weight.data = new_weights
                 if module.bias is not None and force_out_channels > 0:
                     new_bias = torch.zeros([new_out_ch]).type_as(module.bias.data)
@@ -770,10 +775,10 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
 
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24,
-                 enable_add_first=False, requant_node=False, n_levels_in : int = 256,
-                 fix_channel_numbers=False, convert_input_to_unsigned : bool = False,
-                 D1 : float = 2**18, D2 : float = 2**12, ternarize : bool = False,
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False,
+                 requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False,
+                 convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12,
+                 ternarize : bool = False, word_align_channels : bool = False,
                  export_layernorm_node = False, export_softmax_node = False,
                  export_gelu_node = False, export_div_node = False):
 
@@ -804,7 +809,7 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=True))
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
-            passes.append(FixChannelNumbersPass())
+            passes.append(FixChannelNumbersPass(word_align=word_align_channels))
         # with epsilons annotated everywhere, we can integerize linear
         # functions (conv and FC)
         if ternarize:

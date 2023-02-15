@@ -5,6 +5,7 @@ import torch
 import json
 
 import numpy as np
+from scipy.optimize import nnls
 
 from torch import nn, fx
 
@@ -160,24 +161,27 @@ class BBBOPComplexityRegularizer(BBRegularizer):
     def register_layers(self, layers : dict):
         assert len(layers) in [1,2], f"BBBOPComplexityRegularizer must take 1 or 2 layers - got {len(layers)} instead!"
         print(f"BBBOPComplexityRegularizer for layers {[k for k in layers.keys()]} registered")
-        op_layer_and_props = [l for l in layers.values() if isinstance(l[0], tuple(_BB_LINOPS))][0]
+        self.op_layer_name, op_layer_and_props = [(k, l) for k, l in layers.items() if isinstance(l[0], tuple(_BB_LINOPS))][0]
         self.op_layer = op_layer_and_props[0]
         self.loss_scale = op_layer_and_props[1]['macs']/op_layer_and_props[1]['max_macs']
+        #print(f"loss_scale: {self.loss_scale}, nmacs: {op_layer_and_props[1]['macs']}, max_macs: {op_layer_and_props[1]['max_macs']}")
+        self.act_layer_name = None
         act_layer = None
         if len(layers) != 1:
-            act_layer_and_props = [v for k, v in layers.items() if v[0] is not self.op_layer][0]
+            self.act_layer_name, act_layer_and_props = [(k, v) for k, v in layers.items() if v[0] is not self.op_layer][0]
             act_layer = act_layer_and_props[0]
 
         self.act_layer = act_layer
 
     def loss_term(self):
-        # this loss term calculates the joint probability distribution of
-        # activation and linop precision gates to find the expected number of
-        # BOPs. this is DIFFERENT from the paper which treats them separately.
-        # for example, if a convolutional layer has only 2 bits with high
-        # probability, having 8-bit input activations has less impact on the
-        # total BOP count than if it has 8. by summing over the joint
-        # distribution of the precision gates, we can account for this.
+        # this loss term can optionally calculate the joint probability
+        # distribution of activation and linop precision gates to find the
+        # expected number of BOPs. this is DIFFERENT from the paper which
+        # treats them separately. for example, if a convolutional layer has
+        # only 2 bits with high probability, having 8-bit input activations has
+        # less impact on the total BOP count than if it has 8. by summing over
+        # the joint distribution of the precision gates, we can account for
+        # this.
 
         # helper to get tensors on the right device
         def move(t : torch.Tensor):
@@ -213,8 +217,11 @@ class BBBOPComplexityRegularizer(BBRegularizer):
             loss_term = torch.sum(joint_ccdf * bop_per_mac)
         else:
             loss_term = torch.sum(cum_op_ccdfs * op_precs)
+            #print(f"op loss term for layer {self.op_layer_name}: {loss_term}")
             if self.act_layer is not None and isinstance(self.act_layer, BBAct):
-                loss_term += torch.sum(cum_act_ccdfs * act_precs)
+                act_loss_term = torch.sum(cum_act_ccdfs * act_precs)
+                #print(f"activation loss term for layer {self.act_layer_name}: {act_loss_term}")
+                loss_term += act_loss_term
 
         #finally, weight everything by #MACs/#max_MACS
         return self.loss_scale * loss_term
@@ -230,6 +237,10 @@ class BBLatencyRegularizer(BBRegularizer):
         print(f"BBLatencyRegularizer for layers {[k for k in layers.keys()]} registered")
         op_layer_and_props = [l for l in layers.values() if isinstance(l[0], tuple(_BB_LINOPS))][0]
         self.op_name = [k for k,v in layers.items() if isinstance(v[0], tuple(_BB_LINOPS))][0]
+        if len(layers) == 2:
+            self.act_name = [k for k,v in layers.items() if k != self.op_name][0]
+        else:
+            self.act_name = None
         self.op_layer = op_layer_and_props[0]
         self.op_layer_props = op_layer_and_props[1]
         op_precs = self.op_layer.precs
@@ -238,7 +249,12 @@ class BBLatencyRegularizer(BBRegularizer):
         if len(layers) != 1:
             act_layer_and_props = [v for k, v in layers.items() if v[0] is not self.op_layer][0]
             act_layer = act_layer_and_props[0]
-            act_precs = act_layer.precs
+            if isinstance(act_layer, (PACTUnsignedAct, PACTAsymmetricAct)):
+                act_precs = [int(np.ceil(np.log2(act_layer.n_levels)))]
+            elif isinstance(act_layer, BBAct):
+                act_precs = act_layer.precs
+            else:
+                assert False, f"BBLatencyRegularizer got incompatible activation type: {type(act_layer)}"
 
         # fill a matrix with the latencies for each precision configuration
         self.scales = torch.zeros(len(act_precs), len(op_precs)).type_as(self.op_layer.weight.data)
@@ -296,6 +312,90 @@ class BBLatencyRegularizer(BBRegularizer):
         #...done!
         return loss_term
 
+class BBSplitLatencyRegularizer(BBLatencyRegularizer):
+    def __init__(self, input_prec : int, mode : str):
+        self.input_prec = input_prec
+        mode = mode.lower()
+        assert mode in ["decompose", "marginalize"], f"BBSplitLatencyRegularizer expected 'mode' to be 'decompose' or 'marginalize - got {mode}"
+        self.mode = mode
+
+    def register_layers(self, layers : dict):
+        super(BBSplitLatencyRegularizer, self).register_layers(layers)
+        # the scales calculated before are factorized into the closest possible
+        # additive representation if we have 2 layers. we force the optimal
+        # configuration's weight and act precision penalties to 0 to make the
+        # problem uniquely solvable
+        if self.act_layer is not None:
+            if self.mode == "decompose":
+                best_act_idx, best_weight_idx = torch.nonzero(self.scales==0)[0]
+                best_act_idx, best_weight_idx = int(best_act_idx), int(best_weight_idx)
+                contribution_a = torch.eye(self.scales.shape[0])
+                contribution_a = torch.cat([contribution_a]*self.scales.shape[1])
+                contrib_a_idxs = [i for i in range(self.scales.shape[0]) if i != best_act_idx]
+                contribution_a = contribution_a[:, contrib_a_idxs]
+                contribution_w = [torch.zeros(self.scales.shape[0], self.scales.shape[1]) for _ in range(self.scales.shape[1])]
+
+                for k in range(self.scales.shape[1]):
+                    contribution_w[k][:, k] = 1
+                contribution_w = torch.cat(contribution_w)
+                contrib_w_idxs = [i for i in range(self.scales.shape[1]) if i != best_weight_idx]
+                contribution_w = contribution_w[:, contrib_w_idxs]
+                contrib = torch.cat([contribution_a, contribution_w], dim=1).numpy()
+                penalty_target = self.scales.transpose(1,0).flatten().numpy()
+                # we need nonnegative target penalties, so use SciPy's NNLS solver
+                #l2_penalties, _, _, _ = np.linalg.lstsq(contrib, penalty_target)
+                l2_penalties, _ = nnls(contrib, penalty_target)
+                act_penalties = np.zeros(self.scales.shape[0])
+                act_penalties[contrib_a_idxs] = l2_penalties[:self.scales.shape[0]-1]
+                self.act_penalties = torch.tensor(act_penalties)
+                wt_penalties = np.zeros(self.scales.shape[1])
+                wt_penalties[contrib_w_idxs] = l2_penalties[self.scales.shape[0]-1:]
+                self.wt_penalties = torch.tensor(wt_penalties)
+                print(f"Weight penalties:\n{self.wt_penalties}\nAct penalties:\n{self.act_penalties}")
+                wtp = torch.stack([self.wt_penalties for k in range(self.scales.shape[0])], dim=0)
+                ap = torch.stack([self.act_penalties for k in range(self.scales.shape[1])], dim=1)
+                print(f"Scales:\n{self.scales}\nApproximated scales:\n{wtp+ap}")
+            else:
+                self.act_penalties = torch.mean(self.scales, dim=1)
+                self.wt_penalties = torch.mean(self.scales, dim=0)
+
+    def loss_term(self):
+        if self.act_layer is not None:
+            # helper to get tensors on the right device
+            def move(t : torch.Tensor):
+                return t.type_as(self.op_layer.weight.data)
+
+            one = move(torch.ones((1,)))
+            # if quantization is not started yet, do not contribute a loss so the
+            # gates stay at their initial value until quantization is started!
+            if not self.op_layer.started:
+                return torch.zeros([])
+            # no activation -> this must be the input layer
+            if self.act_layer is None or isinstance(self.act_layer, (PACTUnsignedAct, PACTAsymmetricAct)):
+                act_ccdfs = one
+            else:
+                act_ccdfs = torch.cat((one, self.act_layer.ccdf0()))
+
+            # first gate is always turned on
+            op_ccdfs = torch.cat((one,self.op_layer.ccdf0()))
+            cum_op_ccdfs = torch.cumprod(op_ccdfs, 0)
+            cum_act_ccdfs = torch.cumprod(act_ccdfs, 0)
+            # we want to "isolate" the precisions; this means that not only gates
+            # [0...i] should be turned on but gate i+1 should be turned off
+            op_cdfs = torch.cat((1. - op_ccdfs[1:], one))
+            act_cdfs = torch.cat((1. - act_ccdfs[1:], one))
+            op_precs = move(torch.tensor(self.op_layer.precs))
+            cum_op_ccdfs = cum_op_ccdfs * op_cdfs
+            cum_act_ccdfs = cum_act_ccdfs * act_cdfs
+            loss_term = torch.sum(cum_op_ccdfs * move(self.wt_penalties))
+            loss_term = loss_term + torch.sum(cum_act_ccdfs * move(self.act_penalties))
+        else:
+            loss_term = super(BBSplitLatencyRegularizer, self).loss_term()
+
+        return loss_term
+
+
+
 
 
 class BBExportController(Controller):
@@ -350,6 +450,11 @@ class BBExportController(Controller):
         min_lat = 0
         layer_cfg_dict = {}
         best_cfgs_dict = {}
+        freebie_cfg_dict = {}
+        freebie_levels = {}
+        freebie_lat = 0
+        n_freebie_layers = 0
+        freebie_lat_saved = 0
         for n in bb_nodes:
             module_levels = n.module.get_n_levels()
             module_prec = int(np.ceil(np.log2(module_levels)))
@@ -380,10 +485,27 @@ class BBExportController(Controller):
                     if all(isinstance(r, BBLatencyRegularizer) for r in n.module.gate_ctrls[0].regularizers):
                         cur_lat_dict = n.module.gate_ctrls[0].regularizers[0].op_layer_props['latency']
                         cur_lat = cur_lat_dict[(in_prec, module_prec)]
+                        better_lats = {(ap,wp):v for (ap, wp), v in cur_lat_dict.items() if ap >= in_prec and wp >= module_prec and v < cur_lat}
+                        if len(better_lats):
+                            freebie_cfg, freebie_lat = min(better_lats.items(), key=lambda kv:kv[1])
+                            freebie_cfg_dict[n.name] = {'precs': freebie_cfg, 'latency': freebie_lat}
+                            freebie_lat_saved += cur_lat - freebie_lat
+                            n_freebie_layers += 1
+                            freebie_levels[n.name+'$'] = int(2**freebie_cfg[1])
+                            linked_act_name =  n.module.gate_ctrls[0].regularizers[0].act_name
+                            if linked_act_name:
+                                freebie_levels[linked_act_name+'$'] = int(2**freebie_cfg[0])
                         lat_dict[n.name] = cur_lat
                         tot_lat += cur_lat
                         lat_8b += cur_lat_dict[(8, 8)]
-                        lat_4b += cur_lat_dict[(4, 4)]
+                        try:
+                            lat_4b += cur_lat_dict[(4, 4)]
+                        # some layers' input activations will be fixed to 8b
+                        # and not registered in the latency dict, so take the
+                        # 8/4 latency
+                        except KeyError:
+                            lat_4b += cur_lat_dict[(8, 4)]
+
                         cur_best_cfg, cur_min_lat = min(cur_lat_dict.items(), key=lambda kv:kv[1])
                         best_cfgs_dict[n.name] = {'precs': cur_best_cfg, 'latency': cur_min_lat}
                         min_lat += cur_min_lat
@@ -405,11 +527,17 @@ class BBExportController(Controller):
             'layer_precs' : layer_cfg_dict}
         if len(lat_dict) != 0:
             out_dict['best_cfgs'] = best_cfgs_dict
+            out_dict['freebie_cfgs'] = freebie_cfg_dict
+            out_dict['freebie_levels'] = freebie_levels
+            out_dict['freebie_latency_saved_abs'] = freebie_lat_saved
+            out_dict['freebie_latency_saved_rel'] = freebie_lat_saved/tot_lat
+            out_dict['num_freebie_layers'] = n_freebie_layers
             out_dict['latency'] = lat_dict
             out_dict['total_latency'] = tot_lat
             out_dict['8b_latency'] = lat_8b
             out_dict['4b_latency'] = lat_4b
             out_dict['min_latency'] = min_lat
+
 
         return out_dict
 

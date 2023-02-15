@@ -1,3 +1,4 @@
+from typing import Union
 import torch
 from torch import nn
 from quantlib.algorithms.bb.bb_functions import BBQuantize, BBQuantizeTestTime, bb_ccdf, bb_cdf
@@ -229,19 +230,22 @@ _BB_LINOPS = [BBConv2d,
 class BBIntegerAdd(PACTIntegerAdd):
     def __init__(self,
                  num_args = 1,
-                 signed : bool = True,
+                 signed : Union[bool, list] = True,
                  pact_kwargs : dict = {},
                  bb_kwargs : dict = {}):
 
         nn.Module.__init__(self)
-        in_act_cls = PACTAsymmetricAct if signed else PACTUnsignedAct
+        if isinstance(signed, bool):
+            signed = [signed] * (num_args + 1)
+
+        assert len(signed) == num_args + 1, f"BBIntegerAdd expected {num_args+1} elements in 'signed', got {len(signed)}"
         self.acts = torch.nn.ModuleList([])
         for i in range(num_args):
-            self.acts.append(in_act_cls(**kwargs))
-
-        self.act_out = BBAct(signed=signed, **bb_kwargs)
+            in_act_cls = PACTAsymmetricAct if signed[i] else PACTUnsignedAct
+            self.acts.append(in_act_cls(**pact_kwargs))
 
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
         self.n_levels = self.acts[0].n_levels
         self.force_out_eps = False
+        self.act_out = BBAct(signed=signed[-1], **bb_kwargs)
