@@ -306,7 +306,7 @@ class AnnotateEpsPass(FxPass):
                         eps_diffs = [torch.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
                         if not all(d < 1e-8 for d in eps_diffs):
                             print("[AnnotateEpsPass] Mismatching input epsilons in node with no eps propagation function! Eps propagation will likely be wrong!")
-                            print("                    -> Node:", node.name)
+                            print(f"                    -> Node: {node.name} Key: {k}")
                         if (self.verbose): print(f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
                         eps_out = all_eps[0]
                 else:
@@ -321,7 +321,7 @@ class AnnotateEpsPass(FxPass):
                         if (self.verbose): print(f"[AnnotateEpsPass] Key {k} not found in _N_LEVELS_OUT_PROP!")
                         if node_in_levels[1:] != node_in_levels[:-1]:
                             print("[AnnotateEpsPass] Mismatching input n_levels in node with no n_levels_out propagation function! n_levels propagation will likely be wrong!")
-                            print("                    -> Node:", node.name)
+                            print(f"                    -> Node: {node.name}, Key: : {k}")
                         node_out_levels = node_in_levels[0]
                 else:
                     node_in_levels = None
@@ -335,8 +335,8 @@ class AnnotateEpsPass(FxPass):
                     except KeyError:
                         if (self.verbose): print(f"[AnnotateEpsPass] Key {k} not found in _SIGNED_OUT_PROP!")
                         if node_in_signed[1:] != node_in_signed[:-1]:
-                            print("Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!")
-                            print("                    -> Node:", node.name)
+                            print("[AnnotateEpsPass] Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!")
+                            print(f"                    -> Node: {node.name}, Key: : {k}")
                         node_out_signed = node_in_signed[0]
                 else:
                     node_in_signed = None
