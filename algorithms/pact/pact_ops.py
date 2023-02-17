@@ -37,6 +37,8 @@ from torch.onnx import register_custom_op_symbolic
 
 from inspect import signature
 
+torch.fx.wrap('len')
+
 __all__ = [
     '_PACTActivation',
     '_PACTLinOp',
