@@ -1692,19 +1692,24 @@ class PACTITAPartialMax(_PACTEps):
         self.B = math.log2( self.n_levels )
 
         self.log2e = math.log2(math.exp(1))
-        self.eps_max = self.B / (2**self.B * self.log2e)
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
 
     def forward(self, x):
+
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps+0.5)*eps
+            return x
+        
         _, H, S, _ = x.size()
 
         # Initialize denominator
         exp_partial_sum = torch.zeros_like(x)[...,0]
 
         # Initialize maximum with minimal possible value
-        global_max = torch.full_like(x, -2**(self.B - 1))[...,0]
+        global_max = torch.full_like(x, -torch.inf)[...,0]
 
         ## STAGE 1: Compute the denominator of the softmax
         for i in range(self.groups):
@@ -1716,14 +1721,12 @@ class PACTITAPartialMax(_PACTEps):
 
             # Calculate the number of shifts required to updated the already accumulated sum
             # Make sure to do use round-half-up instead of round-half-to-even
-            max_shift = torch.floor((current_max - global_max) * self.log2e * self.eps_max + 0.5)
+            max_shift = RQ(torch.floor((current_max - global_max) * self.log2e + 0.5), self.eps_in)
 
             # Update all shift values where new maximum is larger
-            # shift_sum[current_max > max] = max_shift[current_max > max]
             shift_sum = torch.where(current_max > global_max, max_shift, shift_sum)
 
             # Updated all maximums where they changed
-            # max[current_max > max] = current_max[current_max > max]
             global_max = torch.where(current_max > global_max, current_max, global_max)
 
             # Find the difference between the maximum and x in the current part of the row
@@ -1731,46 +1734,26 @@ class PACTITAPartialMax(_PACTEps):
                -1, H, S, self.width) -x[...,0 + i * self.width:self.width + i * self.width]
 
             # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
-            # Make sure to do use round-half-up instead of round-half-to-even
-            if self.started:
-                shift = torch.floor(diff * (self.log2e * self.eps_max) + 0.5)
-            else:
-                shift = diff * (self.log2e * self.eps_max)
+            shift = RQ(diff * self.log2e, self.eps_in)
 
-            # Calculate exponential sum over the current part of the row and scale it by 2**10 to prevent underflow
-            if self.started:
-                exp_sum = torch.floor(torch.sum(2**8 // 2**shift, dim = -1))
-            else:
-                exp_sum = torch.sum(2**8 / 2**shift, dim = -1)
+            # Calculate exponential sum over the current part of the row
+            exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), self.eps_in)
 
             # Update the accumulated sum and add the accumulation over the current part of the row
-            if self.started:
-                exp_partial_sum = torch.floor((exp_partial_sum / 2**shift_sum)) + exp_sum
-            else:
-                exp_partial_sum = (exp_partial_sum / 2**shift_sum) + exp_sum
+            exp_partial_sum = RQ(RQ(exp_partial_sum / 2**shift_sum, self.eps_in) + exp_sum, self.eps_in)
 
         ## STAGE 2: Calculate the softmax activation
         # Invert the partial sum
-        if self.started:
-            exp_partial_sum_inverse = torch.floor((2**8 - 1) * 2**8 / exp_partial_sum)
-        else:
-            exp_partial_sum_inverse = (2**8 - 1) * 2**8 / exp_partial_sum
+        exp_partial_sum_inverse = RQ(self.n_levels/exp_partial_sum, self.eps_in)
             
         # Find the difference between the maximum and x
         diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
 
         # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
-        # Make sure to do use round-half-up instead of round-half-to-even
-        if self.started:
-            shift = torch.floor(diff * (self.log2e * self.eps_max) + 0.5)
-        else:
-            shift = diff * (self.log2e * self.eps_max)
+        shift = RQ(diff * self.log2e, self.eps_in)
 
         # Calculate the activation value
-        if self.started:
-            return (torch.floor(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift))
-        else:
-            return (torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift)
+        return RQ(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift, 1./self.n_levels)
     
 class PACTGELU(_PACTEps):
 
