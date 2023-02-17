@@ -679,10 +679,10 @@ class PACTIntegerMatmul(torch.nn.Module):
         return mulresult
 
 class _PACTEps(nn.Module):
-    def __init__(self, startedFlag=False):
+    def __init__(self, stopped=False):
         super().__init__()
         self.register_buffer('_eps_in',torch.Tensor((1.,)))
-        if startedFlag:
+        if stopped:
             self.started = False
         self.locked = False
 
