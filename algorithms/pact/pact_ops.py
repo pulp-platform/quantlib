@@ -1652,42 +1652,34 @@ class PACTITAMax(_PACTEps):
         self.B = math.log2( self.n_levels )
 
         self.log2e = math.log2(math.exp(1))
-        self.eps_max = self.B / (2**self.B * self.log2e)
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
 
     def forward(self, x):
+
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps+0.5)*eps
+            return x
+        
         _, H, S, _ = x.size()
 
         # Updated all maximums where they changed
-        # max[current_max > max] = current_max[current_max > max]
         global_max = torch.max(x, dim = -1)[0]
 
         # Find the difference between the maximum and x in the current part of the row
-        diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S)-x
+        diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
 
-        if self.started:
-            shift = torch.floor(diff * (self.log2e * self.eps_max) + 0.5)
-        else:
-            shift = diff * (self.log2e * self.eps_max)
+        shift = RQ(diff * self.log2e, self.eps_in)
 
         # Update the accumulated sum and add the accumulation over the current part of the row
-        if self.started:
-            exp_sum = torch.floor(torch.sum(2**8 // 2**shift, dim = -1))
-        else:
-            exp_sum = torch.sum(2**8 / 2**shift, dim = -1)
-
-        if self.started:
-            exp_sum_inverse = torch.floor((2**8 - 1) * 2**8 / exp_sum)
-        else:
-            exp_sum_inverse = (2**8 - 1) * 2**8 / exp_sum
+        exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), self.eps_in)
+        
+        exp_sum_inverse = RQ(self.n_levels / exp_sum, self.eps_in)
 
         # Calculate the activation value
-        if self.started:
-            return torch.floor(torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift)
-        else:
-            return torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift
+        return RQ(torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift, 1./self.n_levels)
 
 class PACTITAPartialMax(_PACTEps):
     def __init__(self, processing_uints = 16, n_levels: int = 256):
