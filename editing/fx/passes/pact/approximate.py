@@ -23,7 +23,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union, Optional, Tuple, List
+from typing import Union, Optional, Tuple, List, Literal
 from dataclasses import dataclass
 from functools import partial
 
@@ -44,10 +44,18 @@ from ...util.tracing import LeafTracer, custom_symbolic_trace
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
 class ApproximateSoftmaxPass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTSoftmax(), f'_APPROXIMATE_SOFTMAX_PASS'))
+
+        replacement_class = PACTSoftmax()
+        if mode=='ITA':
+            replacement_class = PACTITAMax()
+        if mode=='ITA-Partial':
+            replacement_class = PACTITAPartialMax()
+    
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: replacement_class, f'_APPROXIMATE_SOFTMAX_PASS'))
+
         super().__init__(*passes, name_prefix='_APPROXIMATE_SOFTMAX_PASS')
 
 class ApproximateGELUPass(SequentialPass):
