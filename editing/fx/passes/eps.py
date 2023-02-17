@@ -279,7 +279,12 @@ class AnnotateEpsPass(FxPass):
                     m = module_of_node(gm, node)
                     k = type(m)
                 else:
+                    if node.op == 'get_attr':
+                        print(f"[AnnotateEpsPass] get_attr nodes are not currently supported!!")
+                        print(f"                    -> Node: {node.name} Key: _{node.op.upper()}_{node.target}")
+
                     assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
+
                     k = f'_{node.op.upper()}_{node.target}'
                     m = None
 
@@ -296,7 +301,6 @@ class AnnotateEpsPass(FxPass):
                     if node.op == 'call_module':
                         conversion_args = [m] + arg_eps_ins + other_args
                     else:
-                        assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
                         conversion_args = arg_eps_ins
 
                     try:
