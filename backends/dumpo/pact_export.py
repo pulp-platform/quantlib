@@ -66,6 +66,12 @@ NODES_MAPPING = {
     "iSoftmax": {
         "op_type": "Relu",
     },
+    "ITAMax": {
+        "op_type": "Relu",
+    },
+     "ITAPartialMax": {
+        "op_type": "Relu",
+    },
     "iGELU": {
         "op_type": "Relu",
     },

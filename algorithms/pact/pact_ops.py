@@ -61,7 +61,9 @@ __all__ = [
     'PACTIntegerGELU',
     'PACTSoftmax',
     'PACTITAMax',
+    'PACTIntegerITAMax',
     'PACTITAPartialMax',
+    'PACTIntegerITAPartialMax',
     'PACTGELU',
     'PACTLayerNorm',
     'PACTIntegerEmbedding',
@@ -1684,6 +1686,55 @@ class PACTITAMax(_PACTEps):
         # Calculate the activation value
         return RQ((torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift), 1 , round=False) / (self.n_levels- 1 )
 
+class PACTIntegerITAMax(torch.nn.Module):
+    class MySoftmax(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x, n_levels):
+
+            # WIESEP not sure about the epsilon part
+            B = torch.log2( n_levels )
+            log2e = torch.log2( torch.exp( torch.Tensor((1,)) ) )
+            eps_max = B / (2**B * log2e) 
+
+            _, H, S, _ = x.size()
+
+            # Updated all maximums where they changed
+            global_max = torch.max(x, dim = -1)[0].type(torch.int8)
+
+            # Find the difference between the maximum and x in the current part of the row
+            diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x.type(torch.int32)
+
+            shift = torch.floor(diff * log2e * eps_max + 0.5).type(torch.int32)
+
+            # Update the accumulated sum and add the accumulation over the current part of the row
+            exp_sum = torch.floor(torch.sum(n_levels / 2**shift, dim = -1) + 0.5)
+            
+            exp_sum_inverse = torch.floor(n_levels * (n_levels-1) / exp_sum)
+
+            # Calculate the activation value
+            return torch.floor(torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type_as(x)
+
+        @staticmethod
+        @parse_args('v', 't')
+        def symbolic(g, x, n_levels):
+
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::ITAMax", x, n_levels_t=n_levels)
+        
+    def __init__(self,  n_levels: int = 256, export_node=False):
+        super().__init__()
+
+        self.n_levels = torch.Tensor((n_levels,))
+
+        self.export_node = export_node
+
+    def forward(self, x):
+        if self.export_node:
+            return self.MySoftmax.apply(x, self.n_levels.type_as(x))
+        else:
+            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x))
+
 class PACTITAPartialMax(_PACTEps):
     def __init__(self, processing_uints = 16, ita_sequence_length = 64, n_levels: int = 256):
      
@@ -1768,7 +1819,7 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
         def forward(ctx, x, n_levels, groups, group_width):
             # WIESEP not sure about the epsilon part
             B = torch.log2( n_levels )
-            log2e = torch.log2( torch.exp( torch.tensor((1,)) ) )
+            log2e = torch.log2( torch.exp( torch.tensor((1,)) ) ).type_as(n_levels)
             eps_max = B / (2**B * log2e) 
 
             _, H, S, _ = x.size()
@@ -1821,7 +1872,7 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
             shift = torch.floor(diff * log2e * eps_max + 0.5).type(torch.int32)
 
             # Calculate the activation value
-            return torch.floor(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type(torch.int8)
+            return torch.floor(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type_as(x)
 
         @staticmethod
         @parse_args('v', 't', 'i','i')
@@ -1829,12 +1880,12 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
             n_levels_ = g.op("Constant", value_t=n_levels)
 
-            return g.op("PACTOps::ITAMax", x, n_levels_t=n_levels_,  groups_i = groups, group_width_i= group_width)
+            return g.op("PACTOps::ITAPartialMax", x, n_levels_t=n_levels, groups_i = groups, group_width_i= group_width)
         
     def __init__(self,  n_levels: int = 256, processing_uints = 16, ita_sequence_length = 64, export_node=False):
         super().__init__()
 
-        self.n_levels = torch.Tensor((n_levels,))
+        self.n_levels = torch.Tensor((n_levels,)).detach()
         self.group_width = processing_uints
         self.groups = ita_sequence_length//processing_uints
 
@@ -1842,9 +1893,9 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
     def forward(self, x):
         if self.export_node:
-            return self.MySoftmax.apply(x, self.n_levels.type_as(x), self.groups, self.group_width)
+            return self.MySoftmax.apply(x, self.n_levels.type_as(x), int(self.groups), int(self.group_width))
         else:
-            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x), self.groups, self.group_width)
+            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x), int(self.groups), int(self.group_width))
           
 class PACTGELU(_PACTEps):
 

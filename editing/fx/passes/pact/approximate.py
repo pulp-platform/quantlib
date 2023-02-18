@@ -48,11 +48,14 @@ class ApproximateSoftmaxPass(SequentialPass):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
 
-        replacement_class = PACTSoftmax()
-        if mode=='ITA':
+        if mode=='I-BERT':
+            replacement_class = PACTSoftmax()
+        elif mode=='ITA':
             replacement_class = PACTITAMax()
-        if mode=='ITA-Partial':
+        elif mode=='ITA-Partial':
             replacement_class = PACTITAPartialMax()
+        else:
+            assert False, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
     
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: replacement_class, f'_APPROXIMATE_SOFTMAX_PASS'))
 
