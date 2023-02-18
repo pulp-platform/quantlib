@@ -1658,9 +1658,12 @@ class PACTITAMax(_PACTEps):
 
     def forward(self, x):
 
-        def RQ(x, eps):
+        def RQ(x, eps, round=True):
             if self.started:
-                x = torch.floor(x/eps+0.5)*eps
+                if round:
+                    x = torch.floor(x/eps+0.5)*eps
+                else: 
+                    x = torch.floor(x/eps)*eps
             return x
         
         _, H, S, _ = x.size()
@@ -1676,19 +1679,19 @@ class PACTITAMax(_PACTEps):
         # Update the accumulated sum and add the accumulation over the current part of the row
         exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), self.eps_in)
         
-        exp_sum_inverse = RQ(self.n_levels / exp_sum, self.eps_in)
+        exp_sum_inverse = RQ(self.n_levels * (self.n_levels- 1 ) / exp_sum, self.eps_in, round=False)
 
         # Calculate the activation value
-        return RQ(torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift, 1./self.n_levels)
+        return RQ((torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift), 1 , round=False) / (self.n_levels- 1 )
 
 class PACTITAPartialMax(_PACTEps):
-    def __init__(self, processing_uints = 16, n_levels: int = 256):
+    def __init__(self, processing_uints = 16, ita_sequence_length = 64, n_levels: int = 256):
      
         super().__init__(True)
 
         self.n_levels = n_levels
         self.width = processing_uints
-        self.groups = 64//processing_uints
+        self.groups = ita_sequence_length//processing_uints
         self.B = math.log2( self.n_levels )
 
         self.log2e = math.log2(math.exp(1))
@@ -1698,9 +1701,12 @@ class PACTITAPartialMax(_PACTEps):
 
     def forward(self, x):
 
-        def RQ(x, eps):
+        def RQ(x, eps, round=True):
             if self.started:
-                x = torch.floor(x/eps+0.5)*eps
+                if round:
+                    x = torch.floor(x/eps+0.5)*eps
+                else: 
+                    x = torch.floor(x/eps)*eps
             return x
         
         _, H, S, _ = x.size()
@@ -1737,14 +1743,14 @@ class PACTITAPartialMax(_PACTEps):
             shift = RQ(diff * self.log2e, self.eps_in)
 
             # Calculate exponential sum over the current part of the row
-            exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), self.eps_in)
+            exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), self.eps_in, round=False)
 
             # Update the accumulated sum and add the accumulation over the current part of the row
-            exp_partial_sum = RQ(RQ(exp_partial_sum / 2**shift_sum, self.eps_in) + exp_sum, self.eps_in)
+            exp_partial_sum = RQ(RQ(exp_partial_sum / 2**shift_sum, self.eps_in, round=False) + exp_sum, self.eps_in, round=False)
 
         ## STAGE 2: Calculate the softmax activation
         # Invert the partial sum
-        exp_partial_sum_inverse = RQ(self.n_levels/exp_partial_sum, self.eps_in)
+        exp_partial_sum_inverse = RQ(self.n_levels * (self.n_levels- 1 ) / exp_partial_sum, self.eps_in, round=False)
             
         # Find the difference between the maximum and x
         diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
@@ -1753,8 +1759,93 @@ class PACTITAPartialMax(_PACTEps):
         shift = RQ(diff * self.log2e, self.eps_in)
 
         # Calculate the activation value
-        return RQ(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift, 1./self.n_levels)
-    
+        return RQ(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift, 1 , round=False) / (self.n_levels- 1 )
+
+
+class PACTIntegerITAPartialMax(torch.nn.Module):
+    class MySoftmax(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x, n_levels, groups, group_width):
+            # WIESEP not sure about the epsilon part
+            B = torch.log2( n_levels )
+            log2e = torch.log2( torch.exp( torch.tensor((1,)) ) )
+            eps_max = B / (2**B * log2e) 
+
+            _, H, S, _ = x.size()
+
+            # Initialize denominator
+            exp_partial_sum = torch.zeros_like(x)[...,0].type(torch.int32)
+
+            # Initialize maximum with minimal possible value
+            global_max = torch.full_like(x, -127)[...,0].type(torch.int8)
+
+            ## STAGE 1: Compute the denominator of the softmax
+            for i in range(groups):
+                # Find the maximum for each row in the current column block (consisting of 16 columns)
+                current_max = torch.max(x[...,0 + i * group_width:group_width + i * group_width].type(torch.int32), dim = -1)[0]
+
+                # Initialize all shift values for each row to zero
+                shift_sum = torch.zeros_like(x)[...,0].type(torch.int32)
+
+                # Calculate the number of shifts required to updated the already accumulated sum
+                # Make sure to do use round-half-up instead of round-half-to-even
+                max_shift = torch.floor((current_max - global_max) * log2e * eps_max + 0.5)
+
+                # Update all shift values where new maximum is larger
+                shift_sum = torch.where(current_max > global_max, max_shift, shift_sum)
+
+                # Updated all maximums where they changed
+                global_max = torch.where(current_max > global_max, current_max, global_max)
+
+                # Find the difference between the maximum and x in the current part of the row
+                diff = torch.repeat_interleave(global_max, group_width).reshape(
+                -1, H, S, group_width) -x[...,0 + i * group_width:group_width + i * group_width].type(torch.int32)
+
+                # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
+                shift = torch.floor(diff * log2e * eps_max + 0.5).type(torch.int32)
+
+                # Calculate exponential sum over the current part of the row
+                exp_sum = torch.floor(torch.sum(n_levels / 2**shift, dim = -1))
+
+                # Update the accumulated sum and add the accumulation over the current part of the row
+                exp_partial_sum = (exp_partial_sum / 2**shift_sum) + exp_sum
+
+            ## STAGE 2: Calculate the softmax activation
+            # Invert the partial sum
+            exp_partial_sum_inverse = torch.floor(n_levels * (n_levels-1) /exp_partial_sum).type(torch.int32)
+                
+            # Find the difference between the maximum and x
+            diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x.type(torch.int32)
+
+            # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
+            shift = torch.floor(diff * log2e * eps_max + 0.5).type(torch.int32)
+
+            # Calculate the activation value
+            return torch.floor(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type(torch.int8)
+
+        @staticmethod
+        @parse_args('v', 't', 'i','i')
+        def symbolic(g, x, n_levels, groups, group_width):
+
+            n_levels_ = g.op("Constant", value_t=n_levels)
+
+            return g.op("PACTOps::ITAMax", x, n_levels_t=n_levels_,  groups_i = groups, group_width_i= group_width)
+        
+    def __init__(self,  n_levels: int = 256, processing_uints = 16, ita_sequence_length = 64, export_node=False):
+        super().__init__()
+
+        self.n_levels = torch.Tensor((n_levels,))
+        self.group_width = processing_uints
+        self.groups = ita_sequence_length//processing_uints
+
+        self.export_node = export_node
+
+    def forward(self, x):
+        if self.export_node:
+            return self.MySoftmax.apply(x, self.n_levels.type_as(x), self.groups, self.group_width)
+        else:
+            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x), self.groups, self.group_width)
+          
 class PACTGELU(_PACTEps):
 
     def __init__(self):
