@@ -85,7 +85,13 @@ _sawb_asymm_lut = {
 
 class PACTEpsController(Controller):
     def __init__(self, fx_model, modules, schedule, tracer, eps_pass, verbose = False):
-        self.model = fx_model
+        # If `fx_model` is an instance of DataParallel, we have to strip 'module'
+        # from node names
+        if isinstance(fx_model, nn.DataParallel):
+            self.model = fx_model.module
+        else:
+            self.model = fx_model
+
         self.modules = modules
         self.schedule = {int(k):v.lower() if isinstance(v, str) else [val.lower() for val in v] for k,v in schedule.items()}
         self.verbose = verbose
