@@ -355,7 +355,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
 
     activation_nodes = (
         PACTUnsignedAct,
-        PACTUnsignedAct,
+        PACTAsymmetricAct,
     )
 
     def __init__(self, signed : bool = True, **kwargs):
