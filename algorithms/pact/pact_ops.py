@@ -1657,12 +1657,8 @@ class PACTITAMax(_PACTEps):
 
         self.log2e = math.log2(math.exp(1))
 
-        self.register_buffer('eps_max', torch.Tensor(((self.B / (n_levels * self.log2e)),) ))
-
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
-        # print(eps_list)
-        self.eps_max = torch.Tensor(((self.eps_in * self.log2e)),)
 
     def forward(self, x):
 
@@ -1677,17 +1673,11 @@ class PACTITAMax(_PACTEps):
         
         _, H, S, _ = x.size()
 
-        if self.started:
-            # Get the quantized values
-            x_q = x / self.eps_in * self.eps_max
-        else:
-            x_q = x
-
         # Updated all maximums where they changed
-        global_max = torch.max(x_q, dim = -1)[0]
+        global_max = torch.max(x, dim = -1)[0]
 
         # Find the difference between the maximum and x in the current part of the row
-        diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x_q
+        diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
 
         if self.started:
             shift = RQ(diff * self.log2e, 1)
@@ -1743,14 +1733,12 @@ class PACTIntegerITAMax(torch.nn.Module):
         super().__init__()
 
         self.eps_in = eps_in
-        print(eps_in)
-
-        B = torch.log2( torch.Tensor( (n_levels,) )).type_as(eps_in)
-        log2e = torch.log2( torch.exp( torch.Tensor((1,)) ) ).type_as(eps_in)
 
         # WIESEP: Probably not correct as ITA uses fixed eps_max
-        # self.eps_max = B / (2**B * log2e) 
-        self.eps_max = torch.Tensor(((eps_in * log2e)),)
+        # log2e = torch.log2( torch.exp( torch.Tensor((1,)) ) ).type_as(eps_in)
+        # B = torch.log2( torch.Tensor( (n_levels,) )).type_as(eps_in)
+        # self.eps_max = B / (2**B * log2e)
+        self.eps_max = torch.Tensor((eps_in,))
         
         self.n_levels = torch.Tensor((n_levels,))
 
