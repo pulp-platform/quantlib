@@ -681,11 +681,13 @@ class PACTIntegerMatmul(torch.nn.Module):
         return mulresult
 
 class _PACTEps(nn.Module):
-    def __init__(self, stopped=False):
+    def __init__(self, registerStartedFlag=False):
         super().__init__()
         self.register_buffer('_eps_in',torch.Tensor((1.,)))
-        if stopped:
-            self.started = False
+        
+        if registerStartedFlag:
+            self.register_buffer('started', torch.tensor(False))
+
         self.locked = False
 
     def set_eps_in(self, eps_in_list):
