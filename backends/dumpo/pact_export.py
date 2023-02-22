@@ -51,6 +51,8 @@ class OptimizationConfig:
     enable_qordered_matmul: bool = False
     enable_shape_inference: bool = True
     attention_mask_format: int = 3
+    use_multi_head_attention: bool = False
+    enable_gemm_fast_gelu: bool = False
 
 # By default all attributes of the original node are removed and replaced 
 # with the default attributes of the temporary replacement node.
