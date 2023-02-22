@@ -433,8 +433,8 @@ class _PACTActivation(nn.Module):
         cdf = cdf[:len(self.histogram)]
         rightMinIdx = torch.sum((cdf<self.lower_percentile))
         rightMaxIdx = torch.sum((cdf<self.upper_percentile))
-        leftMinIdx = torch.clip(rightMinIdx-1, min=0.)
-        leftMaxIdx = torch.clip(rightMaxIdx-1, min=0.)
+        leftMinIdx = torch.clip(rightMinIdx-1, min=0.).int()
+        leftMaxIdx = torch.clip(rightMaxIdx-1, min=0.).int()
         #assert rightMaxIdx >= rightMinIdx, "PACTActivation: Clipping bounds swapped!"
         self.min[:] = (self.prevEdges[rightMinIdx]+self.prevEdges[leftMinIdx])/2
         self.max[:] = (self.prevEdges[rightMaxIdx]+self.prevEdges[leftMaxIdx])/2

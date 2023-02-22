@@ -29,7 +29,7 @@ from quantlib.editing.lightweight import LightweightGraph
 from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFilter, SubTypeFilter, TypeFilter
 from ..controller import Controller
 
-from .pact_ops import _PACTEps, _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d, PACTGELU
+from .pact_ops import *
 from .util import assert_param_valid, almost_symm_quant
 
 import copy
@@ -165,7 +165,7 @@ class PACTEpsController(Controller):
 
     @staticmethod
     def get_modules(net : nn.Module):
-        net_nodes = LightweightGraph.build_nodes_list(net)
+        net_nodes = LightweightGraph.build_nodes_list(net, leaf_types=(PACTITAMax, PACTITAPartialMax))
         filter_eps = SubTypeFilter(_PACTEps)
         return [n.module for n in filter_eps(net_nodes)]
 
