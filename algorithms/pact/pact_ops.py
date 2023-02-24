@@ -1655,16 +1655,18 @@ class PACTITAMax(_PACTEps):
     def __init__(self,  n_levels: int = 256, **kwargs):
         super().__init__(True)
 
-        default_kwargs = {
+        kwargs_stats = {
             'init_clip': 'percentile',
             'n_levels': n_levels, 
+            'rounding': True,
+            'noisy': False,
             'act_kind': 'identity',
-            'learn_clip': False,
+            'learn_clip': True,
             'upper_percentile': 95.0
         }
-        default_kwargs.update(kwargs)
+        kwargs_stats.update(kwargs)
         
-        self.act = PACTAsymmetricAct(**default_kwargs)
+        self.act = PACTAsymmetricAct(**kwargs_stats)
         self.n_levels = n_levels
 
         self.B = math.log2( self.n_levels )
@@ -1672,8 +1674,8 @@ class PACTITAMax(_PACTEps):
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
-        if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
-            print(f"[PACTITAMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
+        # if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
+        #     print(f"[PACTITAMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
 
     def forward(self, x):
 
@@ -1794,16 +1796,16 @@ class PACTITAPartialMax(_PACTEps):
     def __init__(self, processing_uints: int = 16, ita_sequence_length: int = 64, n_levels: int = 256, **kwargs):
         super().__init__(True)
 
-        default_kwargs = {
+        kwargs_stats = {
             'init_clip': 'percentile',
             'n_levels': n_levels, 
+            'rounding': True,
+            'noisy': False,
             'act_kind': 'identity',
-            'learn_clip': False,
-            'upper_percentile': 90.0
+            'learn_clip': True,
+            'upper_percentile': 95.0
         }
-        default_kwargs.update(kwargs)
-        
-        self.act = PACTAsymmetricAct(**default_kwargs)
+        self.act = PACTAsymmetricAct(**kwargs_stats)
         self.n_levels = n_levels
         self.width = processing_uints
         self.groups = ita_sequence_length//processing_uints
@@ -1813,8 +1815,8 @@ class PACTITAPartialMax(_PACTEps):
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
-        if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
-            print(f"[PACTITAPartialMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
+        # if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
+        #     print(f"[PACTITAPartialMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
 
     def forward(self, x):
 
@@ -1835,7 +1837,6 @@ class PACTITAPartialMax(_PACTEps):
         ######################## Requantized and Shift ########################¼
         with torch.no_grad():
             # Center inputs around zero
-            # eps = torch.minimum(self.eps_max.type_as(x), self.eps_in)
             eps = self.eps_max.type_as(x)
 
             if self.act.started:
