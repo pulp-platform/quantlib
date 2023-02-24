@@ -71,7 +71,7 @@ def integerize_softmax_fun(gm : fx.GraphModule, match : Match, mode: Literal["I-
     elif mode=='ITA':
         new_softmax = PACTIntegerITAMax(max_value = module.act.max, n_levels=module.n_levels, eps_in=eps_in, export_node=export_node)
     elif mode=='ITA-Partial':
-        new_softmax = PACTIntegerITAPartialMax(n_levels=module.n_levels, export_node=export_node)
+        new_softmax = PACTIntegerITAPartialMax(max_value = module.act.max, n_levels=module.n_levels, eps_in=eps_in, export_node=export_node)
     else:
         assert False, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
 
