@@ -293,7 +293,7 @@ class AnnotateEpsPass(FxPass):
                 else:
                     if node.op == 'get_attr':
                         print(f"[AnnotateEpsPass] get_attr nodes are not currently supported!!")
-                        print(f"                    -> Node: {node.name} Key: _{node.op.upper()}_{node.target}")
+                        print(f"                    -> Node: {node.name}, Key: _{node.op.upper()}_{node.target}")
 
                     assert node.op != 'get_attr', "get_attr nodes are not currently supported!"
 
@@ -318,12 +318,13 @@ class AnnotateEpsPass(FxPass):
                     try:
                         eps_out = _EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
                     except KeyError:
-                        if (self.verbose): print(f"[AnnotateEpsPass] Key {k} not found in _EPS_CONVERSIONS!")
+                        if (self.verbose): 
+                            print(f"[AnnotateEpsPass] Key {k} not found in _EPS_CONVERSIONS!")
                         eps_diffs = [torch.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
                         if not all(d < 1e-8 for d in eps_diffs):
                             print("[AnnotateEpsPass] Mismatching input epsilons in node with no eps propagation function! Eps propagation will likely be wrong!")
-                            print(f"                    -> Node: {node.name} Key: {k}")
-                        if (self.verbose): print(f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
+                            print(f"                    -> Node: {node.name}, Key: {k}, eps_in: {all_eps}")
+                            if (self.verbose): print(f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
                         eps_out = all_eps[0]
                 else:
                     eps_in = None
@@ -334,10 +335,13 @@ class AnnotateEpsPass(FxPass):
                     try:
                         node_out_levels = _N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
                     except KeyError:
-                        if (self.verbose): print(f"[AnnotateEpsPass] Key {k} not found in _N_LEVELS_OUT_PROP!")
-                        if node_in_levels[1:] != node_in_levels[:-1]:
+                        if (self.verbose): 
+                            print(f"[AnnotateEpsPass] Key {k} not found in _N_LEVELS_OUT_PROP!")
+                        in_levels_diffs = [abs(l1 - l2) for l1, l2 in zip(node_in_levels[:-1], node_in_levels[1:])]
+                        if not all(d < 1e-8 for d in in_levels_diffs):
                             print("[AnnotateEpsPass] Mismatching input n_levels in node with no n_levels_out propagation function! n_levels propagation will likely be wrong!")
-                            print(f"                    -> Node: {node.name}, Key: : {k}")
+                            print(f"                    -> Node: {node.name}, Key: {k}, n_levels_in: {node_in_levels}")
+                            if (self.verbose): print(f"[AnnotateEpsPass] Using identity n_level propagation on node with op {node.op}, target {node.target}!")
                         node_out_levels = node_in_levels[0]
                 else:
                     node_in_levels = None
@@ -349,10 +353,13 @@ class AnnotateEpsPass(FxPass):
                     try:
                         node_out_signed = _SIGNED_OUT_PROP[k](m, node_in_signed)
                     except KeyError:
-                        if (self.verbose): print(f"[AnnotateEpsPass] Key {k} not found in _SIGNED_OUT_PROP!")
-                        if node_in_signed[1:] != node_in_signed[:-1]:
+                        if (self.verbose): 
+                            print(f"[AnnotateEpsPass] Key {k} not found in _SIGNED_OUT_PROP!")
+                        in_singed_diffs = [abs(s1 - s2) for s1, s2 in zip(node_in_signed[:-1], node_in_signed[1:])]
+                        if not all(d < 1e-8 for d in in_singed_diffs):
                             print("[AnnotateEpsPass] Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!")
-                            print(f"                    -> Node: {node.name}, Key: : {k}")
+                            print(f"                    -> Node: {node.name}, Key: : {k}, signed_in: {node_in_signed}")
+                            if (self.verbose): print(f"[AnnotateEpsPass] Using identity signed propagation on node with op {node.op}, target {node.target}!")
                         node_out_signed = node_in_signed[0]
                 else:
                     node_in_signed = None

@@ -37,6 +37,9 @@ from torch.onnx import register_custom_op_symbolic
 
 from inspect import signature
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 torch.fx.wrap('len')
 
 __all__ = [

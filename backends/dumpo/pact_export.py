@@ -38,6 +38,10 @@ from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
 from onnxruntime.transformers.optimizer import optimize_model
 from dataclasses import dataclass
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+
 @dataclass
 class OptimizationConfig:
     enable_gelu: bool = True

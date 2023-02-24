@@ -161,7 +161,7 @@ class PACTEpsController(Controller):
 
     def log(self, msg : str):
         if self.verbose:
-            print("[PACTEpsController]   ", msg)
+            print("[PACTEpsController]      ", msg)
 
     @staticmethod
     def get_modules(net : nn.Module):
@@ -391,7 +391,7 @@ class PACTActController(Controller):
 
     def log(self, msg : str):
         if self.verbose:
-            print("[PACTActController]   ", msg)
+            print("[PACTActController]      ", msg)
 
     def state_dict(self):
         return {'verbose':self.verbose, 'frozen':self.frozen}
@@ -404,8 +404,8 @@ class PACTActController(Controller):
                     for p in m.clipping_params.values():
                         p.requires_grad = False
                         p.grad = None
-                    self.frozen = True
-                    self.log("All modules frozen!")
+                self.frozen = True
+                self.log("All modules frozen!")
         except KeyError:
             vo = self.verbose
             self.verbose = True

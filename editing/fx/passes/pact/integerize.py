@@ -174,29 +174,6 @@ class IntegerizeGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D,export_node=export_gelu_node), f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
-# class RequantShift(nn.Module):
-#     def __init__(self, mul : torch.Tensor, add : torch.Tensor, n_levels : int, signed : bool = False, D : torch.Tensor = torch.tensor(2**24)):
-#         super(RequantShift, self).__init__()
-#         self.register_buffer('mul', mul)
-#         self.register_buffer('add', add)
-#         self.register_buffer('div', D)
-#         self.signed = signed
-#         self.n_levels_out = n_levels
-
-#     def forward(self, x):
-#         x = x * self.mul
-#         x = x + self.add
-#         x = (x/self.div).floor()
-#         if not self.signed:
-#             x = torch.clip(x, 0., float(self.n_levels_out-1))
-#         else:
-#             c = np.floor(self.n_levels_out/2+0.001)
-#             if self.n_levels_out % 2:
-#                 x = torch.clip(x, -c, c)
-#             else:
-#                 x = torch.clip(x, -c, c-1)
-#         return x
-
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
@@ -794,7 +771,7 @@ class IntegerizePACTNetPass(SequentialPass):
                  convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12,
                  ternarize : bool = False, word_align_channels : bool = False,
                  export_layernorm_node = False, export_softmax_node = False,
-                 export_gelu_node = False, export_div_node = False):
+                 export_gelu_node = False, export_div_node = False, verbose=False):
 
         passes = []
         # start by retracing the network to dissolve any integer ops
@@ -820,7 +797,7 @@ class IntegerizePACTNetPass(SequentialPass):
         # convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
         # second step: annotate epsilons and n_levels
-        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=True))
+        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
             passes.append(FixChannelNumbersPass(word_align=word_align_channels))
