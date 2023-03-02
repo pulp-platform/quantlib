@@ -1217,13 +1217,19 @@ class _PACTActivation(nn.Module):
                  signed : bool = True,
                  upper_percentile : float = 99.5,
                  lower_percentile : float = 0.5,
-                 num_bins : int = 2**12 # SCHEREMO: Stay below or at 2**12 - everything else is super slow
+                 num_bins : int = 2**12, # SCHEREMO: Stay below or at 2**12 -
+                 # everything else is super slow
+                 ema : bool = True, # use exponential moving average to track statistics?
+                 # note: std/mean and MSE bounds always calculated as EMA!
+                 # EMA not supported for 'percentile'
+                 ema_beta : float = 0.9,
+                 mse_iters : int = 90
                  ):
 
         r"""Constructor.
 
         :param n_levels: currently targeted quantization level (default 256).
-        :param init_clip: how the controller should initialize clipping bounds. Can be 'max', 'std' or 'const'.
+        :param init_clip: how the controller should initialize clipping bounds. Can be 'max', 'std', 'const', 'klj, 'percentile' or 'mse'.
         :param learn_clip: default `True`; if `False`, do not update the value of the clipping factor(s) with backpropagation.
         :param act_kind: Activation function to use in unquantized mode - can be 'identity', 'relu', 'relu6', 'leaky_relu' or 'htanh'
         :param leaky:     leakiness parameter for leaky ReLU activation; unused if act_kind is not 'leaky_relu'
@@ -1240,7 +1246,7 @@ class _PACTActivation(nn.Module):
         act_kind = act_kind.lower()
         init_clip = init_clip.lower()
         assert_param_valid(self, act_kind, 'act_kind', ['identity', 'relu', 'relu6', 'leaky_relu', 'htanh'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const', 'klj', 'percentile'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'const', 'klj', 'percentile', 'mse'])
 
         self.upper_percentile = upper_percentile/100
         self.lower_percentile = lower_percentile/100
@@ -1292,6 +1298,12 @@ class _PACTActivation(nn.Module):
         self.min          = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_mean = torch.nn.Parameter(torch.zeros_like(self.clip_hi.data), requires_grad=False)
         self.running_var  = torch.nn.Parameter(torch.ones_like(self.clip_hi.data),  requires_grad=False)
+        self.ema_beta = ema_beta
+        self.ema = ema
+
+        self.stats_initialized = False
+        self.mse_iters = mse_iters
+
         self.register_buffer('clip_gradient', torch.tensor(True))
 
         if init_clip == "percentile":
@@ -1299,7 +1311,8 @@ class _PACTActivation(nn.Module):
             self.register_buffer("histogram",torch.zeros_like(torch.Tensor(range(self.num_bins))))
             self.register_buffer("prevEdges",torch.zeros_like(torch.Tensor(range(self.num_bins+1))))
             self.truemax          = torch.nn.Parameter(torch.Tensor((1,)), requires_grad=False)
-            self.truemin          = torch.nn.Parameter(torch.Tensor((-1,)), requires_grad=False)
+            min_init = -1. if self.signed else 0.
+            self.truemin          = torch.nn.Parameter(torch.Tensor((min_init,)), requires_grad=False)
             self.register_buffer('ready', torch.tensor(False))
 
     # SCHEREMO: Assume self.histogram magnitude list of data, binned
@@ -1329,13 +1342,14 @@ class _PACTActivation(nn.Module):
             expTop =  expFact * binTop
 
             # SCHEREMO: Calculate new histogram according to new range
-            addHistogram = torch.histc(input=stat, min=-expTop.item(), max=expTop.item(), bins=self.num_bins)
+            new_min_hist = -expTop.item() if self.signed else 0.
+            addHistogram = torch.histc(input=stat, min=new_min_hist, max=expTop.item(), bins=self.num_bins)
             resampledHistogram = rebinInt(self.histogram, expFact)
 
             # SCHEREMO: Add histograms, preserve information about edges
             self.histogram[:] = resampledHistogram + addHistogram
             self.truemax[:] = expTop
-            self.truemin[:] = -expTop
+            self.truemin[:] = -expTop if self.signed else 0.
 
     # SCHEREMO: Calculate clipping bounds
     def updateClipBounds(self):
@@ -1351,6 +1365,7 @@ class _PACTActivation(nn.Module):
         #assert rightMaxIdx >= rightMinIdx, "PACTActivation: Clipping bounds swapped!"
         self.min[:] = (self.prevEdges[rightMinIdx]+self.prevEdges[leftMinIdx])/2
         self.max[:] = (self.prevEdges[rightMaxIdx]+self.prevEdges[leftMaxIdx])/2
+        print(f"percentile-based min: {self.min}\npercentile-based max: {self.max}")
 
 
     def get_eps(self, *args):
@@ -1359,6 +1374,33 @@ class _PACTActivation(nn.Module):
     def extra_repr(self):
         r = f"n_levels={self.n_levels}, init_clip='{self.init_clip}', learn_clip={self.learn_clip}, act_kind='{self.act_kind}', leaky={self.leaky}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
+
+    # implemented like in MQBench: https://github.com/ModelTC/MQBench/blob/main/mqbench/observer.py
+    def mse_bounds(self, x):
+        act_min = x.min().item()
+        act_max = x.max().item()
+        best_min, best_max = act_min, act_max
+        best_dist = 1000000
+        best_it = -1
+
+        for i in range(self.mse_iters):
+            cur_min = act_min * (1 - i * 0.01) if self.signed else 0.
+            cur_max = act_max * (1 - i * 0.01)
+            if self.symm and self.signed:
+                abs_max = max(-cur_min, cur_max)
+                cur_min, cur_max = almost_symm_quant(abs_max, self.n_levels)
+            with torch.no_grad():
+                eps = (cur_max - cur_min)/(self.n_levels-1)
+                x_quant = PACTQuantize(x, eps, cur_min, cur_max, floor=(not self.rounding), clip_gradient=False, noisy=False)
+                cur_dist = (x-x_quant).pow(2).mean()
+                if cur_dist < best_dist:
+                    best_dist = cur_dist
+                    best_min = cur_min
+                    best_max = cur_max
+                    best_it = i
+
+        print(f"best_iteration: {best_it}")
+        return best_min, best_max
 
     def forward(self, x):
         if not self.started:
@@ -1380,10 +1422,29 @@ class _PACTActivation(nn.Module):
                 res = torch.clip(res, min=self.min, max=self.max)
             else:
                 with torch.no_grad():
-                    self.min[:] = min(self.min.item(), x_stat.min())
-                    self.max[:] = max(self.max.item(), x_stat.max())
-                    self.running_mean[:] = 0.9 * self.running_mean.item() + 0.1 * x_stat.mean()
-                    self.running_var[:]  = 0.9 * self.running_var.item()  + 0.1 * x_stat.std()*x_stat.std()
+                    if self.init_clip != 'mse':
+                        if self.ema and self.stats_initialized:
+                            self.min[:] = self.ema_beta*self.min.item() + (1-self.ema_beta) * x_stat.min()
+                            self.max[:] = self.ema_beta*self.max.item() + (1-self.ema_beta) * x_stat.max()
+                        else:
+                            self.min[:] = min(self.min.item(), x_stat.min())
+                            self.max[:] = max(self.max.item(), x_stat.max())
+                            self.stats_initialized = True
+                    else:
+                        mse_min, mse_max = self.mse_bounds(x_stat)
+                        print(f"got MSE bounds: {mse_min}/{mse_max}")
+                        print(f"actual min/max: {x_stat.min()}/{x_stat.max()}")
+                        if self.stats_initialized:
+                            new_min = self.min[:] * self.ema_beta + mse_min * (1-self.ema_beta)
+                            new_max = self.max[:] * self.ema_beta + mse_max * (1-self.ema_beta)
+                        else:
+                            new_min, new_max = mse_min, mse_max
+                            self.stats_initialized = True
+
+                        self.min[:] = new_min
+                        self.max[:] = new_max
+                    self.running_mean[:] = self.ema_beta * self.running_mean.item() + (1-self.ema_beta) * x_stat.mean()
+                    self.running_var[:]  = self.ema_beta * self.running_var.item()  + (1-self.ema_beta) * x_stat.std()*x_stat.std()
 
             return res
         else:
