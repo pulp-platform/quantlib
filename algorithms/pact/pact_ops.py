@@ -1365,7 +1365,6 @@ class _PACTActivation(nn.Module):
         #assert rightMaxIdx >= rightMinIdx, "PACTActivation: Clipping bounds swapped!"
         self.min[:] = (self.prevEdges[rightMinIdx]+self.prevEdges[leftMinIdx])/2
         self.max[:] = (self.prevEdges[rightMaxIdx]+self.prevEdges[leftMaxIdx])/2
-        print(f"percentile-based min: {self.min}\npercentile-based max: {self.max}")
 
 
     def get_eps(self, *args):
@@ -1399,7 +1398,6 @@ class _PACTActivation(nn.Module):
                     best_max = cur_max
                     best_it = i
 
-        print(f"best_iteration: {best_it}")
         return best_min, best_max
 
     def forward(self, x):
@@ -1432,8 +1430,6 @@ class _PACTActivation(nn.Module):
                             self.stats_initialized = True
                     else:
                         mse_min, mse_max = self.mse_bounds(x_stat)
-                        print(f"got MSE bounds: {mse_min}/{mse_max}")
-                        print(f"actual min/max: {x_stat.min()}/{x_stat.max()}")
                         if self.stats_initialized:
                             new_min = self.min[:] * self.ema_beta + mse_min * (1-self.ema_beta)
                             new_max = self.max[:] * self.ema_beta + mse_max * (1-self.ema_beta)

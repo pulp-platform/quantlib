@@ -161,7 +161,7 @@ class PACTActController(Controller):
                     clip_lo, clip_hi = almost_symm_quant(max_val, m.n_levels)
                     m.clip_lo.data.copy_(clip_lo)
                     m.clip_hi.data.copy_(clip_hi)
-
+            
     def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
         """
         Executed before every training epoch. If the current epoch is in the schedule, perform the indicated action:
