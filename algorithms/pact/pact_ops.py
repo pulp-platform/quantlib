@@ -29,13 +29,12 @@ import numpy as np
 
 from .pact_functions import PACTQuantize, TQTQuantize, AlmostSymmQuantFunc, PACTQuantFunc
 from quantlib.algorithms.generic import CausalConv1d
-from .util import assert_param_valid, almost_symm_quant
+from .util import assert_param_valid, almost_symm_quant, mse_bounds
 import math
 import copy
 
 from quantlib.QTensor import QTensor
 from torch.onnx.symbolic_helper import parse_args
-import torch.onnx.symbolic_registry as sym_registry
 
 from inspect import signature
 
@@ -970,7 +969,8 @@ class _PACTLinOp:
             tqt : bool = False,
             tqt_beta : float = 0.9,
             tqt_clip_grad : bool = True,
-            rounding : bool = True
+            rounding : bool = True,
+            mse_iters : int = 80
     ):
         """
         :param n_levels: Number of weight quantization levels
@@ -985,7 +985,7 @@ class _PACTLinOp:
         quantize = quantize.lower()
         init_clip = init_clip.lower()
         assert_param_valid(self, quantize, 'quantize', ['per_layer', 'per_channel'])
-        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const'])
+        assert_param_valid(self, init_clip, 'init_clip', ['max', 'std', 'sawb_symm', 'sawb_asymm', 'const', 'mse'])
         if init_clip == 'const':
             assert not symm_wts, f"{self.__class__.__name__}: argument combination init_clip='const' and symm_wts=True not supported!"
 
@@ -1005,6 +1005,8 @@ class _PACTLinOp:
         clip_lo = self.expand_bounds(clip_lo)
         self.clip_lo = nn.Parameter(clip_lo, requires_grad=learn_clip and not tqt)
         self.register_buffer('clip_gradient', torch.tensor(True))
+
+        self.mse_iters = mse_iters
 
 
         clip_hi = torch.tensor(1.)
@@ -1240,7 +1242,13 @@ class _PACTActivation(nn.Module):
         :param tqt:       Whether to use the TQT algorithm. Requires `learn_clip=True`, `noisy=False`
         :param tqt_beta:  Momentum for gradient normalization of TQT (see TQT paper).
         :param tqt_clip_grad: Whether to apply the :math `tanh` function to the TQT gradients.
-        :param signed:    True if this is a signed activation. The classes `PACTUnsignedActivation` and `PACTAsymmetricActivation
+        :param signed:    True if this is a signed activation.
+        :param upper_percentile: At which percentile of all observed activations to set the upper clipping bound on quantization activation when using init_clip='percentile'
+        :param lower_percentile: At which percentile of all observed activations to set the lower clipping bound on quantization activation when using init_clip='percentile'
+        :param num_bins:  How many bins to use for the histogram used to calculate the percentile values when using init_clip='percentile'
+        :param ema:       Whether or not to use exponential moving average to calculate min/max statistics. If `True`` use EMA with weight `ema_beta`. Only used for `init_clip='max'`; `init_clip='std'/'mse'` always uses EMA to update mean/standard deviation or the MSE-optimal min/max bounds, respectively.
+        :param ema_beta:  Weight for EMA calculation. An EMA value :math `x` is updated with a new value :math `x_{new}` as :math `x\gets\text{ema_beta} * x + (1-\text{ema_beta})x_{new}`. Not used if `init_clip` is not `'max'` or `'std'`.
+        :param mse_iters: How many iterations to search for the MSE-optimal clipping bounds. In each iteration, clipping bounds are set to the observed maximum/minimum values minus :math `i\%`; so `mse_iters=90` will search clipping bounds from :math `10\%` to :math `100\%` of the observed maximum/minimum values and choose the clipping bounds that result in the smallest L2 distance between the quantized and unquantized outputs.
         """
         super(_PACTActivation, self).__init__()
         act_kind = act_kind.lower()
@@ -1327,7 +1335,10 @@ class _PACTActivation(nn.Module):
             # Downsample histogram
             res = torch.nn.functional.conv1d(histogram.reshape(1,1,-1), weight, bias=None, stride=factor, padding=0)
             # Set new downsampled histogram in the middle
-            newHistogram[(self.num_bins//2 - self.num_bins//(2*factor)):(self.num_bins//2 + self.num_bins//(2*factor))] = res.reshape(-1)
+            if self.signed:
+                newHistogram[(self.num_bins//2 - self.num_bins//(2*factor)):(self.num_bins//2 + self.num_bins//(2*factor))] = res.reshape(-1)
+            else:
+                newHistogram[:res.numel()] = res.reshape(-1)
             return newHistogram
 
         with torch.no_grad():
@@ -1374,31 +1385,7 @@ class _PACTActivation(nn.Module):
         r = f"n_levels={self.n_levels}, init_clip='{self.init_clip}', learn_clip={self.learn_clip}, act_kind='{self.act_kind}', leaky={self.leaky}, nb_std={self.nb_std}, tqt={self.tqt}, tqt_beta={self.tqt_beta.item():.2f}, tqt_clip_grad={self.tqt_clip_grad.item()}"
         return r
 
-    # implemented like in MQBench: https://github.com/ModelTC/MQBench/blob/main/mqbench/observer.py
-    def mse_bounds(self, x):
-        act_min = x.min().item()
-        act_max = x.max().item()
-        best_min, best_max = act_min, act_max
-        best_dist = 1000000
-        best_it = -1
 
-        for i in range(self.mse_iters):
-            cur_min = act_min * (1 - i * 0.01) if self.signed else 0.
-            cur_max = act_max * (1 - i * 0.01)
-            if self.symm and self.signed:
-                abs_max = max(-cur_min, cur_max)
-                cur_min, cur_max = almost_symm_quant(abs_max, self.n_levels)
-            with torch.no_grad():
-                eps = (cur_max - cur_min)/(self.n_levels-1)
-                x_quant = PACTQuantize(x, eps, cur_min, cur_max, floor=(not self.rounding), clip_gradient=False, noisy=False)
-                cur_dist = (x-x_quant).pow(2).mean()
-                if cur_dist < best_dist:
-                    best_dist = cur_dist
-                    best_min = cur_min
-                    best_max = cur_max
-                    best_it = i
-
-        return best_min, best_max
 
     def forward(self, x):
         if not self.started:
@@ -1429,7 +1416,7 @@ class _PACTActivation(nn.Module):
                             self.max[:] = max(self.max.item(), x_stat.max())
                             self.stats_initialized = True
                     else:
-                        mse_min, mse_max = self.mse_bounds(x_stat)
+                        mse_min, mse_max = mse_bounds(x_stat, self.n_levels, self.signed, False, False, self.mse_iters, self.symm, self.rounding)
                         if self.stats_initialized:
                             new_min = self.min[:] * self.ema_beta + mse_min * (1-self.ema_beta)
                             new_max = self.max[:] * self.ema_beta + mse_max * (1-self.ema_beta)
@@ -1703,6 +1690,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             tqt_beta = 0.9,
             tqt_clip_grad = True,
             rounding = True,
+            mse_iters : int = 80,
             **kwargs
     ):
         """
@@ -1734,7 +1722,8 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
                                 nb_std=nb_std,
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
-                                tqt_clip_grad=tqt_clip_grad)
+                                tqt_clip_grad=tqt_clip_grad,
+                                mse_iters=mse_iters)
         # we want to be able to freeze weights; to avoid updating them, we must
         # keep them in a buffer (e.g., ADAM will keep updating weights even
         # with requires_grad == False)

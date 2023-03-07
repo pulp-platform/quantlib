@@ -30,11 +30,10 @@ from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFil
 from ..controller import Controller
 
 from .pact_ops import _PACTActivation, _PACTLinOp, PACTUnsignedAct, PACTAsymmetricAct, PACTConv1d, PACTConv2d, PACTLinear, PACTIntegerAdd, PACTIntegerConcat, PACTCausalConv1d, PACTGELU
-from .util import assert_param_valid, almost_symm_quant
+from .util import assert_param_valid, almost_symm_quant, mse_bounds
 
 import copy
 
-from tqdm import tqdm
 import math
 
 __all__ = [
@@ -527,6 +526,9 @@ class PACTLinearController(Controller):
                     min_mal, max_val = almost_symm_quant(max_val, m.n_levels)
                 else:
                     min_val = w.mean(dim=reduce_dims) - w.std(dim=reduce_dims) * m.nb_std
+
+            elif method == 'mse':
+                min_val, max_val = mse_bounds(w, m.n_levels, True, m.quantize=='per_channel', True, m.mse_iters, m.symm_wts)
 
             elif method[0:4] == 'sawb':
                 symm = method[5:] == 'symm'
