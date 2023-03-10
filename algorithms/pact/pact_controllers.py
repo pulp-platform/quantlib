@@ -232,7 +232,7 @@ class PACTActController(Controller):
     def reset_clip_bounds(self, m : Union[PACTUnsignedAct, PACTAsymmetricAct], method : str = None):
         if not method:
             method = m.init_clip
-        if method == 'max':
+        if method in ['max', 'mse']:
             max_val = m.max.data
             if isinstance(m, PACTAsymmetricAct) and m.symm:
                 max_val = torch.maximum(max_val, -m.min)
