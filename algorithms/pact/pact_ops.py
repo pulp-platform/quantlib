@@ -366,7 +366,7 @@ class _PACTActivation(nn.Module):
         self.tqt = tqt
 
         if self.tqt:
-            assert (not noisy and learn_clip and symm), f"{self.__class__.__name__}: TQT quantization requires noisy=False, learn_clip=True - you provided noisy={noisy}, learn_clip={learn_clip}, symm={symm}"
+            assert (not noisy and learn_clip and symm), f"{self.__class__.__name__}: TQT quantization requires noisy=False, learn_clip=True, symm=True - you provided noisy={noisy}, learn_clip={learn_clip}, symm={symm}"
             self.register_parameter("log_t", nn.Parameter(torch.tensor((0.)), requires_grad=True))
             self.register_buffer("tqt_beta", torch.tensor(tqt_beta))
             self.register_buffer("tqt_running_beta", torch.tensor(1.))
@@ -1562,7 +1562,7 @@ class PACTSoftmax(_PACTEps):
 
     def forward(self, x):
 
-        def RQ(x, eps):
+        def RQ(x, eps): # Dequant?
             if self.started:
                 x = torch.floor(x/eps+0.5)*eps
             return x
@@ -1652,16 +1652,30 @@ class PACTIntegerSoftmax(torch.nn.Module):
             return self.MySoftmax.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
 class PACTITAMax(_PACTEps):
-    def __init__(self,  n_levels: int = 256):
+    def __init__(self,  n_levels: int = 256, **kwargs):
         super().__init__(True)
 
+        kwargs_stats = {
+            'init_clip': 'percentile',
+            'n_levels': n_levels, 
+            'rounding': True,
+            'noisy': False,
+            'act_kind': 'identity',
+            'learn_clip': True,
+            'upper_percentile': 95.0
+        }
+        kwargs_stats.update(kwargs)
+        
+        self.act = PACTAsymmetricAct(**kwargs_stats)
         self.n_levels = n_levels
-        self.B = math.log2( self.n_levels )
 
-        self.log2e = math.log2(math.exp(1))
+        self.B = math.log2( self.n_levels )
+        self.eps_max = torch.Tensor( (self.B / (2**self.B),) )
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
+        # if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
+        #     print(f"[PACTITAMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
 
     def forward(self, x):
 
@@ -1669,117 +1683,177 @@ class PACTITAMax(_PACTEps):
             if self.started:
                 if round:
                     # Also add the minimal representalbe float value to prevent edge cases from being rounded down
-                    x = torch.floor(x/eps+0.5 + torch.finfo(x.dtype).eps)*eps
+                    x = torch.floor(x/eps + 0.5 + torch.finfo(x.dtype).eps)*eps
                 else: 
                     x = torch.floor(x/eps + torch.finfo(x.dtype).eps)*eps
             return x
         
         _, H, S, _ = x.size()
+        
+        # Gather statistics about inputs
+        _ = self.act(x)
 
-        # Updated all maximums where they changed
+        ######################## Requantized and Shift ########################¼
+        with torch.no_grad():
+            # Center inputs around zero
+            # eps = torch.minimum(self.eps_max.type_as(x), self.eps_in)
+            eps = self.eps_max.type_as(x)
+
+            if self.act.started:
+                # Use maximum gather by statistics
+                x = x - torch.repeat_interleave(self.act.max, H*S*S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
+            else:
+                # Use actual maximum
+                global_max = torch.max(x, dim = -1)[0]
+                x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
+            
+            # Get quantized values
+            x = RQ(x/eps, 1, round=True)
+            
+            # Clip quantized values
+            x = torch.clamp(x, min=-128, max=127)
+        ########################################################################
+        
+        # Find maximum for each row
         global_max = torch.max(x, dim = -1)[0]
 
         # Find the difference between the maximum and x in the current part of the row
         diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
 
-        if self.started:
-            shift = RQ(diff * self.log2e, 1)
-        else:
-            shift = diff * self.log2e
+        # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
+        shift = RQ(diff*self.eps_max.type_as(x), 1, round = True)
 
         # Update the accumulated sum and add the accumulation over the current part of the row
-        exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), 1)
+        exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), 1, round = False)
         
-        exp_sum_inverse = RQ(self.n_levels * (self.n_levels- 1 ) / exp_sum, 1, round=False)
+        exp_sum_inverse = RQ(self.n_levels * (self.n_levels-1) / exp_sum, 1, round = False)
 
         # Calculate the activation value
-        ret = RQ((torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift), 1 , round=False) / (self.n_levels- 1 )
+        ret = RQ((torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift), 1, round=False) / (self.n_levels-1)
         return ret
 
 class PACTIntegerITAMax(torch.nn.Module):
     class MySoftmax(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x, n_levels, eps_max):
+        def forward(ctx, x: torch.Tensor, n_levels: torch.Tensor):
 
-            # WIESEP not sure about the epsilon part
-            log2e = torch.log2( torch.exp( torch.Tensor((1,)) ) ).type_as(eps_max)
+            B = torch.log2(n_levels).type_as(x)
+            eps_max = B / (2**B)
 
             _, H, S, _ = x.size()
 
-            # Updated all maximums where they changed
             global_max = torch.max(x, dim = -1)[0].type(torch.int8)
 
             # Find the difference between the maximum and x in the current part of the row
             diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x.type(torch.int32)
 
-            shift = torch.floor(diff * log2e * eps_max + 0.5 + torch.finfo(log2e.dtype).eps).type(torch.int32)
+            # shift = torch.floor(diff * eps_max)
+            shift = torch.floor(diff * eps_max + 0.5 + torch.finfo(x.dtype).eps)
 
             # Update the accumulated sum and add the accumulation over the current part of the row
-            exp_sum = torch.floor(torch.sum(n_levels / 2**shift, dim = -1) + 0.5 + torch.finfo(log2e.dtype).eps)
+            exp_sum = torch.floor(torch.sum(n_levels / 2**shift, dim = -1))
             
-            exp_sum_inverse = torch.floor(n_levels * (n_levels-1) / exp_sum + torch.finfo(log2e.dtype).eps)
+            exp_sum_inverse = torch.floor(n_levels * (n_levels-1) / exp_sum)
 
             # Calculate the activation value
-            ret = torch.floor(torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift + torch.finfo(log2e.dtype).eps).type_as(x)
+            ret = torch.floor(torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type_as(x)
             return ret 
         
         @staticmethod
-        @parse_args('v', 't', 't')
-        def symbolic(g, x, n_levels, eps_max):
+        @parse_args('v', 't')
+        def symbolic(g, x, n_levels):
 
             n_levels_ = g.op("Constant", value_t=n_levels)
-            eps_max_ = g.op("Constant", value_t=eps_max)
 
-            return g.op("PACTOps::ITAMax", x, n_levels_t=n_levels, eps_max_t=eps_max)
+            return g.op("PACTOps::ITAMax", x, n_levels_t=n_levels)
         
-    def __init__(self, n_levels: int = 256, eps_in: float = 1./255, export_node=False):
+    def __init__(self, max_value, n_levels: int = 256, eps_in: float = 1./255, export_node=False, **kwargs):
         super().__init__()
 
-        self.eps_in = eps_in
-
-        # WIESEP: Probably not correct as ITA uses fixed eps_max
-        # log2e = torch.log2( torch.exp( torch.Tensor((1,)) ) ).type_as(eps_in)
-        # B = torch.log2( torch.Tensor( (n_levels,) )).type_as(eps_in)
-        # self.eps_max = B / (2**B * log2e)
-        self.eps_max = torch.Tensor((eps_in,))
-        
+        self.max = max_value
         self.n_levels = torch.Tensor((n_levels,))
-
+        self.eps_in = eps_in
         self.export_node = export_node
 
+        D = 2**16
+        B = torch.log2(self.n_levels) 
+        eps_max = B / (2**B) 
+        mul = torch.floor(D * eps_in / eps_max)
+        bias = torch.floor(D * (self.n_levels-1)/2 - D * self.max / eps_max)
+
+        # Make sure that eps_max is enforces
+        self.rq = RequantShift(mul=mul[0], add=bias[0], signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
+
     def forward(self, x):
+        # Clip and rescale values to enforce eps_max = B / 2**B
+        x = self.rq(x)
         if self.export_node:
-            return self.MySoftmax.apply(x, self.n_levels.type_as(x), self.eps_max.type_as(x))
+            return self.MySoftmax.apply(x, self.n_levels.type_as(x))
         else:
-            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x), self.eps_max.type_as(x))
+            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x))
 
 class PACTITAPartialMax(_PACTEps):
-    def __init__(self, processing_uints = 16, ita_sequence_length = 64, n_levels: int = 256):
-     
+    def __init__(self, processing_uints: int = 16, ita_sequence_length: int = 64, n_levels: int = 256, **kwargs):
         super().__init__(True)
 
+        kwargs_stats = {
+            'init_clip': 'percentile',
+            'n_levels': n_levels, 
+            'rounding': True,
+            'noisy': False,
+            'act_kind': 'identity',
+            'learn_clip': True,
+            'upper_percentile': 95.0
+        }
+        self.act = PACTAsymmetricAct(**kwargs_stats)
         self.n_levels = n_levels
         self.width = processing_uints
         self.groups = ita_sequence_length//processing_uints
-        self.B = math.log2( self.n_levels )
 
-        self.log2e = math.log2(math.exp(1))
+        self.B = math.log2( self.n_levels )
+        self.eps_max = torch.Tensor((self.B / (2**self.B),))
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
+        # if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
+        #     print(f"[PACTITAPartialMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
 
     def forward(self, x):
 
         def RQ(x, eps, round=True):
             if self.started:
                 if round:
-                    x = torch.floor(x/eps+0.5)*eps
+                    # Also add the minimal representalbe float value to prevent edge cases from being rounded down
+                    x = torch.floor(x/eps + 0.5 + torch.finfo(x.dtype).eps)*eps
                 else: 
-                    x = torch.floor(x/eps)*eps
+                    x = torch.floor(x/eps + torch.finfo(x.dtype).eps)*eps
             return x
         
         _, H, S, _ = x.size()
 
+        # Gather statistics about inputs
+        _ = self.act(x)
+
+        ######################## Requantized and Shift ########################¼
+        with torch.no_grad():
+            # Center inputs around zero
+            eps = self.eps_max.type_as(x)
+
+            if self.act.started:
+                # Use maximum gather by statistics
+                x = x - torch.repeat_interleave(self.act.max, H*S*S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
+            else:
+                # Use actual maximum
+                global_max = torch.max(x, dim = -1)[0]
+                x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
+            
+            # Get quantized values
+            x = RQ(x/eps, 1, round=True)
+            
+            # Clip quantized values
+            x = torch.clamp(x, min=-128, max=127)
+        ########################################################################
+        
         # Initialize denominator
         exp_partial_sum = torch.zeros_like(x)[...,0]
 
@@ -1796,7 +1870,7 @@ class PACTITAPartialMax(_PACTEps):
 
             # Calculate the number of shifts required to updated the already accumulated sum
             # Make sure to do use round-half-up instead of round-half-to-even
-            max_shift = RQ(torch.floor((current_max - global_max) * self.log2e + 0.5), self.eps_in)
+            max_shift = RQ((current_max - global_max) * self.eps_max.type_as(x), 1, round=True)
 
             # Update all shift values where new maximum is larger
             shift_sum = torch.where(current_max > global_max, max_shift, shift_sum)
@@ -1806,39 +1880,39 @@ class PACTITAPartialMax(_PACTEps):
 
             # Find the difference between the maximum and x in the current part of the row
             diff = torch.repeat_interleave(global_max, self.width).reshape(
-               -1, H, S, self.width) -x[...,0 + i * self.width:self.width + i * self.width]
+               -1, H, S, self.width) - x[...,0 + i * self.width:self.width + i * self.width]
 
-            # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
-            shift = RQ(diff * self.log2e, self.eps_in)
+            # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
+            shift = RQ(diff * self.eps_max.type_as(x), 1, round=True)
 
             # Calculate exponential sum over the current part of the row
-            exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), self.eps_in, round=False)
+            exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), 1, round=False)
 
             # Update the accumulated sum and add the accumulation over the current part of the row
-            exp_partial_sum = RQ(RQ(exp_partial_sum / 2**shift_sum, self.eps_in, round=False) + exp_sum, self.eps_in, round=False)
+            exp_partial_sum = RQ(exp_partial_sum / 2**shift_sum, 1, round=False) + exp_sum
 
         ## STAGE 2: Calculate the softmax activation
         # Invert the partial sum
-        exp_partial_sum_inverse = RQ(self.n_levels * (self.n_levels- 1 ) / exp_partial_sum, self.eps_in, round=False)
+        exp_partial_sum_inverse = RQ(self.n_levels * (self.n_levels-1) / exp_partial_sum, 1, round=False)
             
         # Find the difference between the maximum and x
         diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
 
-        # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
-        shift = RQ(diff * self.log2e, self.eps_in)
+        # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
+        shift = RQ(diff * self.eps_max.type_as(x), 1, round=True)
 
         # Calculate the activation value
-        return RQ(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift, 1 , round=False) / (self.n_levels- 1 )
+        ret = RQ(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift, 1 , round=False) / (self.n_levels - 1)
+        return ret
 
 
 class PACTIntegerITAPartialMax(torch.nn.Module):
     class MySoftmax(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x, n_levels, groups, group_width):
-            # WIESEP not sure about the epsilon part
-            B = torch.log2( n_levels )
-            log2e = torch.log2( torch.exp( torch.tensor((1,)) ) ).type_as(n_levels)
-            eps_max = B / (2**B * log2e) 
+        def forward(ctx, x: torch.Tensor, n_levels: torch.Tensor, groups: int, group_width: int):
+
+            B = torch.log2(n_levels).type_as(x)
+            eps_max = B / (2**B)
 
             _, H, S, _ = x.size()
 
@@ -1858,7 +1932,7 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
                 # Calculate the number of shifts required to updated the already accumulated sum
                 # Make sure to do use round-half-up instead of round-half-to-even
-                max_shift = torch.floor((current_max - global_max) * log2e * eps_max + 0.5)
+                max_shift = torch.floor((current_max - global_max) * eps_max + 0.5 + torch.finfo(x.dtype).eps)
 
                 # Update all shift values where new maximum is larger
                 shift_sum = torch.where(current_max > global_max, max_shift, shift_sum)
@@ -1868,48 +1942,61 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
                 # Find the difference between the maximum and x in the current part of the row
                 diff = torch.repeat_interleave(global_max, group_width).reshape(
-                -1, H, S, group_width) -x[...,0 + i * group_width:group_width + i * group_width].type(torch.int32)
+                -1, H, S, group_width) - x[...,0 + i * group_width:group_width + i * group_width].type(torch.int32)
 
-                # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
-                shift = torch.floor(diff * log2e * eps_max + 0.5).type(torch.int32)
+                # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
+                shift = torch.floor(diff * eps_max + 0.5 + torch.finfo(x.dtype).eps).type(torch.int32)
 
                 # Calculate exponential sum over the current part of the row
                 exp_sum = torch.floor(torch.sum(n_levels / 2**shift, dim = -1))
 
                 # Update the accumulated sum and add the accumulation over the current part of the row
-                exp_partial_sum = (exp_partial_sum / 2**shift_sum) + exp_sum
+                exp_partial_sum = torch.floor(exp_partial_sum / 2**shift_sum) + exp_sum
 
             ## STAGE 2: Calculate the softmax activation
             # Invert the partial sum
-            exp_partial_sum_inverse = torch.floor(n_levels * (n_levels-1) /exp_partial_sum).type(torch.int32)
+            exp_partial_sum_inverse = torch.floor(n_levels * (n_levels-1) / exp_partial_sum).type(torch.int32)
                 
             # Find the difference between the maximum and x
             diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x.type(torch.int32)
 
             # Shift the values by B-log2B -> multiply by B/2**B = log2e*eps_x
-            shift = torch.floor(diff * log2e * eps_max + 0.5).type(torch.int32)
+            shift = torch.floor(diff * eps_max + 0.5 + torch.finfo(x.dtype).eps).type(torch.int32)
 
             # Calculate the activation value
-            return torch.floor(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type_as(x)
-
+            ret = torch.floor(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type_as(x)
+            return ret
+        
         @staticmethod
         @parse_args('v', 't', 'i','i')
         def symbolic(g, x, n_levels, groups, group_width):
 
             n_levels_ = g.op("Constant", value_t=n_levels)
 
-            return g.op("PACTOps::ITAPartialMax", x, n_levels_t=n_levels, groups_i = groups, group_width_i= group_width)
+            return g.op("PACTOps::ITAPartialMax", x, n_levels_t=n_levels, groups_i=groups, group_width_i=group_width)
         
-    def __init__(self,  n_levels: int = 256, processing_uints = 16, ita_sequence_length = 64, export_node=False):
+    def __init__(self, max_value, n_levels: int = 256, processing_uints: int = 16, ita_sequence_length: int = 64, eps_in: float = 1./255, export_node=False, **kwargs):
         super().__init__()
 
-        self.n_levels = torch.Tensor((n_levels,)).detach()
+        self.max = max_value
+        self.n_levels = torch.Tensor((n_levels,))
         self.group_width = processing_uints
         self.groups = ita_sequence_length//processing_uints
-
+        self.eps_in = eps_in
         self.export_node = export_node
 
+        D = 2**16
+        B = torch.log2(self.n_levels) 
+        eps_max = B / (2**B) 
+        mul = torch.floor(D * eps_in / eps_max)
+        bias = torch.floor(D * (self.n_levels-1)/2 - D * self.max / eps_max)
+
+        # Make sure that eps_max is enforces
+        self.rq = RequantShift(mul=mul[0], add=bias[0], signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
+
     def forward(self, x):
+        # Clip and rescale values to enforce eps_max = B / 2**B
+        x = self.rq(x)
         if self.export_node:
             return self.MySoftmax.apply(x, self.n_levels.type_as(x), int(self.groups), int(self.group_width))
         else:
@@ -1984,7 +2071,7 @@ class PACTIntegerGELU(torch.nn.Module):
             return y
 
         @staticmethod
-        @parse_args('v', 'i','i')
+        @parse_args('v','i','i')
         def symbolic(g, x, b, one):
             return g.op("PACTOps::iGELU", x, b_i=b, one_i=one)
 

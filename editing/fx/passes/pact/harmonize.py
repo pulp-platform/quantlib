@@ -348,8 +348,6 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         PACTIntegerMatmul, 
         PACTDiv,
         PACTSoftmax, 
-        PACTITAMax,
-        PACTITAPartialMax,
         PACTGELU,
     )
 
