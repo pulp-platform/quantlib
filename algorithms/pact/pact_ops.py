@@ -1674,8 +1674,6 @@ class PACTITAMax(_PACTEps):
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
-        # if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
-        #     print(f"[PACTITAMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
 
     def forward(self, x):
 
@@ -1815,8 +1813,6 @@ class PACTITAPartialMax(_PACTEps):
 
     def set_eps_in(self, eps_list):
         super().set_eps_in(eps_list)
-        # if self.started and self.eps_in < self.eps_max.type_as(self.eps_in):
-        #     print(f"[PACTITAPartialMax] Warning eps_in < eps_max ({self.eps_in.detach().cpu().numpy()} < {self.eps_max.detach().cpu().numpy()}!")
 
     def forward(self, x):
 
@@ -1830,6 +1826,11 @@ class PACTITAPartialMax(_PACTEps):
             return x
         
         _, H, S, _ = x.size()
+
+        # WIESEP: Even though it is technically possible to support other sequence lengths, this has not yet been implemented. 
+        # To support smaller sequence lengths at the moment, the inputs must be padded with -128 to a 64x64 tensor, because 
+        # the internal sequence length of ITA is fixed to 64.
+        assert S == 64, f"[PACTITAPartialMax] Currently only a sequence length of 64 is supported with ITA!"
 
         # Gather statistics about inputs
         _ = self.act(x)
