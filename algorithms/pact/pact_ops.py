@@ -1706,7 +1706,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         except KeyError:
             pm = 'zeros'
         if pm not in valid_padding_modes:
-            assert pm == 'eps', f'PACTConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps"})}'
+            assert pm in ['eps', 'neg_ones'], f'PACTConv2d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps", "neg_ones"})}'
             # for Conv1d initializer, pretend we are doing zero padding...
             kwargs['padding_mode'] = 'zeros'
 
@@ -1756,8 +1756,9 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             w = self.weight
 
         if self.padding_mode != 'zeros':
-            mode = 'constant' if self.padding_mode == 'eps' else self.padding_mode
-            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item()
+            mode = 'constant' if self.padding_mode in ['neg_ones', 'eps'] else self.padding_mode
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() if self.padding_mode == 'eps' else -1.0
+
             x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
             padding = 0
         else:
@@ -1830,7 +1831,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         except KeyError:
             pm = 'zeros'
         if pm not in valid_padding_modes:
-            assert pm == 'eps', f'PACTConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps"})}'
+            assert pm in ['eps', 'neg_ones'], f'PACTConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps", "neg_ones"})}'
             # for Conv1d initializer, pretend we are doing zero padding...
             kwargs['padding_mode'] = 'zeros'
 
@@ -1878,8 +1879,8 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             w = self.weight
 
         if self.padding_mode != 'zeros':
-            mode = 'constant' if self.padding_mode == 'eps' else self.padding_mode
-            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item()
+            mode = 'constant' if self.padding_mode in ['eps', 'neg_ones'] else self.padding_mode
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() if mode == 'eps' else -1.0
             x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
             padding = 0
         else:
@@ -1941,7 +1942,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
         except KeyError:
             pm = 'zeros'
         if pm not in valid_padding_modes:
-            assert pm == 'eps', f'PACTCausalConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps"})}'
+            assert pm in ['eps', 'neg_ones'], f'PACTCausalConv1d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps", "neg_ones"})}'
         if isinstance(kernel_size, tuple):
             assert len(kernel_size) == 1, "Invalid Kernel Size in CausalConv1d: {}".format(kernel_size)
             k = kernel_size[0]
@@ -1981,10 +1982,13 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
 
     def forward(self, input):
 
-        pad_mode = 'constant' if self.padding_mode in ['eps', 'zeros'] else self.padding_mode
+        pad_mode = 'constant' if self.padding_mode in ['eps', 'zeros', 'neg_ones'] else self.padding_mode
         pad_val = 0.0
         if self.padding_mode == 'eps' and self.started and isinstance(input, QTensor) and input.eps is not None:
             pad_val = input.eps.item()
+        elif self.padding_mode == 'neg_ones':
+            pad_val = -1.0
+
         padding = 0
 
         x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode, value=pad_val)
