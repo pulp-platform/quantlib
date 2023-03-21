@@ -47,10 +47,15 @@ class QTensor(torch.Tensor):
     def __init__(self, x, eps=None, *args, **kwargs):
         if eps is not None:
             if isinstance(x, torch.Tensor):
-                self._eps = torch.as_tensor(eps).type_as(x)
+                with torch._C.DisableTorchFunction():
+                    self._eps = torch.as_tensor(eps).type_as(x)
             else:
                 self._eps = torch.as_tensor(eps)
                 self._eps.requires_grad = False
+
+
+    def new_empty(self, *args, **kwargs):
+        return super().new_empty(*args, **kwargs).as_subclass(QTensor)
 
     @property
     def eps(self):
@@ -84,14 +89,35 @@ class QTensor(torch.Tensor):
         if kwargs is None:
             kwargs = {}
         if func.__name__ in cls.getOverriddenMethods():
-            print(f"Dispatching {func.__name__}")
             if func.__name__ not in cls.hookedMethods.keys():
                 return getattr(cls, func.__name__)(*args, **kwargs)
             else:
                 return cls.hookedMethods[func.__name__](*args, **kwargs)
+
+
         else:
-            ret = super().__torch_function__(func,types,args,kwargs)
-            c = _convert(ret, cls)
+            #print(f"not dispatching {func.__name__}")
+            # by default, gather all QTensor arguments and check their
+            # epsilons. If they match, set the output's epsilon to the matching
+            # epsilon. Otherwise, warn the user and discard the epsilon.
+            all_qt_arguments = [a for a in list(args) + list(kwargs.values()) if isinstance(a, cls)]
+            all_have_eps = all(a.eps is not None for a in all_qt_arguments)
+            none_have_eps = all(a.eps is None for a in all_qt_arguments)
+            eps_out = None
+            if not none_have_eps and not all_have_eps:
+                print(f"Warning: got multiple QTensor inputs to function {func.__name__} and only some of them have an epsilon. Discarding epsilon!")
+            elif all_have_eps:
+                epses = [t.eps for t in all_qt_arguments]
+                eps_diffs = [(e1 - e2).abs().sum() for e1, e2 in zip(epses[:-1], epses[1:])]
+                if not all(ed < 1e-8 for ed in eps_diffs):
+                    print(f"Warning: Called function {func.__name__} on QTensors with different eps values!! Eps is discarded for resulting QTensor.")
+                else:
+                    eps_out = epses[0]
+            with torch._C.DisableTorchFunction():
+                tens_types = tuple(torch.Tensor if t is QTensor else t for t in types)
+                tens_args = tuple(torch.Tensor.as_subclass(a, torch.Tensor)  if isinstance(a, QTensor) else a for a in args)
+                ret = super().__torch_function__(func,tens_types,tens_args,kwargs)
+            c = _convert(ret, cls, eps=eps_out)
         return c
 
     def clone(self, *args, **kwargs):
@@ -105,7 +131,6 @@ class QTensor(torch.Tensor):
             new_obj=QTensor([], self._eps)
         else:
             new_obj=QTensor([], None)
-        #import ipdb; ipdb.set_trace()
         with torch._C.DisableTorchFunction():
             tempTensor = super().to(*args, **kwargs)
         new_obj.data=tempTensor.data
@@ -117,12 +142,10 @@ class QTensor(torch.Tensor):
         return(new_obj)
 
     def split(self, *args, **kwargs):
+        eps_out = self.eps
         with torch._C.DisableTorchFunction():
             base_spl = super().split(*args, **kwargs)
-        q_spl = _convert(base_spl, QTensor)
-        if self.eps is not None:
-            for qt in q_spl:
-                qt.eps = self.eps
+        q_spl = _convert(base_spl, QTensor, eps=eps_out)
         return q_spl
 
 def _convert(ret, cls, eps=None):
@@ -132,13 +155,17 @@ def _convert(ret, cls, eps=None):
         ret = ret.as_subclass(cls)
         if eps is not None:
             ret.eps = eps
+    elif isinstance(ret, cls):
+        if eps is not None:
+            ret.eps = eps
     if isinstance(ret, (tuple, list)):
         # Also handles things like namedtuples
         ret = type(ret)(_convert(r, cls) for r in ret)
         #GEORGR: is this right?
         if eps is not None:
             for r in ret:
-                r.eps = eps
+                if isinstance(r, QTensor):
+                    r.eps = eps
 
     return ret
 
@@ -153,12 +180,13 @@ def qt_implements(torch_func : callable):
 def qt_stack(tensors, dim=0, out=None):
     with torch._C.DisableTorchFunction():
         stacked = torch.stack(tensors, dim=dim, out=out)
-
+    eps_out = None
     if all(isinstance(t, QTensor) and t.eps is not None for t in tensors):
         epses = [t.eps for t in tensors]
-        eps_diffs = [np.abs(e1 - e2) for e1, e2 in zip(epses[:-1], epses[1:])]
+        eps_diffs = [(e1 - e2).abs().sum() for e1, e2 in zip(epses[:-1], epses[1:])]
         if not all(ed < 1e-8 for ed in eps_diffs):
             print("Warning: stacking QTensors  with different eps values!! Eps is discarded for resulting QTensor")
         else:
-            stacked.eps = epses[0]
+            eps_out = epses[0]
+    stacked = _convert(stacked, QTensor, eps=eps_out)
     return stacked
