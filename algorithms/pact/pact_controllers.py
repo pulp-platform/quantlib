@@ -30,11 +30,10 @@ from quantlib.editing.lightweight.rules.filters import VariadicOrFilter, NameFil
 from ..controller import Controller
 
 from .pact_ops import *
-from .util import assert_param_valid, almost_symm_quant
+from .util import assert_param_valid, almost_symm_quant, mse_bounds
 
 import copy
 
-from tqdm import tqdm
 import math
 
 __all__ = [
@@ -199,7 +198,7 @@ class PACTActController(Controller):
                     clip_lo, clip_hi = almost_symm_quant(max_val, m.n_levels)
                     m.clip_lo.data.copy_(clip_lo)
                     m.clip_hi.data.copy_(clip_hi)
-
+            
     def step_pre_training_epoch(self, epoch: int, *args, **kwargs):
         """
         Executed before every training epoch. If the current epoch is in the schedule, perform the indicated action:
@@ -271,7 +270,7 @@ class PACTActController(Controller):
     def reset_clip_bounds(self, m : Union[PACTUnsignedAct, PACTAsymmetricAct], method : str = None):
         if not method:
             method = m.init_clip
-        if method == 'max':
+        if method in ['max', 'mse']:
             max_val = m.max.data
             if isinstance(m, PACTAsymmetricAct) and m.symm:
                 max_val = torch.maximum(max_val, -m.min)
@@ -565,6 +564,9 @@ class PACTLinearController(Controller):
                     min_mal, max_val = almost_symm_quant(max_val, m.n_levels)
                 else:
                     min_val = w.mean(dim=reduce_dims) - w.std(dim=reduce_dims) * m.nb_std
+
+            elif method == 'mse':
+                min_val, max_val = mse_bounds(w, m.n_levels, True, m.quantize=='per_channel', True, m.mse_iters, m.symm_wts)
 
             elif method[0:4] == 'sawb':
                 symm = method[5:] == 'symm'

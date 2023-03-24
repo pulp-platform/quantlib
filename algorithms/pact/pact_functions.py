@@ -76,7 +76,7 @@ class PACTQuantFunc(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, input, eps, clip_lo, clip_hi, floor=True, clip_gradient=True, noisy=False):
-        where_input_nonclipped = (input >= clip_lo) * (input < clip_hi)
+        where_input_nonclipped = torch.mul(input >= clip_lo, input < clip_hi)
         where_input_lo = (input < clip_lo)
         where_input_hi = (input >= clip_hi)
         ctx.save_for_backward(where_input_nonclipped, where_input_lo, where_input_hi, clip_gradient, clip_lo)
@@ -170,7 +170,7 @@ class TQTQuantFunc(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, input, eps, log_t, clip_lo, clip_hi, beta, running_grad_var, running_beta, clip_grad_logt, rounding):
-        where_input_nonclipped = (input >= clip_lo) * (input < clip_hi)
+        where_input_nonclipped = torch.mul((input >= clip_lo), (input < clip_hi))
         where_input_lo = (input < clip_lo)
         where_input_hi = (input >= clip_hi)
 
