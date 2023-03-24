@@ -1317,7 +1317,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
         return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
 
     def get_eps_out(self, eps_in):
-        return self.get_eps_w().flatten()*eps_in
+        return self.get_eps_w().flatten().type_as(eps_in)*eps_in
 
     def forward(self, x):
         b = self.bias
