@@ -57,7 +57,7 @@ __all__ = ['IntegerizePACTConvPass',
            'PACTTracer',
            'PACT_symbolic_trace',]
 
-def integerize_softmax_fun(gm : fx.GraphModule, match : Match, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", export_node=False):
+def integerize_softmax_fun(gm : fx.GraphModule, match : Match, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", D=2**12, export_node=False):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     lin_node = matched_nodes[0]
@@ -69,9 +69,9 @@ def integerize_softmax_fun(gm : fx.GraphModule, match : Match, mode: Literal["I-
     if mode=='I-BERT':
         new_softmax = PACTIntegerSoftmax(n_levels=module.n_levels, eps_in=eps_in, export_node=export_node)
     elif mode=='ITA':
-        new_softmax = PACTIntegerITAMax(max_value = module.act.max, n_levels=module.n_levels, eps_in=eps_in, export_node=export_node)
+        new_softmax = PACTIntegerITAMax(max_value = module.act.max, n_levels=module.n_levels, eps_in=eps_in, D=D, export_node=export_node)
     elif mode=='ITA-Partial':
-        new_softmax = PACTIntegerITAPartialMax(max_value = module.act.max, n_levels=module.n_levels, eps_in=eps_in, export_node=export_node)
+        new_softmax = PACTIntegerITAPartialMax(max_value = module.act.max, n_levels=module.n_levels, eps_in=eps_in, D=D, export_node=export_node)
     else:
         assert False, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
 
@@ -154,17 +154,17 @@ class IntegerizeLayerNormPass(SequentialPass):
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
 
 class IntegerizeSoftmaxPass(SequentialPass):
-    def __init__(self, export_softmax_node = False , **kwargs):
+    def __init__(self, D=2**12, export_softmax_node = False , **kwargs):
         passes = []
 
         pattern = nn.Sequential(PACTSoftmax())
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='I-BERT', export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
-        
+
         pattern = nn.Sequential(PACTITAMax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA', export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
-        
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
+
         pattern = nn.Sequential(PACTITAPartialMax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA-Partial', export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA-Partial', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
 
 class IntegerizeGELUPass(SequentialPass):
@@ -812,7 +812,7 @@ class IntegerizePACTNetPass(SequentialPass):
             passes.append(IntegerizePACTConvPass())
         passes.append(IntegerizePACTLinearPass())
         passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2))
-        passes.append(IntegerizeSoftmaxPass(export_softmax_node=export_softmax_node))
+        passes.append(IntegerizeSoftmaxPass(D=D, export_softmax_node=export_softmax_node))
         passes.append(IntegerizeLayerNormPass(D=D, export_layernorm_node=export_layernorm_node))
         passes.append(IntegerizeGELUPass(D=D, export_gelu_node=export_gelu_node))
         passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node))

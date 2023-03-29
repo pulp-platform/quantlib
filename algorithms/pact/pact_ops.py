@@ -1892,7 +1892,7 @@ class PACTIntegerITAMax(torch.nn.Module):
 
             return g.op("PACTOps::ITAMax", x, n_levels_t=n_levels)
 
-    def __init__(self, max_value, n_levels: int = 256, eps_in: float = 1./255, export_node=False, **kwargs):
+    def __init__(self, max_value, n_levels: int = 256, eps_in: float = 1./255, D=2**12, export_node=False, **kwargs):
         super().__init__()
 
         self.max = max_value
@@ -1900,7 +1900,6 @@ class PACTIntegerITAMax(torch.nn.Module):
         self.eps_in = eps_in
         self.export_node = export_node
 
-        D = 2**16
         B = torch.log2(self.n_levels)
         eps_max = B / (2**B)
         mul = torch.floor(D * eps_in / eps_max)
@@ -2103,7 +2102,7 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
             return g.op("PACTOps::ITAPartialMax", x, n_levels_t=n_levels, groups_i=groups, group_width_i=group_width)
 
-    def __init__(self, max_value, n_levels: int = 256, processing_uints: int = 16, ita_sequence_length: int = 64, eps_in: float = 1./255, export_node=False, **kwargs):
+    def __init__(self, max_value, n_levels: int = 256, processing_uints: int = 16, ita_sequence_length: int = 64, eps_in: float = 1./255, D=2**12, export_node=False, **kwargs):
         super().__init__()
 
         self.max = max_value
@@ -2113,7 +2112,6 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
         self.eps_in = eps_in
         self.export_node = export_node
 
-        D = 2**16
         B = torch.log2(self.n_levels)
         eps_max = B / (2**B)
         mul = torch.floor(D * eps_in / eps_max)
