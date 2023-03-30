@@ -31,6 +31,7 @@ from typing import Literal, Optional, Union
 import numpy as np
 import torch
 from torch import nn
+import torch.fx
 from torch.onnx import register_custom_op_symbolic
 from torch.onnx.symbolic_helper import parse_args
 
