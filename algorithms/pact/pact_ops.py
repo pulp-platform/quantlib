@@ -2115,8 +2115,10 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
         B = torch.log2(self.n_levels)
         eps_max = B / (2**B)
-        mul = torch.floor(D * eps_in / eps_max)
-        bias = torch.floor(D * (self.n_levels-1)/2 - D * self.max / eps_max)
+        mul = torch.round(D * eps_in / eps_max)
+        # WIESEP: Because ITA uses MUL-DIV-ADD  the bias for of MUL-ADD-DIV convention needs to be rounded first and then
+        # multiplied by D to correctly represent the behaviour of ITA.
+        bias = D * torch.round( (self.n_levels-1)/2 - self.max / eps_max)
 
         # Make sure that eps_max is enforces
         self.rq = RequantShift(mul=mul[0], add=bias[0], signed=True, D=torch.Tensor((D,)), n_levels=n_levels, **kwargs)
