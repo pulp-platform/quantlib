@@ -1957,7 +1957,7 @@ class PACTITAPartialMax(_PACTEps):
         # WIESEP: Even though it is technically possible to support other sequence lengths, this has not yet been implemented.
         # To support smaller sequence lengths at the moment, the inputs must be padded with -128 to a 64x64 tensor, because
         # the internal sequence length of ITA is fixed to 64.
-        assert S == 64, f"[PACTITAPartialMax] Currently only a sequence length of 64 is supported with ITA!"
+        # assert S == 64, f"[PACTITAPartialMax] Currently only a sequence length of 64 is supported with ITA!"
 
         # Gather statistics about inputs
         _ = self.act(x)
