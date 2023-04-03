@@ -227,13 +227,20 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     #import IPython; IPython.embed()
     new_lin = nn.Linear(in_features=lin.in_features,
                         out_features=lin.out_features,
-                        bias=(lin.bias is not None))
+                        #bias=(lin.bias is not None))
+                        bias=True)
+
     new_lin.weight.data.copy_(lin.weight_int.round())
     if lin.bias is not None:
         new_bias = lin.get_bias_int(eps_in).round()
         if len(new_bias.shape) == 2:
             new_bias = torch.diagonal(new_bias,0,dim1=-2, dim2=-1)
         new_lin.bias.data.copy_(new_bias)
+    else:
+        # this is done to avoid the inference of "MatMul" nodes during export.
+        # Those nodes do not preserve weight names and our annotation does not
+        # work for them.
+        new_lin.bias.data.zero_()
 
 
     new_lin.n_levels = lin.n_levels
