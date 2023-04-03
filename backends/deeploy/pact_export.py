@@ -58,7 +58,7 @@ class OptimizationConfig:
     use_multi_head_attention: bool = False
     enable_gemm_fast_gelu: bool = False
 
-# By default all attributes of the original node are removed and replaced 
+# By default all attributes of the original node are removed and replaced
 # with the default attributes of the temporary replacement node.
 NODES_MAPPING = {
     # Replace nodes with 3 inputs with LayerNorm
@@ -111,7 +111,7 @@ def save_beautiful_text(t: np.ndarray, layer_name: str, filepath: str):
         elif t.ndim == 1:
             t = t.reshape(1, 1, 1, t.shape[0])
 
-        print(layer_name, t.max())
+        # print(layer_name, t.max())
         for batch in t:
             if t.ndim >= 4: fp.write("[\n")
             for channel in batch:
@@ -162,9 +162,9 @@ def export_net(net: nn.Module,
             D=D,
             n_levels_in=n_levels_in,
             requant_node=True,
-            export_layernorm_node = True, 
+            export_layernorm_node = True,
             export_softmax_node = True,
-            export_gelu_node = True, 
+            export_gelu_node = True,
             export_div_node = True)
         net_integerized = int_pass(net_traced)
     else:
@@ -188,10 +188,10 @@ def export_net(net: nn.Module,
 
     except torch.onnx.CheckerError:
         print("Disregarding PyTorch ONNX CheckerError...")
-    
+
     onnxModel = onnx.load_model(str(onnx_path))
 
-    # Rename nodes 
+    # Rename nodes
     if torch.__version__ < '1.13':
         pass
         # For pytorch < 1.13 overwrite name with name of the traced nodes
@@ -217,7 +217,7 @@ def export_net(net: nn.Module,
 
 
     # Replace custom nodes with standard ones for optimization
-    replaced_nodes = {}    
+    replaced_nodes = {}
     for n in onnxModel.graph.node:
         if n.op_type in NODES_MAPPING:
             replaced_nodes[n.name] = n.__deepcopy__()
@@ -242,7 +242,7 @@ def export_net(net: nn.Module,
 
     # Optimize ONNX model with replaced nodes
     optimization_config = OptimizationConfig(
-        enable_skip_layer_norm=False, 
+        enable_skip_layer_norm=False,
         enable_bias_gelu=False,
     )
     optimizer = optimize_model(str(onnx_path), optimization_options=optimization_config)
@@ -304,7 +304,9 @@ def export_net(net: nn.Module,
 
         np.savez(out_path.joinpath("activations.npz"), **acts_np)
 
-        # save_beautiful_text(input_np, "input_0", out_path.joinpath("input.txt"))
-        # save_beautiful_text(output_np, "output_0", out_path.joinpath("output.txt"))
-        # for jdx, lname in enumerate(acts_np):
-        #     save_beautiful_text(acts_np[lname], lname, out_path.joinpath(f"activations{jdx:02d}.txt"))
+        out_path.joinpath("activations/").mkdir(parents=True, exist_ok=True)
+
+        save_beautiful_text(input_np, "input_0", out_path.joinpath("activations/input.txt"))
+        save_beautiful_text(output_np, "output_0", out_path.joinpath("activations/output.txt"))
+        for jdx, lname in enumerate(acts_np):
+            save_beautiful_text(acts_np[lname], lname, out_path.joinpath(f"activations/act{jdx:02d}_{lname}.txt"))
