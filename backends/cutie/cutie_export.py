@@ -38,6 +38,7 @@ import quantlib.editing.lightweight as qlw
 from quantlib.editing.lightweight.rules import LightweightRule as lwr
 from quantlib.editing.lightweight import LightweightGraph as lwg
 
+
 import numpy as np
 import json
 from pathlib import Path
@@ -415,7 +416,6 @@ def export_data(data, out_fn, mode, split=1,stride=0):
     split_dim = 1 if len(data.shape) == 4 else 0
     if mode == 'complete':
         # export the whole tensor as is
-        import ipdb; ipdb.set_trace()
         np.save(f'{out_fn}', data.squeeze().numpy())
     elif mode == 'split':
         d_split = torch.split(data, split, dim=split_dim)
