@@ -29,8 +29,9 @@ from torch.nn import AvgPool1d, AvgPool2d, MaxPool1d, MaxPool2d, AdaptiveAvgPool
 from torch.nn import Conv1d, Conv2d
 from torch.nn import Identity
 from collections import namedtuple
-from quantlib.algorithms.pact import PACTCausalConv1d, PACTConv1d, PACTConv2d, PACTLinear, PACTUnsignedAct, PACTAsymmetricAct
-from quantlib.algorithms.inq import INQConv1d, INQConv2d, INQCausalConv1d
+from quantlib.algorithms.pact.pact_ops import PACTCausalConv1d, PACTConv1d, PACTConv2d, PACTLinear, PACTUnsignedAct, PACTAsymmetricAct, _PACTLinOp, _PACTActivation
+from quantlib.algorithms.inq import INQConv1d, INQConv2d, INQCausalConv1d, INQLinear
+from quantlib.algorithms.ste import STEActivation
 from quantlib.QTensor import QTensor
 
 import quantlib.editing.lightweight as qlw
@@ -44,9 +45,13 @@ from pathlib import Path
 
 Thresholds = namedtuple('Thresholds', 'lo hi')
 
-linear_types = [PACTConv2d, PACTConv1d, PACTLinear, PACTCausalConv1d]
+pact_linear_types = [PACTConv2d, PACTConv1d, PACTLinear, PACTCausalConv1d]
+inq_linear_types = [INQConv2d, INQConv1d, INQCausalConv1d, INQLinear]
+linear_types = pact_linear_types + inq_linear_types
 bn_types = [BatchNorm1d, BatchNorm2d]
-act_types = [PACTUnsignedAct, PACTAsymmetricAct]
+pact_act_types = [PACTUnsignedAct, PACTAsymmetricAct]
+ste_act_types = [STEActivation]
+act_types = pact_act_types + ste_act_types
 maxpool_types = [MaxPool1d, MaxPool2d, AdaptiveMaxPool2d]
 maxpool_2d = [MaxPool2d]
 adaptive_pool_types = [AdaptiveAvgPool2d, AdaptiveMaxPool2d]
@@ -113,6 +118,10 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
 
     if type(nodes[-1].module) in act_types:
         act_node = nodes[-1].module
+        if isinstance(act_node, tuple(pact_act_types)):
+            eps_act = act_node.get_eps()
+        else:
+            eps_act = torch.ones([])
     else:
         act_node = None
 
@@ -139,13 +148,34 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
     else:
         bias = torch.zeros(conv_node.out_channels)
 
-    if not first_layer:
-        bias_add = conv_node.weight_int.sum(dim=(1,2,3)) \
-            if len(conv_node.weight_int.shape)==4 else conv_node.weight_int.sum(dim=(1,2))
-        bias_add *= prev_act_node.get_eps()*conv_node.get_eps_w().squeeze()
-        bias_hat = bias + bias_add
+    if isinstance(conv_node, tuple(pact_linear_types)):
+        eps_w = conv_node.get_eps_w().squeeze()
     else:
-        bias_hat = bias
+        eps_w = torch.ones([])
+    if isinstance(prev_act_node, tuple(pact_act_types)):
+        prev_act_eps = prev_act_node.get_eps()
+    else:
+        prev_act_eps = torch.ones([])
+    
+    unsigned_indicator = 1. if isinstance(act_node, PACTUnsignedAct) else 0.
+    prev_unsigned = isinstance(prev_act_node, PACTUnsignedAct)
+    if not first_layer and prev_unsigned:
+        if isinstance(conv_node, (_PACTLinOp)):
+            weights_to_sum = conv_node.weight_int
+        elif isinstance(conv_node, tuple(inq_linear_types)):
+            weights_to_sum = conv_node.weight_frozen
+    else:
+        weights_to_sum = torch.zeros(1,1,1)
+
+    if len(weights_to_sum.shape)==4:
+        dims_to_sum = (1,2,3)
+    else:
+        dims_to_sum = (1,2)
+        
+    bias_add = weights_to_sum.sum(dim=dims_to_sum)
+    bias_add *= torch.tensor(prev_act_eps * eps_w).squeeze() 
+    bias_hat = bias + bias_add
+    
 
     beta_hat = (bias_hat - bn_node.running_mean.data)/torch.sqrt(bn_node.running_var.data+bn_node.eps)
     gamma_hat = 1/torch.sqrt(bn_node.running_var.data+bn_node.eps)
@@ -161,12 +191,10 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
             pool_k = expand_kernel(pool_node)
         gamma_hat *= 1.0/torch.prod(torch.tensor(pool_k, dtype=gamma_hat.dtype))
 
-    eps_w = conv_node.get_eps_w().reshape((-1))
-    thresh_lo = (0.5*act_node.get_eps()-beta_hat)/(gamma_hat*eps_w)
-    thresh_hi = (1.5*act_node.get_eps()-beta_hat)/(gamma_hat*eps_w)
-    if not first_layer:
-        thresh_lo /= prev_act_node.get_eps()
-        thresh_hi /= prev_act_node.get_eps()
+    thresh_lo = ((-0.5 + unsigned_indicator)*eps_act-beta_hat)/(gamma_hat*eps_w)
+    thresh_hi = ((0.5 + unsigned_indicator)*eps_act-beta_hat)/(gamma_hat*eps_w)
+    thresh_lo /= prev_act_eps
+    thresh_hi /= prev_act_eps
     # if some gamma_hats/gammas are negative, the smaller than/larger than relationships are flipped there.
     # the weights in the convolution preceding the BN will be flipped for those channels, so we can simply flip the
     # thresholds. Important: flip BEFORE rounding otherwise they will be off by one :)
@@ -247,29 +275,50 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
         # This processes the last linear classification module and returns the final network and argmax offsets
         if l_idx == len(node_sequences)-1:
             # we assume that the last layer of the network is a linear classifier
-            # in that case, just convert the weights to ternary, from {-eps_w, 0, eps_w} to {-1, 0, 1}
-            eps_w = conv_node.module.get_eps_w()
-            prev_activation_eps = prev_s[-1].module.get_eps()
+            # in that case, just convert the weights to ternary, from {-eps_w,
+            # 0, eps_w} to {-1, 0, 1}
+            if isinstance(conv_node.module, (_PACTLinOp)):
+                eps_w = conv_node.module.get_eps_w()
+                weights_to_sum = conv_node.module.weight_int
+            else:
+                eps_w = torch.ones([])
+                weights_to_sum = conv_node.module.weight_frozen
+            if isinstance(prev_s[-1].module, _PACTActivation):
+                prev_activation_eps = prev_s[-1].module.get_eps()
+            else:
+                prev_activation_eps = torch.ones([])
+
             if conv_node.module.bias is not None:
                 bias = conv_node.module.bias.data
             else:
                 bias = torch.zeros(conv_node.module.out_channels)
 
-            weights_sum = conv_node.module.weight_int.sum(dim=(1,2))
-            argmax_offsets = bias/(prev_activation_eps*eps_w.reshape((-1))) + weights_sum
-            conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_int)
-            conv_node.module.clip_lo = torch.nn.Parameter(conv_node.module.clip_lo / eps_w)
-            conv_node.module.clip_hi = torch.nn.Parameter(conv_node.module.clip_hi / eps_w)
+            
+            weights_sum = weights_to_sum.sum(dim=(1,2))
+            argmax_offsets = bias/(prev_activation_eps*eps_w.reshape((-1)))
+            if isinstance(prev_s[-1].module, PACTUnsignedAct):
+                argmax_offsets += weights_sum
+                if conv_node.module.padding_mode in ['eps', 'ones']:
+                    # if we used eps padding during training, the equivalent is
+                    # using zeros. Probably, the classifier won't b padding
+                    # anything anyway but just to be safe
+                    conv_node.module.padding_mode = 'zeros'
+                else:
+                        # if we did zero padding, we use -1 to pad
+                    conv_node.module.padding_mode = 'neg_ones'
+            if isinstance(conv_node.module, _PACTLinOp):
+                conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_int)
+                conv_node.module.clip_lo = torch.nn.Parameter(conv_node.module.clip_lo / eps_w)
+                conv_node.module.clip_hi = torch.nn.Parameter(conv_node.module.clip_hi / eps_w)
+            elif isinstance(conv_node.module, (INQConv1d, INQConv2d, INQLinear)):
+                conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_frozen)
+            else:
+                assert False, f"Classifier of unknown class {type(conv_node.module)}"
+            
+
             conv_node.module.bias = None
 
-            if conv_node.module.padding_mode == 'eps':
-                # if we used eps padding during training, the equivalent is
-                # using zeros. Probably, the classifier won't b padding
-                # anything anyway but just to be safe
-                conv_node.module.padding_mode = 'zeros'
-            else:
-                # if we did zero padding, use -1 to pad
-                conv_node.module.padding_mode = 'neg_ones'
+            
             # .. and we are done - move back to GPU!
             dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             net.to(device=dev)
@@ -339,16 +388,24 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
         threshs = get_threshs(s, prev_s, adaptive_kernel, cutie_style_threshs, first_layer=(l_idx==0))
         tern_act = TernaryActivation(threshs.lo, threshs.hi, n_d=n_d, dbg=dbg, cutie_style_threshs=cutie_style_threshs)
         lwr.replace_module(net, act_node.path, tern_act)
-        # - Convolution weights are converted from {-eps_w, 0, eps_w} to {-1, 0, 1}
-        eps_w = conv_node.module.get_eps_w()
-        conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_int)
-        conv_node.module.clip_lo = torch.nn.Parameter(conv_node.module.clip_lo / eps_w)
-        conv_node.module.clip_hi = torch.nn.Parameter(conv_node.module.clip_hi / eps_w)
+        # - Convolution weights are converted from {-eps_w, 0, eps_w} to {-1,
+        # - 0, 1}
+        if isinstance(conv_node.module, _PACTLinOp):
+            eps_w = conv_node.module.get_eps_w()
+            conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_int)
+            conv_node.module.clip_lo = torch.nn.Parameter(conv_node.module.clip_lo / eps_w)
+            conv_node.module.clip_hi = torch.nn.Parameter(conv_node.module.clip_hi / eps_w)
+        elif isinstance(conv_node.module, (INQConv1d, INQConv2d, INQCausalConv1d, INQLinear)):
+            conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_frozen)
         # - Convolution padding_mode is changed and bias is set to False
-        # first conv still pads with 0, the following convs pad with -1
-        # 'zeros' enables padding with 0, 'zeros_ternary' enables padding with -1
-        if l_idx>0 and conv_node.module.padding_mode != 'eps':
+        # first conv still pads with 0, the following convs pad with -1 if
+        # using unsigned activations
+        # 'zeros' enables padding with 0, 'neg_ones' enables padding with -1.
+        # when using eps padding, we don't need to do this.
+        if l_idx>0 and isinstance(prev_s[-1].module, PACTUnsignedAct)  and conv_node.module.padding_mode not in ['eps', 'ones']:
             conv_node.module.padding_mode = 'neg_ones'
+            print("===========WARNING!!!===========")
+            print(f"Layer {conv_node.name}'s padding mode is set to {conv_node.module.padding_mode} but we are using unsigned activations - CUTIE can not handle anything but zero-padding so the mapped network will have bad accuracy! Use the 'eps' (for non-unit quantization step sizes) or 'ones' (with unit quantization step size) or  padding modes to avoid this! Setting padding mode to 'neg_ones' so the resulting network is equivalent to the fake-quantized one.")
         else:
             conv_node.module.padding_mode = 'zeros'
         conv_node.module.bias = None # note: not sure if this the correct way to do

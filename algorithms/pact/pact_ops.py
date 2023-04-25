@@ -1990,10 +1990,11 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             pad_val = -1.0
 
         padding = 0
-
+        padmode_real = self.padding_mode
+        self.padding_mode = 'zeros'
         x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode, value=pad_val)
         result = super(PACTCausalConv1d, self).forward(x)
-
+        self.padding_mode = padmode_real
         if self.started and isinstance(result, QTensor) and x.eps is not None:
             result.eps = self.get_eps_out(x.eps)
         return result
