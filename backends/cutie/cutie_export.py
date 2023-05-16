@@ -166,7 +166,7 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
         elif isinstance(conv_node, tuple(inq_linear_types)):
             weights_to_sum = conv_node.weight_frozen
     else:
-        weights_to_sum = torch.zeros(1,1,1)
+        weights_to_sum = torch.zeros(conv_node.out_channels,1,1)
 
     if len(weights_to_sum.shape)==4:
         dims_to_sum = (1,2,3)
