@@ -153,16 +153,16 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
 
     #first export an unannotated ONNX graph
     test_input = torch.rand(shape_in)
-    try:
-        torch.onnx.export(net_integerized.to('cpu'),
-                          test_input,
-                          str(onnx_path),
-                          export_params=True,
-                          verbose=False,
-                          opset_version=opset_version,
-                          do_constant_folding=True)
-    except torch.onnx.CheckerError:
-        print("Disregarding PyTorch ONNX CheckerError...")
+
+    torch.onnx.export(net_integerized.to('cpu'),
+                      test_input,
+                      str(onnx_path),
+                      export_params=True,
+                      verbose=False,
+                      opset_version=opset_version,
+                      do_constant_folding=True,
+                      operator_export_type=torch.onnx.OperatorExportTypes.ONNX_FALLTHROUGH)
+
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
