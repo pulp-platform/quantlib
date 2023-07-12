@@ -51,6 +51,9 @@ class Filter(object):
     def __neg__(self):
         return NotFilter(self)
 
+    def __invert__(self):
+        return NotFilter(self)
+
     def __and__(self, other):
         return AndFilter(self, other)
 
