@@ -66,6 +66,10 @@ class QTensor(torch.Tensor):
 
     @eps.setter
     def eps(self, value):
+        if value is None:
+            if hasattr(self, '_eps'):
+                del self._eps
+            return
         if isinstance(value, torch.Tensor):
             self._eps = value.clone().detach()
         else:
@@ -121,24 +125,17 @@ class QTensor(torch.Tensor):
         return c
 
     def clone(self, *args, **kwargs):
-        if hasattr(self, '_eps'):
-            return QTensor(super().clone(*args, **kwargs), self._eps)
-        else:
-            return QTensor(super().clone(*args, **kwargs), None)
+        with torch._C.DisableTorchFunction():
+            if hasattr(self, '_eps'):
+                return QTensor(super().clone(*args, **kwargs), self._eps)
+            else:
+                return QTensor(super().clone(*args, **kwargs), None)
 
     def to(self, *args, **kwargs):
-        if hasattr(self, '_eps'):
-            new_obj=QTensor([], self._eps)
-        else:
-            new_obj=QTensor([], None)
         with torch._C.DisableTorchFunction():
-            tempTensor = super().to(*args, **kwargs)
-        new_obj.data=tempTensor.data
-        new_obj.requires_grad=tempTensor.requires_grad
-        if hasattr(self, '_eps'):
-            new_obj.__init__(tempTensor, self._eps)
-        else:
-            new_obj.__init__(tempTensor, None)
+            new_obj = super().to(*args, **kwargs).as_subclass(QTensor)
+            new_obj.eps = self.eps
+
         return(new_obj)
 
     def split(self, *args, **kwargs):
