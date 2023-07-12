@@ -153,16 +153,16 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
 
     #first export an unannotated ONNX graph
     test_input = torch.rand(shape_in)
-    try:
-        torch.onnx.export(net_integerized.to('cpu'),
-                          test_input,
-                          str(onnx_path),
-                          export_params=True,
-                          verbose=False,
-                          opset_version=opset_version,
-                          do_constant_folding=True)
-    except torch.onnx.CheckerError:
-        print("Disregarding PyTorch ONNX CheckerError...")
+
+    torch.onnx.export(net_integerized.to('cpu'),
+                      test_input,
+                      str(onnx_path),
+                      export_params=True,
+                      verbose=False,
+                      opset_version=opset_version,
+                      do_constant_folding=True,
+                      operator_export_type=torch.onnx.OperatorExportTypes.ONNX_FALLTHROUGH)
+
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
@@ -177,11 +177,15 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     def dump_hook(self, inp, outp, name):
         # DORY wants HWC tensors
         acts.append((name, torch.floor(outp[0])))
+    # to correctly export unwrapped averagePool nodes, floor all inputs to all nodes
+    def floor_hook(self, inp):
+        return tuple(torch.floor(i) for i in inp)
 
     for n in integerized_nodes:
         if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
+        n.module.register_forward_pre_hook(floor_hook)
 
     # open the supplied input image
     if in_data is not None:

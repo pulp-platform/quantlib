@@ -308,7 +308,7 @@ class INQConv1d(nn.Conv1d):
                  bias=True, padding_mode='zeros', 
                  num_levels=3, quant_init_method=None, quant_strategy="magnitude"):
 
-        pm_fake = 'zeros' if padding_mode == 'ones' else padding_mode
+        pm_fake = 'zeros' if padding_mode in ['ones', 'neg_ones'] else padding_mode
         super(INQConv1d, self).__init__(in_channels, out_channels, kernel_size,
                                         stride, padding, dilation, groups, 
                                         bias, pm_fake)
@@ -326,11 +326,15 @@ class INQConv1d(nn.Conv1d):
         weight_assembled = self.weight_inq_ctrl.inq_assemble_weight(self)
 
         if self.padding_mode != 'zeros':
-            pad_val = 1.0 if self.padding_mode == 'ones' else 0.0
-            mode = 'constant' if self.padding_mode == 'ones' else self.padding_mode
-            return nn.functional.conv1d(nn.functional.pad(input, self._reversed_padding_repeated_twice, mode=mode, value=pad_val),
+            pad_val = 1.0 if self.padding_mode == 'ones' else -1.0 if self.padding_mode == 'neg_ones' else 0.0
+            mode = 'constant' if self.padding_mode in ['ones', 'neg_ones'] else self.padding_mode
+            padmode_real = self.padding_mode
+            self.padding_mode = 'zeros'
+            result = nn.functional.conv1d(nn.functional.pad(input, self._reversed_padding_repeated_twice, mode=mode, value=pad_val),
                             weight_assembled, self.bias, self.stride,
                             0, self.dilation, self.groups)
+            self.padding_mode = padmode_real
+            return result
 
         return nn.functional.conv1d(input, weight_assembled, self.bias, self.stride,
                                     self.padding, self.dilation, self.groups)
@@ -352,6 +356,8 @@ class INQCausalConv1d(INQConv1d):
         else:
             dil = dilation
 
+        
+        pm_fake = 'zeros' if padding_mode in ['ones', 'neg_ones'] else padding_mode
         self.__padding = (k-1) * dil
         super(INQCausalConv1d, self).__init__(
             in_channels,
@@ -362,16 +368,22 @@ class INQCausalConv1d(INQConv1d):
             dilation=dilation,
             groups=groups,
             bias=bias,
-            padding_mode=padding_mode,
+            padding_mode=pm_fake,
             num_levels=num_levels,
             quant_init_method=quant_init_method,
             quant_strategy=quant_strategy)
+        self.padding_mode = padding_mode
 
     def forward(self, input):
-        pad_mode = 'constant' if self.padding_mode in ['zeros', 'ones'] else self.padding_mode
-        pad_val = 1. if self.padding_mode == 'ones' else 0.
+        pad_mode = 'constant' if self.padding_mode in ['zeros', 'ones', 'neg_ones'] else self.padding_mode
+        pad_val = 1.0 if self.padding_mode == 'ones' else -1.0 if self.padding_mode == 'neg_ones' else 0.0
+
         x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode, value=pad_val)
+        #hack alert!
+        padmode_real = self.padding_mode
+        self.padding_mode = 'zeros'
         result = super(INQCausalConv1d, self).forward(x)
+        self.padding_mode = padmode_real
         return result
 
 class INQConv2d(nn.Conv2d):
@@ -402,9 +414,9 @@ class INQConv2d(nn.Conv2d):
 #                                        (0,), self.dilation, self.groups)
 
         if self.padding_mode != 'zeros':
-            pad_val = 1.0 if self.padding_mode == 'ones' else 0.0
-            mode = 'constant' if self.padding_mode == 'ones' else self.padding_mode
-            return nn.functional.conv1d(nn.functional.pad(input, self._reversed_padding_repeated_twice, mode=mode, value=pad_val), weight_assembled, self.bias, self.stride, 0, self.dilation, self.groups)
+            pad_val = 1.0 if self.padding_mode == 'ones' else -1.0 if self.padding_mode == 'neg_ones' else 0.0
+            mode = 'constant' if self.padding_mode in ['ones', 'neg_ones'] else self.padding_mode
+            return nn.functional.conv2d(nn.functional.pad(input, self._reversed_padding_repeated_twice, mode=mode, value=pad_val), weight_assembled, self.bias, self.stride, 0, self.dilation, self.groups)
         return nn.functional.conv2d(input, weight_assembled, self.bias, self.stride,
                                     self.padding, self.dilation, self.groups)
 

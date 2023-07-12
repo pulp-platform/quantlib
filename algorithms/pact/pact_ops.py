@@ -956,6 +956,8 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             tqt_beta = 0.9,
             tqt_clip_grad = True,
             rounding = True,
+            mse_iters : int = 80,
+            eps_pad_fac : float = 1.,
             **kwargs
     ):
         """
@@ -965,7 +967,21 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         :param kwargs: passed to Conv2d constructor
         """
 
+        valid_padding_modes = {'zeros', 'reflect', 'replicate', 'circular'}
+        try:
+            pm = kwargs['padding_mode']
+        except KeyError:
+            pm = 'zeros'
+        if pm not in valid_padding_modes:
+            assert pm in ['eps', 'neg_ones'], f'PACTConv2d got invalid padding mode {pm} - expected one of {valid_padding_modes.union({"eps", "neg_ones"})}'
+            # for Conv1d initializer, pretend we are doing zero padding...
+            kwargs['padding_mode'] = 'zeros'
+
         super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
+
+        self.eps_pad_fac = eps_pad_fac
+        self.padding_mode = pm
+
         self.setup_quant_params(n_levels=n_levels,
                                 quantize=quantize,
                                 init_clip=init_clip,
@@ -974,7 +990,8 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
                                 nb_std=nb_std,
                                 tqt=tqt,
                                 tqt_beta=tqt_beta,
-                                tqt_clip_grad=tqt_clip_grad)
+                                tqt_clip_grad=tqt_clip_grad,
+                                mse_iters=mse_iters)
         # we want to be able to freeze weights; to avoid updating them, we must
         # keep them in a buffer (e.g., ADAM will keep updating weights even
         # with requires_grad == False)
@@ -1006,7 +1023,19 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         else:
             w = self.weight
 
-        return nn.functional.conv2d(x, w, b, self.stride, self.padding, self.dilation, self.groups)
+        if self.padding_mode != 'zeros':
+            mode = 'constant' if self.padding_mode in ['neg_ones', 'eps'] else self.padding_mode
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() * self.eps_pad_fac if self.padding_mode == 'eps' else -1.0
+
+            x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
+            padding = 0
+        else:
+            padding = self.padding
+        result = nn.functional.conv2d(x, w, b, self.stride, padding, self.dilation, self.groups)
+        if self.started and isinstance(result, QTensor) and x.eps is not None:
+            result.eps = self.get_eps_out(x.eps)
+
+        return result
 
 
     # this is not very pretty. Any suggestions on how to avoid it are welcome...
@@ -1015,6 +1044,10 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
 
     @classmethod
     def from_conv2d(cls, c : nn.Conv2d, **kwargs):
+        pm = c.padding_mode
+        if 'padding_mode' in kwargs:
+            pm = kwargs['padding_mode']
+            kwargs.pop('padding_mode')
         # kwargs should be arguments to PACTConv2d
         pact_conv = cls(in_channels=c.in_channels,
                    out_channels=c.out_channels,
@@ -1024,7 +1057,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
                    dilation=c.dilation,
                    groups=c.groups,
                    bias=(c.bias is not None),
-                   padding_mode=c.padding_mode,
+                   padding_mode=pm,
                    **kwargs)
         # initialize parameters from the nn.Conv2d
         pact_conv.weight.data.copy_(c.weight.data)
@@ -1051,6 +1084,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             tqt_beta = 0.9,
             tqt_clip_grad = True,
             rounding = True,
+            eps_pad_fac = 1.,
             **kwargs
     ):
         """
@@ -1070,8 +1104,12 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             # for Conv1d initializer, pretend we are doing zero padding...
             kwargs['padding_mode'] = 'zeros'
 
+
+
         super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.padding_mode = pm
+        self.eps_pad_fac = eps_pad_fac
+
         self.setup_quant_params(n_levels=n_levels,
                                 quantize=quantize,
                                 init_clip=init_clip,
@@ -1112,7 +1150,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
 
         if self.padding_mode != 'zeros':
             mode = 'constant' if self.padding_mode in ['eps', 'neg_ones'] else self.padding_mode
-            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() if mode == 'eps' else -1.0
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() * self.eps_pad_fac if mode == 'eps' else -1.0
             x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
             padding = 0
         else:
@@ -1165,6 +1203,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             tqt = False,
             tqt_beta = 0.9,
             tqt_clip_grad = True,
+            eps_pad_fac = 1.,
             **kwargs
     ):
 
@@ -1191,7 +1230,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             dil = dilation
         self.__padding = (k-1) * dil
 
-        super(PACTCausalConv1d, self).__init__(
+        super(PACTCausalConv1d, self).__init__( 
             in_channels,
             out_channels,
             kernel_size,
@@ -1207,6 +1246,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             padding=0,
             **kwargs)
         self.padding_mode = pm
+        self.eps_pad_fac = eps_pad_fac
 
     def extra_repr(self):
         # done veryy ugly, but I was getting a recursion error all the time and couldn't figure it out
@@ -1217,15 +1257,16 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
         pad_mode = 'constant' if self.padding_mode in ['eps', 'zeros', 'neg_ones'] else self.padding_mode
         pad_val = 0.0
         if self.padding_mode == 'eps' and self.started and isinstance(input, QTensor) and input.eps is not None:
-            pad_val = input.eps.item()
+            pad_val = input.eps.item() * self.eps_pad_fac
         elif self.padding_mode == 'neg_ones':
             pad_val = -1.0
 
         padding = 0
-
+        padmode_real = self.padding_mode
+        self.padding_mode = 'zeros'
         x = nn.functional.pad(input, (self.__padding, 0), mode=pad_mode, value=pad_val)
         result = super(PACTCausalConv1d, self).forward(x)
-
+        self.padding_mode = padmode_real
         if self.started and isinstance(result, QTensor) and x.eps is not None:
             result.eps = self.get_eps_out(x.eps)
         return result

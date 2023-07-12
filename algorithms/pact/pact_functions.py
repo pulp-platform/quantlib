@@ -210,15 +210,18 @@ class TQTQuantFunc(torch.autograd.Function):
         # clipped high
         grad_logt =  clip_hi * torch.where(where_input_hi, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
         # clipped low
-        grad_logt += clip_lo * torch.where(where_input_lo, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
+        grad_logt = grad_logt + clip_lo * torch.where(where_input_lo, grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
         # unclipped
-        grad_logt  += torch.where(where_input_nonclipped, quant_error * grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
+        grad_logt  = grad_logt + torch.where(where_input_nonclipped, quant_error * grad_output, zero).sum(dim=reduce_dims).reshape(clip_lo.shape)
         # scale by log2
-        grad_logt *= ln2
+        grad_logt = grad_logt * ln2
         # normalize and bias-correct (see appendix B in paper) the gradient
         grad_var = beta * running_grad_var + (1-beta) * grad_logt**2
-        running_grad_var.copy_(grad_var.reshape(running_grad_var.shape))
-        running_beta.mul_(beta)
+        #running_grad_var.copy_(grad_var.reshape(running_grad_var.shape))
+        # we have to hack these with .data in order to bamboozle the
+        # autograd version checker!
+        running_grad_var.data.copy_(grad_var.reshape(running_grad_var.shape))
+        running_beta.data.mul_(beta)
         grad_var /= (1 - running_beta)
         grad_logt /= (torch.sqrt(grad_var) + 1e-5)
         if clip_grad_logt:
@@ -249,6 +252,10 @@ class AlmostSymmQuantFunc(torch.autograd.Function):
         """
 
         torch._assert(torch.all(clip_lo <= 0), "Big problem: `clip_lo` passed to AlmostSymmQuantFunc is not negative: everything will break!")
+        if n_levels == 2:
+            scale = 1.
+            ctx.save_for_backward(scale)
+            return -clip_lo
         if n_levels % 2 == 0:
             scale = torch.tensor(-(n_levels-2)/n_levels, device=clip_lo.device)
         else:
