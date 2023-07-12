@@ -28,6 +28,10 @@ def assert_param_valid(module : nn.Module, value, param_name : str, valid_values
     assert value in valid_values, error_str
 
 def almost_symm_quant(max_val, n_levels):
+    # for binary quantization, we want -eps/2 and +eps/2!
+    if n_levels == 2:
+        return -max_val, max_val
+
     if n_levels % 2 == 0:
         eps = 2*max_val/n_levels
     else:

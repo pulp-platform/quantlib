@@ -177,11 +177,15 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     def dump_hook(self, inp, outp, name):
         # DORY wants HWC tensors
         acts.append((name, torch.floor(outp[0])))
+    # to correctly export unwrapped averagePool nodes, floor all inputs to all nodes
+    def floor_hook(self, inp):
+        return tuple(torch.floor(i) for i in inp)
 
     for n in integerized_nodes:
         if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
+        n.module.register_forward_pre_hook(floor_hook)
 
     # open the supplied input image
     if in_data is not None:

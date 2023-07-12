@@ -1691,6 +1691,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
             tqt_clip_grad = True,
             rounding = True,
             mse_iters : int = 80,
+            eps_pad_fac : float = 1.,
             **kwargs
     ):
         """
@@ -1712,6 +1713,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
 
         super(PACTConv2d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
 
+        self.eps_pad_fac = eps_pad_fac
         self.padding_mode = pm
 
         self.setup_quant_params(n_levels=n_levels,
@@ -1757,7 +1759,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
 
         if self.padding_mode != 'zeros':
             mode = 'constant' if self.padding_mode in ['neg_ones', 'eps'] else self.padding_mode
-            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() if self.padding_mode == 'eps' else -1.0
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() * self.eps_pad_fac if self.padding_mode == 'eps' else -1.0
 
             x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
             padding = 0
@@ -1816,6 +1818,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             tqt_beta = 0.9,
             tqt_clip_grad = True,
             rounding = True,
+            eps_pad_fac = 1.,
             **kwargs
     ):
         """
@@ -1839,6 +1842,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
 
         super(PACTConv1d, self).__init__(in_channels, out_channels, kernel_size, **kwargs)
         self.padding_mode = pm
+        self.eps_pad_fac = eps_pad_fac
 
         self.setup_quant_params(n_levels=n_levels,
                                 quantize=quantize,
@@ -1880,7 +1884,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
 
         if self.padding_mode != 'zeros':
             mode = 'constant' if self.padding_mode in ['eps', 'neg_ones'] else self.padding_mode
-            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() if mode == 'eps' else -1.0
+            pad_val = 0.0 if (not self.started or not isinstance(x, QTensor) or x.eps is None) else x.eps.item() * self.eps_pad_fac if mode == 'eps' else -1.0
             x = nn.functional.pad(x, self._reversed_padding_repeated_twice, mode=mode, value=pad_val)
             padding = 0
         else:
@@ -1933,6 +1937,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             tqt = False,
             tqt_beta = 0.9,
             tqt_clip_grad = True,
+            eps_pad_fac = 1.,
             **kwargs
     ):
 
@@ -1975,6 +1980,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             padding=0,
             **kwargs)
         self.padding_mode = pm
+        self.eps_pad_fac = eps_pad_fac
 
     def extra_repr(self):
         # done veryy ugly, but I was getting a recursion error all the time and couldn't figure it out
@@ -1985,7 +1991,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
         pad_mode = 'constant' if self.padding_mode in ['eps', 'zeros', 'neg_ones'] else self.padding_mode
         pad_val = 0.0
         if self.padding_mode == 'eps' and self.started and isinstance(input, QTensor) and input.eps is not None:
-            pad_val = input.eps.item()
+            pad_val = input.eps.item() * self.eps_pad_fac
         elif self.padding_mode == 'neg_ones':
             pad_val = -1.0
 

@@ -252,6 +252,10 @@ class AlmostSymmQuantFunc(torch.autograd.Function):
         """
 
         torch._assert(torch.all(clip_lo <= 0), "Big problem: `clip_lo` passed to AlmostSymmQuantFunc is not negative: everything will break!")
+        if n_levels == 2:
+            scale = 1.
+            ctx.save_for_backward(scale)
+            return -clip_lo
         if n_levels % 2 == 0:
             scale = torch.tensor(-(n_levels-2)/n_levels, device=clip_lo.device)
         else:
