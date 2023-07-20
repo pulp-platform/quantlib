@@ -28,7 +28,7 @@ import backends
 
 from quantlib.algorithms.inq import INQConv2d, INQConv1d
 from quantlib.algorithms.ste import STEActivation
-from quantlib.graphs.analyse import Node
+from quantlib.editing.lightweight import LightweightNode
 from .layers import layer_has_modules
 from mako.template import Template
 
@@ -110,7 +110,7 @@ class TWNLayer:
     # for a specific TWN accelerator layer
     def __init__(self, layer_nodes : list, name : str, params : TWNAccelParams):
         self.layer_name = name
-        self.layer_nodes = [m.module if isinstance(m, Node) else m for m in layer_nodes]
+        self.layer_nodes = [m.module if isinstance(m, LightweightNode) else m for m in layer_nodes]
         self.params = params
 
     @property
