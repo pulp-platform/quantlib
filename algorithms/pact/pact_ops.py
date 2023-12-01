@@ -112,8 +112,8 @@ class RequantShift(nn.Module):
             # division. Division is with flooring.
             else:
                 y = x * mul + add
-                # Avoid round to even behaviour, friggin pytorch
-                y = torch.floor((y / div) + 0.5)
+                # LMACAN: Dory doesn't like the `+ 0.5` fix
+                y = torch.floor(y / div)
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
