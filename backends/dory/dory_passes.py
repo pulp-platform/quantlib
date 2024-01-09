@@ -116,7 +116,7 @@ class AlignAvgPoolPass(SequentialPass):
 class DORYAdder(nn.Module):
     class DORYAdderFun(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x1, rq1, x2, rq2, rq_out):
+        def forward(ctx, x1, rq1, x2, rq2, rq_out, out_n_levels):
             if rq1:
                 x1 = rq1(x1)
             if rq2:
@@ -127,10 +127,20 @@ class DORYAdder(nn.Module):
             if rq_out:
                 x_sum = rq_out(x_sum)
 
+            out_signed = rq_out.signed if rq_out else False
+            if out_signed:
+                out_min = -(out_n_levels // 2)
+                out_max = (out_n_levels - 1) // 2
+            else:
+                out_min = 0
+                out_max = out_n_levels - 1
+
+            x_sum = torch.clamp(x_sum, out_min, out_max)
+
             return x_sum
 
         @staticmethod
-        def symbolic(g, x1, rq1, x2, rq2, rq_out):
+        def symbolic(g, x1, rq1, x2, rq2, rq_out, out_n_levels):
 
             params = {}
             out_signed_inferred = False
@@ -146,7 +156,10 @@ class DORYAdder(nn.Module):
                     mul = 1
                     add = 0
                     shift = 0
-                    n_l = 256
+                    if name == "out":
+                        n_l = out_n_levels
+                    else:
+                        n_l = 256
                     requant = 0
                 if name == "out":
                     if module:
@@ -175,7 +188,7 @@ class DORYAdder(nn.Module):
 
 
     def forward(self, x1, x2):
-        return self.DORYAdderFun.apply(x1, self.in1_requant, x2, self.in2_requant, self.out_requant)
+        return self.DORYAdderFun.apply(x1, self.in1_requant, x2, self.in2_requant, self.out_requant, self.out_n_levels)
 
 
 class DORYReplaceAddersPass(OpTreeReplacementPass):
