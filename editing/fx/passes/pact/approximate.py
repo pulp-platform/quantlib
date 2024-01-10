@@ -43,21 +43,27 @@ from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
+def replSoftmax(gm : fx.GraphModule, match : Match, mode: str):
+    if mode == "I-BERT":
+        replacement_class = PACTSoftmax()
+    elif mode=='ITA':
+        replacement_class = PACTITAMax()
+    elif mode=='ITA-Partial':
+        replacement_class = PACTITAPartialMax()
+
+    return replacement_class
+
 class ApproximateSoftmaxPass(SequentialPass):
+
+    modes = ["I-BERT", "ITA", 'ITA-Partial']
+
     def __init__(self, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
 
-        if mode=='I-BERT':
-            replacement_class = PACTSoftmax()
-        elif mode=='ITA':
-            replacement_class = PACTITAMax()
-        elif mode=='ITA-Partial':
-            replacement_class = PACTITAPartialMax()
-        else:
-            assert False, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
-    
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: replacement_class, f'_APPROXIMATE_SOFTMAX_PASS'))
+        assert mode in self.modes, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
+
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(replSoftmax, mode=mode), f'_APPROXIMATE_SOFTMAX_PASS'))
 
         super().__init__(*passes, name_prefix='_APPROXIMATE_SOFTMAX_PASS')
 
