@@ -170,7 +170,8 @@ class OpTreeReplacementPass(FxPass):
                 #now, we assume the output of the new node has the same "quant"
                 #meta properties as the output of the tree that is being
                 #replaced
-                new_node.meta['quant'] = deepcopy(tree.end_node.meta['quant'])
+                if hasattr(tree.end_node, "meta") and "quant" in tree.end_node.meta:
+                    new_node.meta['quant'] = deepcopy(tree.end_node.meta['quant'])
                 # finally, delete the nodes in the tree
                 for node in tree.nodes:
                     gm.graph.erase_node(node)
