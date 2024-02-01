@@ -73,6 +73,7 @@ __all__ = [
     'PACTIntegerITAPartialMax',
     'PACTGELU',
     'PACTLayerNorm',
+    'PACTRMSNorm',
     'PACTIntegerEmbedding',
     'PACTEmbedding',
     'PACTWrapModule',
@@ -2441,6 +2442,59 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         b = self.bias
 
         y = self.div(nom, denom) + b
+        return y
+
+class PACTRMSNorm(_PACTEps, _PACTLinOp):
+
+    def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), eps=1e-3, *args, **kwargs):
+        _PACTLinOp.__init__(self)
+        _PACTEps.__init__(self)
+        self.setup_quant_params(*args, **kwargs)
+
+        self.normalized_shape = normalized_shape
+        self.weight = nn.Parameter(weight)
+
+        self.register_buffer('eps', torch.Tensor((eps,)))
+        self.register_buffer('eta', torch.Tensor((1.,)))
+
+        self.div = PACTDiv(Delta=1., stable=False, autoscale=True)
+
+    def get_eps_out(self, eps_in):
+        self.set_eps_in([eps_in])
+        eps_out_div = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
+        return eps_out_div.type_as(eps_in)
+
+    def set_eps_in(self, eps_in_list):
+        super().set_eps_in(eps_in_list)
+
+        t = self.eps_in / torch.sqrt(self.eps)
+        self.eta = torch.ceil(t)
+
+        self.div.set_eps_in([self.eps_in*self.get_eps_w(), self.eps_in])
+
+    def forward(self, x):
+        def RQ(x, eps):
+            if self.started:
+                x = torch.floor(x/eps+0.5)*eps
+            return x
+
+        nom = x
+        var = RQ(torch.mean(torch.pow(nom, 2), -1, keepdim=True), self.eps_in**2 )
+        var = var * self.eta**2
+        nom = nom * self.eta
+        eps = RQ(self.eta**2 * self.eps , self.eps_in**2)
+
+        if self.started:
+            assert eps>=self.eps_in**2, f"Eps was rounded down in PACTRMSNorm, eta = {self.eta}, eps = {self.eps}, eps_in = {self.eps_in}"
+
+        denom = RQ(torch.sqrt(var + eps), self.eps_in)
+
+        if self.started:
+            nom = nom*self.weight_q
+        else:
+            nom = nom*self.weight
+
+        y = self.div(nom, denom)
         return y
 
 class PACTWrapLinearAttention(nn.Module):
