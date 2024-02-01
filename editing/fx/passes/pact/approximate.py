@@ -74,7 +74,7 @@ class ApproximateGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
-class ApproximateSiLUPass(SequentialPass):
+class ApproximateSiLUWithGELUPass(SequentialPass):
     def __init__(self, custom_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.SiLU())
