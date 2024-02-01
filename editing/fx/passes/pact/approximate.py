@@ -74,10 +74,15 @@ class ApproximateGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
+class ApproximateSiLUWithGELUPass(SequentialPass):
+    def __init__(self, custom_trace, **kwargs):
+        passes = []
+        pattern = nn.Sequential(nn.SiLU())
+        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_SILU_PASS'))
+        super().__init__(*passes, name_prefix='_APPROXIMATE_SILU_PASS')
+
 def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
     modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    layernorm_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     layernorm = matched_modules[0]
     assert isinstance(layernorm, nn.LayerNorm), f"layernorm_replacement_fun got bad match - expected LayerNorm, got {type(layernorm)}"
@@ -95,7 +100,6 @@ class CanonicalizeLayerNormPass(SequentialPass):
         pattern = nn.Sequential(nn.LayerNorm(1))
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(layernorm_replacement_fun, *args, **kwargs), f'_CANONICALIZE_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_CANONICALIZE_LAYERNORM_PASS')
-
 
 def embedding_replacement_fun(gm : fx.GraphModule, match : Match, n_levels: int = 256):
     modules = gm_modules(gm)
@@ -115,6 +119,26 @@ def embedding_replacement_fun(gm : fx.GraphModule, match : Match, n_levels: int 
     new_embedding = PACTEmbedding(n_levels, bias)
 
     return new_embedding
+
+def rmsnorm_replacement_fun(custom_module, gm : fx.GraphModule, match : Match, *args, **kwargs):
+    modules = gm_modules(gm)
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    rmsnorm = matched_modules[0]
+
+    assert isinstance(rmsnorm, type(custom_module)), f"rmsnorm_replacement_fun got bad match - expected LayerNorm, got {type(rmsnorm)}"
+
+    weight = rmsnorm._parameters['weight'].clone() if rmsnorm._parameters['weight'] is not None  else torch.Tensor((1.,))
+
+    new_rmsnorm = PACTRMSNorm(rmsnorm.weight.shape, weight, rmsnorm.variance_epsilon)
+
+    return new_rmsnorm
+
+class CanonicalizeRMSNormPass(SequentialPass):
+    def __init__(self, custom_trace, custom_module, *args, **kwargs):
+        passes = []
+        pattern = nn.Sequential(custom_module)
+        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, partial(rmsnorm_replacement_fun, custom_module, *args, **kwargs), f'_CANONICALIZE_RMSNORM_PASS'))
+        super().__init__(*passes, name_prefix='_CANONICALIZE_RMSNORM_PASS')
 
 class ProtoPACTEmbedding(torch.nn.Module):
 
