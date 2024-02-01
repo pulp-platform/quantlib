@@ -74,10 +74,15 @@ class ApproximateGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
+class ApproximateSiLUPass(SequentialPass):
+    def __init__(self, custom_trace, **kwargs):
+        passes = []
+        pattern = nn.Sequential(nn.SiLU())
+        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_SILU_PASS'))
+        super().__init__(*passes, name_prefix='_APPROXIMATE_SILU_PASS')
+
 def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
     modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    layernorm_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     layernorm = matched_modules[0]
     assert isinstance(layernorm, nn.LayerNorm), f"layernorm_replacement_fun got bad match - expected LayerNorm, got {type(layernorm)}"
@@ -95,7 +100,6 @@ class CanonicalizeLayerNormPass(SequentialPass):
         pattern = nn.Sequential(nn.LayerNorm(1))
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(layernorm_replacement_fun, *args, **kwargs), f'_CANONICALIZE_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_CANONICALIZE_LAYERNORM_PASS')
-
 
 def embedding_replacement_fun(gm : fx.GraphModule, match : Match, n_levels: int = 256):
     modules = gm_modules(gm)
