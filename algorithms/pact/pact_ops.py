@@ -1038,6 +1038,18 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         return result
 
 
+    # do not use in training!
+    def get_bias_q(self, eps_in):
+        # we assume that bias gets quantized to a really high bitwidth so don't
+        # clip it
+        with torch.no_grad():
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
+        return b
+
+    # do not use in training!
+    def get_bias_int(self, eps_in):
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in).flatten()).round()
+
     # this is not very pretty. Any suggestions on how to avoid it are welcome...
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
@@ -1160,6 +1172,18 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
             result.eps = self.get_eps_out(x.eps)
         return result
 
+    # do not use in training!
+    def get_bias_q(self, eps_in):
+        # we assume that bias gets quantized to a really high bitwidth so don't
+        # clip it
+        with torch.no_grad():
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
+        return b
+
+    # do not use in training!
+    def get_bias_int(self, eps_in):
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in).flatten()).round()
+
     def extra_repr(self):
         return _PACTLinOp.extra_repr(self)
 
@@ -1272,6 +1296,18 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
         return result
 
 
+    # do not use in training!
+    def get_bias_q(self, eps_in):
+        # we assume that bias gets quantized to a really high bitwidth so don't
+        # clip itp
+        with torch.no_grad():
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
+        return b
+
+    # do not use in training!
+    def get_bias_int(self, eps_in):
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in).flatten()).round()
+
     @classmethod
     def from_causalconv1d(cls, c : CausalConv1d, **kwargs):
         # kwargs should be arguments to PACTCausalConv1d
@@ -1356,7 +1392,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 
     # do not use in training!
     def get_bias_int(self, eps_in):
-        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in)).round()
+        return (self.get_bias_q(eps_in)/self.get_eps_out(eps_in).flatten()).round()
 
     def get_eps_out(self, eps_in):
         return self.get_eps_w().flatten().type_as(eps_in)*eps_in

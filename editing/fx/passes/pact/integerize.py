@@ -176,10 +176,15 @@ class IntegerizeGELUPass(SequentialPass):
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    conv_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    eps_in = extract_eps(conv_node.meta['quant'].eps_in)
     conv = matched_modules[0]
     assert isinstance(conv, (PACTConv1d, PACTConv2d)), f"integerize_pact_conv_fun got bad match - expected PACTConv, got {type(conv)}"
-    assert conv.bias is None, "integerize_pact_conv_fun: Conv layer has bias"
+    if conv.bias is not None:
+        asdf = conv.get_bias_int(eps_in)
+        print(f"integerize_pact_conv_fun: WARNING - FOUND CONV LAYER WITH BIAS; MAKE SURE THIS IS INTENDED!\nLAYER NAME: {conv_node.target}")
     conv_type = nn.Conv2d if isinstance(conv, PACTConv2d) else nn.Conv1d
     pm = 'zeros' if conv.padding_mode == 'eps' else conv.padding_mode
     new_conv = conv_type(in_channels=conv.in_channels,
@@ -189,12 +194,15 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          padding=conv.padding,
                          dilation=conv.dilation,
                          groups=conv.groups,
-                         bias=None,
+                         bias=conv.bias is not None,
                          padding_mode=pm)
     try:
         new_conv.weight.data.copy_(conv.weight_int)
     except RuntimeError as e:
         import ipdb; ipdb.set_trace()
+
+    if conv.bias is not None:
+        new_conv.bias.data.copy_(conv.get_bias_int(eps_in))
 
     # annotate the new conv with the number of levels
     new_conv.n_levels = conv.n_levels
