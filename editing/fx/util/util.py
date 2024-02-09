@@ -20,11 +20,13 @@
 # 
 
 from torch import fx
+from torch.fx.subgraph_rewriter import Match
 
 __all__ = ['gm_modules',
            'module_of_node',
            'named_module_nodes',
-           'get_qualified_prefix']
+           'get_qualified_prefix',
+           'modules_of_match']
 
 def gm_modules(gm : fx.GraphModule):
     return dict(gm.named_modules())
@@ -44,3 +46,7 @@ def named_module_nodes(gm : fx.GraphModule):
 def get_qualified_prefix(target : str):
     spl = target.split('.')
     return '.'.join(spl[:-1])
+
+def modules_of_match(gm : fx.GraphModule, m : Match):
+    modules = gm_modules(gm)
+    return [modules[m.target] for k, m in m.nodes_map.items() if k.op == 'call_module'][::-1]
