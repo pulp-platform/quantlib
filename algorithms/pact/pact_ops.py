@@ -33,7 +33,7 @@ import torch
 from torch import nn
 import torch.fx
 from torch.onnx import register_custom_op_symbolic
-from torch.onnx.symbolic_helper import parse_args
+from torch.onnx.symbolic_helper import parse_args, _get_tensor_sizes
 
 from quantlib.algorithms.generic import CausalConv1d
 from quantlib.QTensor import QTensor
@@ -113,7 +113,7 @@ class RequantShift(nn.Module):
             else:
                 y = x * mul + add
                 # Avoid round to even behaviour, friggin pytorch
-                y = torch.floor((y / div) + 0.5)
+                y = torch.floor((y / div))
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
@@ -229,20 +229,24 @@ class ChannelwiseThreshold(nn.Module):
     class MyChannelwiseThreshold(torch.autograd.Function):
 
         @staticmethod
-        def forward(ctx, x, thresh_lo, thresh_hi):
+        def forward(ctx, x, thresh_lo, thresh_hi, signed_out):
             tmp1 = -1*(x < thresh_lo).type_as(x)
             tmp2 = (x >= thresh_hi).type_as(x)
 
             return tmp1 + tmp2
 
         @staticmethod
-        @parse_args('v', 't', 't')
-        def symbolic(g, x, thresh_lo, thresh_hi):
-            thresh_lo_ = g.op("Constant", value_t=thresh_lo)
-            thresh_hi_ = g.op("Constant", value_t=thresh_hi)
-            return g.op("PACTOps::ChannelwiseThreshold2d", x, thresh_lo_t=thresh_lo, thresh_hi_t=thresh_hi)
+        @parse_args('v', 'is', 'is', 'i')
+        def symbolic(g, x, thresh_lo, thresh_hi, signed_out):
+            return g.op("PACTOps::ChannelwiseThreshold2d",
+                        x, thresh_lo_i=thresh_lo, thresh_hi_i=thresh_hi,
+                        signed_out_i=signed_out).setType(x.type().with_sizes(_get_tensor_sizes(x)))
 
-    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor, n_dim : Literal[1,2] = 2):
+    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor, n_dim : Literal[1,2] = 2, signed_out : bool = True):
+        # signed: only used in the exported graph to indicate whether the conv
+        # following this threshold should interpret it as (originally)
+        # producing signed outputs. If not, the calculations are the same (!)
+        # but the padding needs to be with -1.
         super(ChannelwiseThreshold, self).__init__()
         if n_dim == 1:
             thresh_shape = (-1, 1)
@@ -252,9 +256,13 @@ class ChannelwiseThreshold(nn.Module):
             assert False, f"ChannelwiseThreshold: n_dim must be 1 or 2, got {n_dim}!"
         self.register_buffer('thresh_lo', thresh_lo.reshape(*thresh_shape).clone().detach())
         self.register_buffer('thresh_hi', thresh_hi.reshape(*thresh_shape).clone().detach())
+        self.register_buffer('signed_out', torch.tensor(int(signed_out)))
 
     def forward(self, x):
-        return self.MyChannelwiseThreshold.apply(x, self.thresh_lo.data.type_as(x), self.thresh_hi.data.type_as(x))
+        return self.MyChannelwiseThreshold.apply(x,
+                                                 self.thresh_lo.data.type_as(x),
+                                                 self.thresh_hi.data.type_as(x),
+                                                 self.signed_out.data)
 
 r"""Broadly configurable implementations of the PACT
 (https://arxiv.org/pdf/1807.06964) and TQT (https://arxiv.org/abs/1903.08066)

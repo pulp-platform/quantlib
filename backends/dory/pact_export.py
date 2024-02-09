@@ -37,8 +37,9 @@ import numpy as np
 
 import quantlib.editing.fx as qlfx
 from quantlib.editing.fx.util import module_of_node
+from quantlib.editing.fx.passes.pact import PACT_symbolic_trace
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule
+from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule, ChannelwiseThreshold
 from .dory_passes import AvgPoolWrap, DORYAdder, DORYHarmonizePass
 
 def get_input_channels(net : fx.GraphModule):
@@ -230,11 +231,13 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     #done!
 
 
-def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, change_n_levels : int = None, code_size : int = 310000):
-    if isinstance(net_cnn, fx.GraphModule):
-        cnn_window = get_input_channels(net_cnn)
-    else:
-        cnn_window = net_cnn.adapter.in_channels
+def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, change_n_levels : int = None, code_size : int = 310000, compressed : bool = False):
+    net_cnn = PACT_symbolic_trace(net_cnn)
+    net_tcn = PACT_symbolic_trace(net_tcn)
+    #if isinstance(net_cnn, fx.GraphModule):
+    cnn_window = get_input_channels(net_cnn)
+    #else:
+        #cnn_window = net_cnn.adapter.in_channels
 
     net_cnn = net_cnn.eval()
     net_tcn = net_tcn.eval()
@@ -243,6 +246,7 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
             if isinstance(m, RequantShift):
                 m.n_levels_out.data = torch.Tensor([change_n_levels])
     out_path_cnn = Path(out_dir).joinpath('cnn')
+
     out_path_tcn = Path(out_dir).joinpath('tcn')
     out_path_cnn.mkdir(parents=True, exist_ok=True)
     out_path_tcn.mkdir(parents=True, exist_ok=True)
@@ -264,13 +268,20 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
     prec_dict_cnn = {}
     for lname, module in int_net_cnn.named_modules():
         if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Linear)):
-            n_bits = int(np.log2(module.n_levels+1.2))
-            prec_dict_cnn[lname] = n_bits
+            if (not compressed) or (module.n_levels != 3):
+                n_bits = int(np.log2(module.n_levels+1.2))
+                prec_dict_cnn[lname] = n_bits
+            else:
+                prec_dict_cnn[lname] = 1.6
+
     prec_dict_tcn = {}
     for lname, module in int_net_tcn.named_modules():
         if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Linear)):
-            n_bits = int(np.log2(module.n_levels+1.2))
-            prec_dict_tcn[lname] = n_bits
+            if (not compressed) or (module.n_levels != 3):
+                n_bits = int(np.log2(module.n_levels+1.2))
+                prec_dict_tcn[lname] = n_bits
+            else:
+                prec_dict_tcn[lname] = 1.6
 
     #first export an unannotated ONNX graph
     test_input_cnn = torch.rand(shape_in_cnn)
@@ -296,13 +307,14 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
         # DORY wants HWC tensors
         acts.append((lname, outp[0]))
 
-    int_acts = []
+    int_acts_cnn = []
+    int_acts_tcn = []
     def dump_hook_dbg(self, inp, outp, lname):
         # DORY wants HWC tensors
-        int_acts.append((lname, outp[0]))
+        int_acts_cnn.append((lname, outp[0]))
 
     for n, m in int_net_cnn.named_modules():
-        if isinstance(m, (RequantShift, nn.MaxPool1d, nn.MaxPool2d)):
+        if isinstance(m, (RequantShift, nn.MaxPool1d, nn.MaxPool2d, ChannelwiseThreshold)):
             hook = partial(dump_hook, lname=n)
             m.register_forward_hook(hook)
     for n, m in int_net_cnn.named_modules():
@@ -310,7 +322,7 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
             hook = partial(dump_hook_dbg, lname=n)
             m.register_forward_hook(hook)
     for n, m in int_net_tcn.named_modules():
-        if isinstance(m, (RequantShift, nn.MaxPool1d, nn.MaxPool2d, nn.Linear)):
+        if isinstance(m, (RequantShift, nn.MaxPool1d, nn.MaxPool2d, nn.Linear, ChannelwiseThreshold)):
             hook = partial(dump_hook, lname=n)
             m.register_forward_hook(hook)
 
@@ -328,10 +340,6 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
 
         filepath = out_path.joinpath(f"{filename}.txt")
         np.savetxt(str(filepath), t.detach().flatten().numpy().astype(np.int32), delimiter=',', header=f"# {layer_name} (shape {list(t.shape)}),", fmt="%1d,")
-        #with open(str(filepath), 'w') as fp:
-        #    fp.write(f"# {layer_name} (shape {list(t.shape)}),\n")
-        #    for el in t.flatten():p
-        #        fp.write(f"{int(el)},\n")
 
     # save the whole input tensor
     save_beautiful_text(in_data, "input", "input", out_path_cnn)
@@ -344,12 +352,15 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
         save_beautiful_text(cnn_win_out, f"output_{idx}", f"output_{idx}", out_path_cnn)
         for jdx, (lname, t) in enumerate(acts):
             save_beautiful_text(t, lname, f"out_{idx}_layer{jdx}", out_path_cnn)
+        for jdx, (lname, t) in enumerate(int_acts_cnn):
+            save_beautiful_text(t, lname, f"out_{idx}_layer{jdx}_dbg", out_path_cnn)
         acts = []
+        int_acts_cnn = []
     cnn_dory_config = {"BNRelu_bits": 32,
                        "onnx_file": str(onnx_path_cnn.resolve()),
                        "code reserved space": code_size,
                        "n_inputs": tcn_window,
-                       "input_bits": 2,
+                       "input_bits": 1.6 if compressed else 2,
                        "input_signed": True,
                        "input_shape": list(shape_in_cnn[-3:]),
                        "output_shape": list(cnn_outs[0].shape[-2:])}
@@ -373,14 +384,25 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
     # finally, save the annotated ONNX model
     onnx.save(onnx_model_tcn, str(onnx_path_tcn))
     int_net_tcn = int_net_tcn.to(torch.float64)
-    int_acts = []
+    int_acts_tcn = []
     acts = []
+
+    def dump_hook_dbg_tcn(self, inp, outp, lname):
+        # DORY wants HWC tensors
+        int_acts_tcn.append((lname, outp[0]))
+
+    for n, m in int_net_tcn.named_modules():
+        if isinstance(m, (nn.Conv1d)):
+            hook = partial(dump_hook_dbg_tcn, lname=n)
+            m.register_forward_hook(hook)
     output = int_net_tcn(tcn_input.to(dtype=torch.float64))
 
     save_beautiful_text(tcn_input, "input", "input", out_path_tcn)
     save_beautiful_text(output, "output", "output", out_path_tcn)
     for jdx, (lname, t) in enumerate(acts):
         save_beautiful_text(t, lname, f"out_layer{jdx}", out_path_tcn)
+    for jdx, (lname, t) in enumerate(int_acts_tcn):
+        save_beautiful_text(t, lname, f"out_layer{jdx}_dbg", out_path_tcn)
 
 
     int_net_tcn = int_net_tcn.to(torch.float64)
@@ -390,7 +412,7 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
                        "onnx_file": str(onnx_path_tcn.resolve()),
                        "code reserved space": code_size,
                        "n_inputs": 1,
-                       "input_bits": 2,
+                       "input_bits": 1.6 if compressed else 2,
                        "input_signed": False,
                        "input_shape": list(tcn_input.shape[-2:]),
                        "output_shape": output.shape[-1]}
