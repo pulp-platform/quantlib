@@ -266,11 +266,8 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
         self.out_requant_nodes = []
 
     def run_pass(self, gm : fx.GraphModule):
-        #import ipdb; ipdb.set_trace()
         gm = super(DORYReplaceAddersPass, self).run_pass(gm)
         def remove_node_and_module(gm : fx.GraphModule, n : fx.Node):
-            if len(n.all_input_nodes) > 1:
-                import ipdb; ipdb.set_trace()
             assert len(n.all_input_nodes) <= 1, "DORYReplaceAddersPass: Can't remove node with multiple inputs!"
             if len(n.all_input_nodes) == 1:
                 n.replace_all_uses_with(n.all_input_nodes[0])
