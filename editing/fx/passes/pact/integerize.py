@@ -174,7 +174,7 @@ class IntegerizeGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D,export_node=export_gelu_node), f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
-def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
+def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match, ternarize : bool = False):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     conv_node = matched_nodes[0]
@@ -202,7 +202,6 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
 
     if conv.bias is not None:
         new_conv.bias.data.copy_(conv.get_bias_int(eps_in))
-
     # annotate the new conv with the number of levels
     new_conv.n_levels = conv.n_levels
 
@@ -448,7 +447,7 @@ def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_
 
     # if the last layer had an unsigned (PACTUnsignedAct) output, we need to
     # compensate for this
-    unsigned_indicator = 1 if not prev_node.meta['quant'].signed_out else 0
+    unsigned_indicator = int(not signed_out)
     if prev_node.meta['quant'].signed_out: # if the position of the node in the graph is 1, then it is the first node
         bias_hat = bias
     else:
@@ -800,7 +799,8 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
 
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False,
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, signed_in : bool = True,
+                 D : float = 2**24, enable_add_first=False,
                  requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False,
                  convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12,
                  ternarize : bool = False, word_align_channels : bool = False,
@@ -831,12 +831,12 @@ class IntegerizePACTNetPass(SequentialPass):
         # convolutions with biases into batch norms
         passes.append(MergeConvBNPass(PACT_symbolic_trace))
         # second step: annotate epsilons and n_levels
-        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
+        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, signed_in=signed_in, verbose=verbose))
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
             passes.append(FixChannelNumbersPass(word_align=word_align_channels, compressed=ternarize))
         # second step: annotate epsilons and n_levels
-        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
+        #passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
         # with epsilons annotated everywhere, we can integerize linear
         # functions (conv and FC)
         if ternarize:
