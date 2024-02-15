@@ -74,6 +74,7 @@ __all__ = [
     'PACTGELU',
     'PACTLayerNorm',
     'PACTRMSNorm',
+    'PACTIntegerRMSNorm',
     'PACTIntegerEmbedding',
     'PACTEmbedding',
     'PACTWrapModule',
@@ -2443,6 +2444,74 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
         y = self.div(nom, denom) + b
         return y
+
+class PACTIntegerRMSNorm(torch.nn.Module):
+
+    class MyRMSNorm(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, weight, D, n_levels):
+            nom = x
+            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(nom**2, len(x.shape)-1, keepdim=True))+1))
+
+            nom = nom * weight
+
+            y = (torch.div(nom,denom))
+
+            y = torch.floor(y/(D))
+            y = torch.clip(y, -n_levels//2, n_levels//2-1)
+            return y
+
+        @staticmethod
+        @parse_args('v','v','i','i')
+        def symbolic(g, x, weight, D, n_levels):
+
+            return g.op("PACTOps::iRMSNorm", x, weight, D_i=D, n_levels_i=n_levels)
+
+
+    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), D=2**24, export_node=False, **kwargs):
+        super().__init__()
+
+        self.n_levels = torch.Tensor((n_levels,)).detach()
+
+        self.eps = torch.Tensor((eps_in,)).detach()
+        self.D = torch.Tensor((D,)).detach()
+
+        # dummyOne and dummyZero are there to have a comparison value on Multi-GPU systems to check if weight are used
+
+        self.floor = torch.Tensor((False,)).detach()
+        self.clip_gradient = torch.Tensor((True,)).detach()
+        self.noisy = torch.Tensor((False,)).detach()
+
+        # Maxval is used to track statistics
+        self.maxval = torch.Tensor((maxval,)).detach()
+
+        dummyOne =  torch.Tensor((1.,)).type_as(weight)
+
+        self.export_node = export_node
+
+        if not torch.equal(weight, dummyOne):
+            clip_lo = -torch.max(torch.abs(weight))
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+
+            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+
+            self.eps_weights =  eps_weights.detach()
+
+            self.register_buffer("weight", torch.Tensor(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()))
+            self.register_buffer("totScaler", torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach())
+
+            self.weight *= self.totScaler
+
+        else:
+            self.register_buffer("totScaler",torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach())
+            self.register_buffer("weight",self.totScaler.clone().detach())
+
+    def forward(self, x):
+        if self.export_node:
+            return self.MyRMSNorm.apply(x, self.weight.type_as(x), int(self.D.item()), int(self.n_levels.item()))
+        else:
+            return self.MyRMSNorm.forward(None, x, self.weight.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
 
 class PACTRMSNorm(_PACTEps, _PACTLinOp):
 
