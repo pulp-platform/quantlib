@@ -1,9 +1,10 @@
 #
-# general.py
+# integerize.py
 #
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
+# Victor Jung <jungvi@iis.ee.ethz.ch>
 #
 # Copyright (c) 2020-2021 ETH Zurich.
 #
@@ -20,29 +21,23 @@
 # limitations under the License.
 #
 
-from typing import Union, Optional, Tuple, List, Literal
-from dataclasses import dataclass
+from typing import Union, Optional, Literal
 from functools import partial
 from copy import deepcopy
-
 import numpy as np
-
 import torch
 from torch import fx, nn
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
-
-from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass, ModularizePass
+from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold
+from .harmonize import InsertBNBetweenBiasedConvAndActsPass, RQSMergePass
+from .pact_util import PACTTracer, PACT_symbolic_trace
+from ...util import gm_modules, module_of_node, get_ordered_active_nodes
+from .. import FxPass, ReplaceSequentialPatternPass, SequentialPass, ShapePropPass, ModularizePass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
-from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBNBetweenBiasedConvAndActsPass, RQSMergePass
-from ...util import gm_modules, module_of_node, get_ordered_active_nodes
-from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold
-
-from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
 __all__ = ['IntegerizePACTConvPass',
            'IntegerizePACTLinearPass',

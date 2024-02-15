@@ -6,7 +6,9 @@
 #
 # Copyright (C) 2021, ETH Zurich and University of Bologna.
 #
-# Author: Moritz Scherer, ETH Zurich
+# Authors: 
+# - Moritz Scherer, ETH Zurich
+# - Victor Jung, ETH Zurich
 #
 # ----------------------------------------------------------------------
 # SPDX-License-Identifier: Apache-2.0
@@ -23,25 +25,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union, Optional, Tuple, List, Literal
-from dataclasses import dataclass
+from typing import Literal
 from functools import partial
-
-import numpy as np
-
 import torch
 from torch import fx, nn
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
+from .. import ReplaceSequentialPatternPass, SequentialPass
+from ...util import gm_modules
+from .pact_util import PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
-from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
-from .. import AnnotateEpsPass, extract_eps
-from .. import MergeConvBNPass, RetracePass
-from ...util import gm_modules, module_of_node
-from ...util.tracing import LeafTracer, custom_symbolic_trace
-
-from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
 def replSoftmax(gm : fx.GraphModule, match : Match, mode: str):
     if mode == "I-BERT":

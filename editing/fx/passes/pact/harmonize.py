@@ -21,32 +21,24 @@
 #
 #
 
-from typing import Optional, Union, Dict, List
+from functools import partial
+from typing import Union, Dict, List
 import operator
-
+import copy
 from copy import deepcopy
-
 import torch
 from torch import nn, fx
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.generic.generic_ops import *
-
-
 from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
 from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, InsertModuleAfterNodePass,ReplaceSequentialPatternPass, AnnotateEpsPass
-from ...util import gm_modules, get_qualified_prefix, module_of_node
-from ...util.tracing import LeafTracer, custom_symbolic_trace
-
-
-from .pact_util import PACT_symbolic_trace
 from .. import RetracePass, ModularizePass
-
-from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
-
-from functools import partial
-import copy
+from ...util import gm_modules, module_of_node
+from ...util.tracing import LeafTracer, custom_symbolic_trace
+from .pact_util import PACT_symbolic_trace
+from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACT_symbolic_trace
 
 
 class OpTree:
