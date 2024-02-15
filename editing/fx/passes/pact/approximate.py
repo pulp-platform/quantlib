@@ -74,11 +74,11 @@ class ApproximateGELUPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
-class ApproximateSiLUWithGELUPass(SequentialPass):
-    def __init__(self, custom_trace, **kwargs):
+class ApproximateSiLUPass(SequentialPass):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.SiLU())
-        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_SILU_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, lambda x,y: PACTHardswish(eps_s=0.005), f'_APPROXIMATE_SILU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_SILU_PASS')
 
 def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
