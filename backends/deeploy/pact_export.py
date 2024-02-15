@@ -20,6 +20,7 @@
 # limitations under the License.
 #
 
+from typing import Tuple
 from functools import partial
 from pathlib import Path
 import numpy as np
@@ -28,6 +29,7 @@ import torch
 from torch import nn
 
 import onnx
+import onnxruntime
 
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
@@ -140,7 +142,7 @@ def export_net(net: nn.Module,
                name: str,
                out_dir: str,
                eps_in: float,
-               in_data: torch.Tensor,
+               in_data: Tuple[torch.Tensor],
                integerize: bool = True,
                n_levels_in=256,
                D: float = 2**24,
@@ -177,7 +179,7 @@ def export_net(net: nn.Module,
         "do_constant_folding": True,
     }
     try:
-        torch.onnx._export(net_integerized.to('cpu'), (in_data, ),
+        torch.onnx._export(net_integerized.to('cpu'), in_data,
                            str(onnx_path),
                            opset_version=opset_version,
                            custom_opsets={"PACTOps": 1},
@@ -245,6 +247,10 @@ def export_net(net: nn.Module,
         enable_skip_layer_norm=False,
         enable_bias_gelu=False,
     )
+
+    if onnxruntime.__version__ >= "1.17":
+        optimization_config.enable_rotary_embeddings = False
+
     optimizer = optimize_model(str(onnx_path), optimization_options=optimization_config)
     optimizer.save_model_to_file(str(onnx_path))
 
