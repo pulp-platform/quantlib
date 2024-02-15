@@ -459,10 +459,10 @@ class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
 
 
 class HarmonizePACTNetPass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
 
-        passes.append(RetracePass(PACT_symbolic_trace))
+        passes.append(RetracePass(symbolic_trace))
         passes.append(AnnotateEpsPass(eps_in=1.0, n_levels_in=256, signed_in=True, prop_n_levels=False, prop_eps=False))
         passes.append(AddTreeReplacementPass(**kwargs))
         passes.append(MulReplacementPass())
@@ -512,10 +512,10 @@ def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
 
 
 class LayerNormDisassemblePass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTLayerNorm(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
         super().__init__(*passes, name_prefix='_LAYERNORM_DISASSEMBLE_PASS')
 
 def rqs_merge_fun(gm : fx.GraphModule, match : Match):
@@ -550,10 +550,10 @@ def rqs_merge_fun(gm : fx.GraphModule, match : Match):
     return RequantShift(newMul, newAdd, (rqs_2.n_levels_out)//(2**mixed), signed = signed, D=newD, cmsis_requant=rqs_1.cmsis_requant, requant_node=rqs_1.requant_node)
 
 class RQSMergePass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(RequantShift(torch.Tensor((1.,)), torch.Tensor((1.,)),1), RequantShift(torch.Tensor((1.,)),torch.Tensor((1.,)),1))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, rqs_merge_fun, f'_RQS_MERGE_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, rqs_merge_fun, f'_RQS_MERGE_PASS'))
         super().__init__(*passes, name_prefix='_RQS_MERGE_PASS')
 
 def apply_wrap_module_fun(node, _pass, _tracer):
@@ -569,9 +569,9 @@ def apply_wrap_module_fun(node, _pass, _tracer):
     return returnNode, node.args, node.kwargs
 
 class ApplyPassToWrapModule(ModularizePass):
-    def __init__(self, _pass, name=''):
+    def __init__(self, _pass, name='', symbolic_nodes: set = PACT_OPS_INCLUSIVE):
         pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
-        tracer = LeafTracer(PACT_OPS_INCLUSIVE)
+        tracer = LeafTracer(symbolic_nodes)
         trace = partial(custom_symbolic_trace, tracer=tracer)
 
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(apply_wrap_module_fun, _pass=_pass, _tracer=tracer), name=f"APPLY_TO_WRAP_PASS_{name}")
