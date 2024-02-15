@@ -91,6 +91,7 @@ __all__ = [
     'PACTIntegerMean',
     'PACTDiv',
     'PACTIntegerDiv',
+    'PACTTrueIntegerDiv',
     'PACTExp',
     'PACTIntegerExp',
     'ChannelwiseThreshold'
@@ -3139,6 +3140,44 @@ class PACTIntegerDiv(nn.Module):
             return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
         else:
             return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+
+class PACTTrueIntegerDiv(nn.Module):
+
+    class MyTrueIntegerDiv(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, y, Delta, eps, eta):
+            return torch.floor((x * Delta * eta / (y*eta + eps)) + 0.5)
+
+        @staticmethod
+        @parse_args('v','i','i', 'i', 'i')
+        def symbolic(g, x, y, Delta, eps, eta):
+            return g.op("PACTOps::TrueIntegerDiv", x, y_i = y, Delta_i = Delta, eps_i=eps, eta_i = eta)
+
+    def __init__(self, Delta, integer_node=True, eps=1., eta=1.):
+        super().__init__()
+        self.register_buffer('Delta',torch.Tensor((int(Delta),)))
+        self.register_buffer('eps',torch.Tensor((int(eps),)))
+        self.register_buffer('eta', torch.Tensor((int(eta),)))
+        self.integer_node = integer_node
+
+    def forward(self,x,y):
+        # SCHEREMO: Shortcut degenerate cases (y == 1, eps == 0)
+        # y = torch.Tensor((y,))
+        # if torch.prod((y == torch.ones_like(y)) * (self.eps == torch.zeros_like(self.eps))) == 1.:
+        #     if self.Delta == 1:
+        #         return x
+        #     return x * self.Delta
+
+        if isinstance(y, torch.Tensor):
+            raise Exception("TrueIntegerDiv trying to divide by tensor!")
+
+        if self.integer_node:
+
+            return self.MyTrueIntegerDiv.apply(x,int(y),int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
+        else:
+            return self.MyTrueIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+
 
 class PACTConstWrap(nn.Module):
     def __init__(self, eps=1.):
