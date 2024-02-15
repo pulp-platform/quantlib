@@ -91,7 +91,6 @@ class OpTree:
                 all_args_unpacked.append(arg)
         return tuple(all_args_unpacked)
 
-
 class OpTreeReplacementPass(FxPass):
 
     def __init__(self, node_specs : list, replacement_fn : callable, name : str = '', always_terminate : bool = False):
@@ -275,7 +274,6 @@ class MulReplacementPass(OpTreeReplacementPass):
         # multiply takes no args
         return Multiply()
 
-
 class ConcatTreeReplacementPass(SequentialPass):
     cat_node_specs = [('call_function', (torch.cat,))]
     stack_node_specs = [('call_function', (torch.stack,))]
@@ -417,7 +415,6 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
             module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
             return PACTUnsignedAct(**module_kwargs)
 
-
 class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
     before_modules = (PACTConv1d,
                       PACTConv2d)
@@ -447,8 +444,6 @@ class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
                                                                    modules_after=self.after_modules,
                                                                    make_module_fn=self.make_dummy_bn,
                                                                    name="BIASED_CONV_AND_ACT")
-
-
 
 class HarmonizePACTNetPass(SequentialPass):
     def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
@@ -501,7 +496,6 @@ def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
     activation.eval()
 
     return torch.nn.Sequential(*[new_layernorm, batchnorm, activation])
-
 
 class LayerNormDisassemblePass(SequentialPass):
     def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
@@ -791,7 +785,6 @@ def unwrap_clca_fun(wrap_module):
             dim, heads, dim_head, out_dim,
             Delta, eps, eta, act_type, n_levels), {}
 
-
 def unwrap_mhsa_fun(wrap_module):
     def reqShiftParams(module):
         return (module.mul, module.add, module.div)
@@ -866,3 +859,69 @@ class UnwrapModulePass(ModularizePass):
         tracer = LeafTracer(PACT_OPS)
         trace = partial(custom_symbolic_trace, tracer=tracer)
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(unwrap_module_fun, wrapClass = ReplacementClass, modules=modules, unwrapFunction= ReplacementFunction), name=f"UNWRAP_PASS_{name}")
+
+def conv1d_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
+    modules = gm_modules(gm)
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    conv = matched_modules[0]
+    assert isinstance(conv, nn.Conv1d), f"conv1d_replacement_fun got bad match - expected nn.Conv1d, got {type(conv)}"
+    return PACTConv1d.from_conv1d(conv, **kwargs)
+
+def conv2d_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
+    modules = gm_modules(gm)
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    conv = matched_modules[0]
+    assert isinstance(conv, nn.Conv2d), f"conv2d_replacement_fun got bad match - expected nn.Conv2d, got {type(conv)}"
+    return PACTConv2d.from_conv2d(conv, **kwargs)
+
+class PactifyConvPass(SequentialPass):
+    def __init__(self, pactConvConfig: dict, symbolic_trace: callable = PACT_symbolic_trace):
+        passes = []
+        patternList = [nn.Sequential(nn.Conv1d(3, 6, 5)),  nn.Sequential(nn.Conv2d(3, 6, 5))]
+        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.Conv1d(3, 6, 5)),
+                                                            symbolic_trace,
+                                                            partial(conv1d_replacement_fun, **pactConvConfig),
+                                                            f'PACTIFIED_CONV1D'))
+        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.Conv2d(3, 6, 5)),
+                                                            symbolic_trace,
+                                                            partial(conv2d_replacement_fun, **pactConvConfig),
+                                                            f'PACTIFIED_CONV2D'))
+        super().__init__(*passes, name_prefix='')
+
+def linear_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
+    modules = gm_modules(gm)
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    linear = matched_modules[0]
+    assert isinstance(linear, nn.Linear), f"linear_replacement_fun got bad match - expected nn.Linear, got {type(linear)}"
+    return PACTLinear.from_linear(linear, **kwargs)
+
+class PactifyLinearPass(SequentialPass):
+    def __init__(self, pactLinearConfig: dict, symbolic_trace: callable = PACT_symbolic_trace):
+        passes = []
+        pattern = nn.Sequential(nn.Linear(42, 42))
+        passes.append(ReplaceSequentialPatternPass(pattern,
+                                                            symbolic_trace,
+                                                            partial(linear_replacement_fun, **pactLinearConfig),
+                                                            f'PACTIFIED_LINEAR'))
+        super().__init__(*passes, name_prefix='')
+
+class PactifyReluPass(SequentialPass):
+    def __init__(self, pactActConfig: dict, symbolic_trace: callable = PACT_symbolic_trace):
+        passes = []
+        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU()),
+                                                            symbolic_trace,
+                                                            lambda x,y : PACTUnsignedAct(**pactActConfig),
+                                                            f'PACTIFIED_RELU'))
+        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU6()),
+                                                            symbolic_trace,
+                                                            lambda x,y : PACTUnsignedAct(**pactActConfig),
+                                                            f'PACTIFIED_RELU6'))        
+        super().__init__(*passes, name_prefix='')
+
+class PactifyPass(SequentialPass):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, convArgs: dict = {}, actArgs: dict = {}, linearArgs: dict = {}):
+        passes = []
+        passes.append(PactifyConvPass(convArgs, symbolic_trace=PACT_symbolic_trace))
+        passes.append(PactifyReluPass(actArgs, symbolic_trace=PACT_symbolic_trace))
+        passes.append(PactifyLinearPass(linearArgs, symbolic_trace=PACT_symbolic_trace))
+        super().__init__(*passes, name_prefix='')
