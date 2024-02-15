@@ -1407,7 +1407,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 class PACTHardswish(nn.Module):
     def __init__(self, eps_s : float):
         super(PACTHardswish, self).__init__()
-        self.eps_s = eps_s
+        self.eps_s = torch.Tensor([eps_s])
 
     def forward(self, x):
         inp = x
@@ -1435,8 +1435,27 @@ class PACTHardswish(nn.Module):
 
 
 class PACTIntegerHardswish(nn.Module):
-    def __init__(self, eps_in : float, eps_s : float):
+
+    class MyHardswish(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, three, six, one_over_six):
+            z = 0
+            inp = x
+            x = x + three
+            x = torch.clip(x, z, six)
+            x = x * one_over_six
+            return inp * x
+
+        @staticmethod
+        @parse_args('v', 'i', 'i', 'i')
+        def symbolic(g, x, three, six, one_over_six):
+            return g.op("PACTOps::iHardswish", x, three_i = three, six_i = six, one_over_six_i = one_over_six)
+
+    def __init__(self, eps_in : float, eps_s : float, export_node: bool = False):
         super(PACTIntegerHardswish, self).__init__()
+
+        self.export_node = export_node
         self.eps_in = eps_in
         self.eps_s = eps_s
         three = torch.tensor(3.)
@@ -1450,14 +1469,10 @@ class PACTIntegerHardswish(nn.Module):
         self.register_buffer("one_over_six", one_over_six_q)
 
     def forward(self, x):
-        z = torch.zeros.type_as(x)
-        inp = x
-        x = x + self.three
-        x = torch.clip(x, z, self.six)
-        x = x * self.one_over_six
-        return inp * x
-
-
+        if self.export_node:
+            return self.MyHardswish.apply(x, int(self.three.item()), int(self.six.item()), int(self.one_over_six.item()))
+        else:
+            return self.MyHardswish.forward(x, self.three, self.six, self.one_over_six)
 
 
 class PACTHardsigmoid(nn.Module):
