@@ -288,20 +288,21 @@ class ConcatTreeReplacementPass(SequentialPass):
     cat_node_specs = [('call_function', (torch.cat,))]
     stack_node_specs = [('call_function', (torch.stack,))]
 
-    def __init__(self, n_levels : int = 256, init_clip : str = 'max', nb_std : float = 3.):
-        self.n_levels = n_levels
-        self.init_clip = init_clip
-        self.nb_std = nb_std
+    def __init__(self, **kwargs):
+
+        default_kwargs = {"n_levels": 256, "init_clip": "max", "nb_std": 3., "learn_clip": True, "act_kind": "identity"}
+        default_kwargs.update(kwargs)
+        self.kwargs = default_kwargs
         passes = []
         passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT", always_terminate=True))
         passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
         super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
     def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
+        return PACTIntegerConcat(num_args=len(tree.args), **self.kwargs, stack_flag=False, **(tree.kwargs))
 
     def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
+        return PACTIntegerConcat(num_args=len(tree.args), **self.kwargs, stack_flag=True, **(tree.kwargs))
 
 class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
     before_modules = (nn.Conv1d,
