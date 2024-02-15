@@ -584,11 +584,15 @@ class PACTIntegerConcat(torch.nn.Module):
         self.acts = torch.nn.ModuleList([])
         for i in range(num_args):
             self.acts.append(act_cls(**kwargs))
+        self.act_out = act_cls(**kwargs)
 
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
         self.n_levels = self.acts[0].n_levels
-        self.force_out_eps = force_out_eps
+        if "force_out_eps" in kwargs.keys():
+            self.force_out_eps = kwargs['force_out_eps']
+        else:
+            self.force_out_eps = True
 
     def reassign_epsilons(self):
         if not self.force_out_eps:
@@ -601,31 +605,21 @@ class PACTIntegerConcat(torch.nn.Module):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
-                    #print(diff)
-                    eps = diff/(self.n_levels-1)
+                    eps = diff/(self.n_levels_in-1)
 
-            # SCHEREMO: This is the part that I might have to think about a bit more...
-            for i in self.acts:
-                # Closer to unsigned than to signed -- Is this reasonable?
-                #if abs(i.clip_lo) < abs(i.clip_hi)/2:
-                # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
-                if abs(i.clip_lo) < i.get_eps():
-                    i.symm = False
-                    i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
-                    i.clip_lo.data.copy_(torch.Tensor((0.,)))
-                    # Closer to signed than unsigned
-                else:
-                    i.symm = True
-                    i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
-                    i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
-#                     i.clip_lo.data.copy_(lower_bound)
-#                     i.clip_hi.data.copy_(upper_bound)
         else:
             clip_hi = self.act_out.clip_hi.data.detach().clone()
             clip_lo = self.act_out.clip_lo.data.detach().clone()
-            for i in self.acts:
-                i.clip_hi.data.copy_(clip_hi)
-                i.clip_lo.data.copy_(clip_lo)
+            eps = (clip_hi - clip_lo) / (self.act_out.n_levels-1)
+
+        for i in self.acts:
+            if isinstance(i, PACTUnsignedAct):
+                i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
+            else:
+                i.symm = True
+                i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
+                i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
+
 
     def forward(self, *x):
         if self.stack_flag:
@@ -636,7 +630,8 @@ class PACTIntegerConcat(torch.nn.Module):
         for idx, i in enumerate(z):
             z_act.append(self.acts[idx](i))
         y = torch.cat(z_act, dim=self.dim)
-        return y
+        out = self.act_out(y)
+        return out
 
 class PACTIntegerAdd(torch.nn.Module):
     r"""
