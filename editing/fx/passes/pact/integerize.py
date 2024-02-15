@@ -166,6 +166,34 @@ class IntegerizeLayerNormPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D, export_node=export_layernorm_node), f'_INTEGER_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
 
+def integerize_rmsnorm_fun(gm : fx.GraphModule, match : Match, affine = True, D=2**12, export_node=False):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    rmsnorm_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    rmsnorm = matched_modules[0]
+    requant = matched_modules[1]
+    eps_in = extract_eps(rmsnorm_node.meta['quant'].eps_in)
+    assert isinstance(rmsnorm, PACTRMSNorm), f"integerize_rmsnorm_fun got bad match - expected PACTRMSNorm, got {type(rmsnorm)}"
+
+    maxval = max(requant.max, -requant.min)
+
+    if affine:
+        new_weight = rmsnorm.weight
+        new_rmsnorm = PACTIntegerRMSNorm(n_levels=requant.n_levels, eps_in=eps_in, maxval=maxval, weight=new_weight, D=D, export_node=export_node)
+    else:
+        new_weight = torch.ones(rmsnorm.normalized_shape)
+        new_rmsnorm = PACTIntegerRMSNorm(n_levels=requant.n_levels, eps_in=eps_in, maxval=maxval, weight = new_weight, D=D, export_node=export_node)
+
+    return new_rmsnorm
+
+class IntegerizeRMSNormPass(SequentialPass):
+    def __init__(self, symbolic_trace: callable, affine = True, D=2**12, export_rmsnorm_node = False, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTRMSNorm(1), PACTAsymmetricAct(256, 'max', True, 'relu'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_rmsnorm_fun, affine=affine, D=D, export_node=export_rmsnorm_node), f'_INTEGER_RMSNORM_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_RMSNORM_PASS')
+
 class IntegerizeSoftmaxPass(SequentialPass):
     def __init__(self, D=2**12, export_softmax_node = False , **kwargs):
         passes = []
