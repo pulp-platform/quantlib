@@ -136,6 +136,7 @@ _EPS_CONVERSIONS = {
     PACTITAMax: eps_conversion_pact_softmax,
     PACTITAPartialMax: eps_conversion_pact_softmax,
     PACTLayerNorm : eps_conversion_pact_layernorm,
+    PACTRMSNorm : eps_conversion_pact_layernorm,
     PACTMean: eps_conversion_pact_mean,
     PACTSoftmax : eps_conversion_pact_softmax,
     PACTUnsignedAct : eps_conversion_pact_acts,
@@ -143,6 +144,7 @@ _EPS_CONVERSIONS = {
     PACTLinear : eps_conversion_pact_linears,
 
     PACTIntegerAdd : eps_conversion_pact_integeradd,
+    PACTIntegerConcat : eps_conversion_pact_integeradd,
     PACTIntegerGELU : eps_conversion_pact_gelu,
     PACTIntegerITAMax: eps_conversion_pact_softmax,
     PACTIntegerITAPartialMax: eps_conversion_pact_softmax,
@@ -201,12 +203,13 @@ _N_LEVELS_OUT_PROP = {
     PACTITAMax: n_levels_out_pact_acts,
     PACTITAPartialMax: n_levels_out_pact_acts,
     PACTLayerNorm : n_levels_out_pact_acts,
+    PACTRMSNorm : n_levels_out_pact_acts,
     PACTLinear : n_levels_out_pact_linears,
     PACTMean: n_levels_out_first_in,
     PACTSoftmax : n_levels_out_pact_acts,
     PACTUnsignedAct : n_levels_out_pact_acts,
     PACTWrapModule : n_levels_out_pact_acts,
-    
+
     PACTIntegerGELU : n_levels_out_pact_acts,
     PACTIntegerITAMax: n_levels_out_pact_acts,
     PACTIntegerITAPartialMax: n_levels_out_pact_acts,

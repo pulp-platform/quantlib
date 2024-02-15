@@ -33,7 +33,7 @@ import onnxruntime
 
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule
+from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule, PACTIntegerHardswish, PACTTrueIntegerDiv, PACTIntegerRMSNorm
 
 # Import ONNX runtime
 from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
@@ -67,6 +67,9 @@ NODES_MAPPING = {
     "iLayerNorm": {
         "op_type": "LayerNormalization",
     },
+    "iRMSNorm": {
+        "op_type": "LayerNormalization",
+    },
     "RequantShift": {
         "op_type": "LayerNormalization",
     },
@@ -85,6 +88,12 @@ NODES_MAPPING = {
     },
     "IntegerDiv": {
         "op_type": "Div",
+    },
+    "TrueIntegerDiv": {
+        "op_type": "Relu",
+    },
+    "iHardswish": {
+        "op_type": "Relu",
     },
     # Copy original attribute to replaced node
     "IntegerMean": {
