@@ -3123,9 +3123,9 @@ class PACTIntegerDiv(nn.Module):
 
     def __init__(self, Delta, integer_node=True, eps=1., eta=1.):
         super().__init__()
-        self.register_buffer('Delta',torch.Tensor((Delta,)))
-        self.register_buffer('eps',torch.Tensor((eps,)))
-        self.register_buffer('eta', torch.Tensor((eta,)))
+        self.register_buffer('Delta',torch.Tensor((int(Delta),)))
+        self.register_buffer('eps',torch.Tensor((int(eps),)))
+        self.register_buffer('eta', torch.Tensor((int(eta),)))
         self.integer_node = integer_node
 
     def forward(self,x,y):
@@ -3135,6 +3135,9 @@ class PACTIntegerDiv(nn.Module):
         #     if self.Delta == 1:
         #         return x
         #     return x * self.Delta
+
+        if not isinstance(y, torch.Tensor):
+            raise Exception("IntegerDiv trying to divide by const!")
 
         if self.integer_node:
             return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
