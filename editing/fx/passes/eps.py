@@ -389,6 +389,14 @@ class AnnotateEpsPass(FxPass):
                             print("[AnnotateEpsPass] Mismatching input epsilons in node with no eps propagation function! Eps propagation will likely be wrong!")
                             print(f"                    -> Node: {node.name}, Key: {k}, eps_in: {all_eps}")
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
+
+                        if node.op == "call_function" and node.target == torch.cat:
+                            _all_eps = [inp.meta['quant'].eps_in for inp in node.args[0]]
+
+                            all_eps = []
+                            for i in _all_eps:
+                                all_eps += i[0]
+
                         eps_out = all_eps[0]
                 else:
                     eps_in = None
@@ -406,6 +414,10 @@ class AnnotateEpsPass(FxPass):
                             print("[AnnotateEpsPass] Mismatching input n_levels in node with no n_levels_out propagation function! n_levels propagation will likely be wrong!")
                             print(f"                    -> Node: {node.name}, Key: {k}, n_levels_in: {node_in_levels}")
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity n_level propagation on node with op {node.op}, target {node.target}!")
+
+                        if node.op == "call_function" and node.target == torch.cat:
+                            node_in_levels = [inp.meta['quant'].n_levels_in for inp in node.args[0]]
+
                         node_out_levels = node_in_levels[0]
                 else:
                     node_in_levels = None
@@ -424,6 +436,10 @@ class AnnotateEpsPass(FxPass):
                             print("[AnnotateEpsPass] Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!")
                             print(f"                    -> Node: {node.name}, Key: : {k}, signed_in: {node_in_signed}")
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity signed propagation on node with op {node.op}, target {node.target}!")
+
+                        if node.op == "call_function" and node.target == torch.cat:
+                            node_in_signed = [inp.meta['quant'].signed_out for inp in node.args[0]]
+
                         node_out_signed = node_in_signed[0]
                 else:
                     node_in_signed = None
