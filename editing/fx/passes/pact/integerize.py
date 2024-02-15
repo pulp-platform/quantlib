@@ -90,6 +90,19 @@ def integerize_gelu_fun(gm : fx.GraphModule, match : Match, D=2**14, export_node
 
     return new_gelu
 
+def integerize_hardswish_fun(gm : fx.GraphModule, match : Match, D=2**14, export_node = False):
+    modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    lin_node = matched_nodes[0]
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    module = matched_modules[0]
+    eps_in = extract_eps(lin_node.meta['quant'].eps_in)
+    assert isinstance(module, PACTHardswish), f"integerize_hardswish_fun got bad match - expected PACTHardswish, got {type(module)}"
+
+    new_gelu = PACTIntegerHardswish(eps_in=eps_in, eps_s=module.eps_s, export_node=export_node)
+
+    return new_gelu
+
 class IntegerizeConstWrapPass(ModularizePass):
     @staticmethod
     def constwrap_replacement_fn(node):
@@ -173,6 +186,13 @@ class IntegerizeGELUPass(SequentialPass):
         pattern = nn.Sequential(PACTGELU())
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D,export_node=export_gelu_node), f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
+
+class IntegerizeHardswishPass(SequentialPass):
+    def __init__(self, export_hardswish_node=False, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
+        passes = []
+        pattern = nn.Sequential(PACTHardswish(eps_s=1.0))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_hardswish_fun, export_node=export_hardswish_node), f'_INTEGER_SILU_PASS'))
+        super().__init__(*passes, name_prefix='_INTEGER_HARDSWISH_PASS')
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
