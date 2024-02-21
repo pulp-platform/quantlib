@@ -3139,12 +3139,6 @@ class PACTIntegerDiv(nn.Module):
         self.integer_node = integer_node
 
     def forward(self,x,y):
-        # SCHEREMO: Shortcut degenerate cases (y == 1, eps == 0)
-        # y = torch.Tensor((y,))
-        # if torch.prod((y == torch.ones_like(y)) * (self.eps == torch.zeros_like(self.eps))) == 1.:
-        #     if self.Delta == 1:
-        #         return x
-        #     return x * self.Delta
 
         if not isinstance(y, torch.Tensor):
             raise Exception("IntegerDiv trying to divide by const!")
