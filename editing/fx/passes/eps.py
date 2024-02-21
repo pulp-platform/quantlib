@@ -21,7 +21,7 @@
 #
 
 import copy
-from typing import Union, Optional
+from typing import Union, Optional, List
 from dataclasses import dataclass
 
 from collections.abc import Iterable
@@ -336,6 +336,18 @@ class AnnotateEpsPass(FxPass):
         self.prop_n_levels = prop_n_levels
         self.prop_sign = prop_sign
 
+    @staticmethod
+    def _get_parents_eps_in(node: fx.node.Node) -> List:
+        return [i.meta['quant'].eps_in[0][0] for i in node.args[0]]
+    
+    @staticmethod
+    def _get_parents_n_levels_in(node: fx.node.Node) -> List:
+        return [i.meta['quant'].n_levels_in for i in node.args[0]]
+    
+    @staticmethod
+    def _get_parents_signed_out(node: fx.node.Node) -> List:
+        return [inp.meta['quant'].signed_out for inp in node.args[0]]
+
     def run_pass(self, gm : fx.GraphModule):
         modules = gm_modules(gm)
         placeHolderIdx = 0
@@ -394,11 +406,7 @@ class AnnotateEpsPass(FxPass):
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
 
                         if node.op == "call_function" and node.target == torch.cat:
-                            _all_eps = [inp.meta['quant'].eps_in for inp in node.args[0]]
-
-                            all_eps = []
-                            for i in _all_eps:
-                                all_eps += i[0]
+                            all_eps = self._get_parents_eps_in(node)
 
                         eps_out = all_eps[0]
                 else:
@@ -419,7 +427,7 @@ class AnnotateEpsPass(FxPass):
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity n_level propagation on node with op {node.op}, target {node.target}!")
 
                         if node.op == "call_function" and node.target == torch.cat:
-                            node_in_levels = [inp.meta['quant'].n_levels_in for inp in node.args[0]]
+                            node_in_levels = self._get_parents_n_levels_in(node)
 
                         node_out_levels = node_in_levels[0]
                 else:
@@ -441,7 +449,7 @@ class AnnotateEpsPass(FxPass):
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity signed propagation on node with op {node.op}, target {node.target}!")
 
                         if node.op == "call_function" and node.target == torch.cat:
-                            node_in_signed = [inp.meta['quant'].signed_out for inp in node.args[0]]
+                            node_in_signed = self._get_parents_signed_out(node)
 
                         node_out_signed = node_in_signed[0]
                 else:
