@@ -20,6 +20,7 @@
 # limitations under the License.
 #
 
+from packaging.version import Version
 from typing import Tuple, Union
 from functools import partial
 from pathlib import Path
@@ -257,7 +258,7 @@ def export_net(net: nn.Module,
         enable_bias_gelu=False,
     )
 
-    if onnxruntime.__version__ >= "1.17":
+    if Version(onnxruntime.__version__) >= Version("1.17"):
         optimization_config.enable_rotary_embeddings = False
 
     optimizer = optimize_model(str(onnx_path), optimization_options=optimization_config)
