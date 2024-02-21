@@ -25,7 +25,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Literal
+from typing import Literal, Callable, Union
 from functools import partial
 import torch
 from torch import fx, nn
@@ -51,7 +51,7 @@ class ApproximateSoftmaxPass(SequentialPass):
 
     modes = ["I-BERT", "ITA", 'ITA-Partial']
 
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
         assert mode in self.modes, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
@@ -59,14 +59,14 @@ class ApproximateSoftmaxPass(SequentialPass):
         super().__init__(*passes, name_prefix='_APPROXIMATE_SOFTMAX_PASS')
 
 class ApproximateGELUPass(SequentialPass):
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.GELU())
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
 class ApproximateSiLUPass(SequentialPass):
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.SiLU())
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, lambda x,y: PACTHardswish(eps_s=0.005), f'_APPROXIMATE_SILU_PASS'))
@@ -86,7 +86,7 @@ def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwarg
     return new_layernorm
 
 class CanonicalizeLayerNormPass(SequentialPass):
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, *args, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, *args, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.LayerNorm(1))
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(layernorm_replacement_fun, *args, **kwargs), f'_CANONICALIZE_LAYERNORM_PASS'))

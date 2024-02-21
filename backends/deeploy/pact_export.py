@@ -20,7 +20,7 @@
 # limitations under the License.
 #
 
-from typing import Tuple
+from typing import Tuple, Union
 from functools import partial
 from pathlib import Path
 import numpy as np
@@ -151,7 +151,7 @@ def export_net(net: nn.Module,
                name: str,
                out_dir: str,
                eps_in: float,
-               in_data: Tuple[torch.Tensor],
+               in_data: Union[torch.Tensor, Tuple[torch.Tensor, ...]],
                integerize: bool = True,
                n_levels_in=256,
                D: float = 2**24,

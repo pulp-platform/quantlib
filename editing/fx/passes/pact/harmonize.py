@@ -22,12 +22,13 @@
 #
 
 from functools import partial
-from typing import Union, Dict, List
+from typing import Union, Dict, List, Set, Callable
 import operator
 import copy
 from copy import deepcopy
 import torch
 from torch import nn, fx
+from torch.fx.graph_module import GraphModule
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
@@ -446,7 +447,7 @@ class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
                                                                    name="BIASED_CONV_AND_ACT")
 
 class HarmonizePACTNetPass(SequentialPass):
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
         passes = []
 
         passes.append(RetracePass(symbolic_trace))
@@ -498,7 +499,7 @@ def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
     return torch.nn.Sequential(*[new_layernorm, batchnorm, activation])
 
 class LayerNormDisassemblePass(SequentialPass):
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTLayerNorm(256))
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
@@ -536,7 +537,7 @@ def rqs_merge_fun(gm : fx.GraphModule, match : Match):
     return RequantShift(newMul, newAdd, (rqs_2.n_levels_out)//(2**mixed), signed = signed, D=newD, cmsis_requant=rqs_1.cmsis_requant, requant_node=rqs_1.requant_node)
 
 class RQSMergePass(SequentialPass):
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(RequantShift(torch.Tensor((1.,)), torch.Tensor((1.,)),1), RequantShift(torch.Tensor((1.,)),torch.Tensor((1.,)),1))
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, rqs_merge_fun, f'_RQS_MERGE_PASS'))
@@ -555,7 +556,7 @@ def apply_wrap_module_fun(node, _pass, _tracer):
     return returnNode, node.args, node.kwargs
 
 class ApplyPassToWrapModule(ModularizePass):
-    def __init__(self, _pass, name='', symbolic_nodes: set = PACT_OPS_INCLUSIVE):
+    def __init__(self, _pass, name='', symbolic_nodes: Set[nn.Module] = PACT_OPS_INCLUSIVE):
         pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
         tracer = LeafTracer(symbolic_nodes)
         trace = partial(custom_symbolic_trace, tracer=tracer)
@@ -875,7 +876,7 @@ def conv2d_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
     return PACTConv2d.from_conv2d(conv, **kwargs)
 
 class PactifyConvPass(SequentialPass):
-    def __init__(self, pactConvConfig: dict, symbolic_trace: callable = PACT_symbolic_trace):
+    def __init__(self, pactConvConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
         patternList = [nn.Sequential(nn.Conv1d(3, 6, 5)),  nn.Sequential(nn.Conv2d(3, 6, 5))]
         passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.Conv1d(3, 6, 5)),
@@ -896,7 +897,7 @@ def linear_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
     return PACTLinear.from_linear(linear, **kwargs)
 
 class PactifyLinearPass(SequentialPass):
-    def __init__(self, pactLinearConfig: dict, symbolic_trace: callable = PACT_symbolic_trace):
+    def __init__(self, pactLinearConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
         pattern = nn.Sequential(nn.Linear(42, 42))
         passes.append(ReplaceSequentialPatternPass(pattern,
@@ -906,7 +907,7 @@ class PactifyLinearPass(SequentialPass):
         super().__init__(*passes, name_prefix='')
 
 class PactifyReluPass(SequentialPass):
-    def __init__(self, pactActConfig: dict, symbolic_trace: callable = PACT_symbolic_trace):
+    def __init__(self, pactActConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
         passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU()),
                                                             symbolic_trace,
@@ -919,7 +920,7 @@ class PactifyReluPass(SequentialPass):
         super().__init__(*passes, name_prefix='')
 
 class PactifyPass(SequentialPass):
-    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, convArgs: dict = {}, actArgs: dict = {}, linearArgs: dict = {}):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, convArgs: dict = {}, actArgs: dict = {}, linearArgs: dict = {}):
         passes = []
         passes.append(PactifyConvPass(convArgs, symbolic_trace=PACT_symbolic_trace))
         passes.append(PactifyReluPass(actArgs, symbolic_trace=PACT_symbolic_trace))
