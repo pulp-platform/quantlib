@@ -875,7 +875,7 @@ def conv2d_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
     assert isinstance(conv, nn.Conv2d), f"conv2d_replacement_fun got bad match - expected nn.Conv2d, got {type(conv)}"
     return PACTConv2d.from_conv2d(conv, **kwargs)
 
-class PactifyConvPass(SequentialPass):
+class HomogeneousFakeQuantConvPass(SequentialPass):
     def __init__(self, pactConvConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
         patternList = [nn.Sequential(nn.Conv1d(3, 6, 5)),  nn.Sequential(nn.Conv2d(3, 6, 5))]
@@ -896,7 +896,7 @@ def linear_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
     assert isinstance(linear, nn.Linear), f"linear_replacement_fun got bad match - expected nn.Linear, got {type(linear)}"
     return PACTLinear.from_linear(linear, **kwargs)
 
-class PactifyLinearPass(SequentialPass):
+class HomogeneousFakeQuantLinearPass(SequentialPass):
     def __init__(self, pactLinearConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
         pattern = nn.Sequential(nn.Linear(42, 42))
@@ -906,7 +906,7 @@ class PactifyLinearPass(SequentialPass):
                                                             f'PACTIFIED_LINEAR'))
         super().__init__(*passes, name_prefix='')
 
-class PactifyReluPass(SequentialPass):
+class HomogeneousFakeQuantReluPass(SequentialPass):
     def __init__(self, pactActConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
         passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU()),
@@ -919,10 +919,10 @@ class PactifyReluPass(SequentialPass):
                                                             f'PACTIFIED_RELU6'))        
         super().__init__(*passes, name_prefix='')
 
-class PactifyPass(SequentialPass):
+class HomogeneousFakeQuantPass(SequentialPass):
     def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, convArgs: dict = {}, actArgs: dict = {}, linearArgs: dict = {}):
         passes = []
-        passes.append(PactifyConvPass(convArgs, symbolic_trace=PACT_symbolic_trace))
-        passes.append(PactifyReluPass(actArgs, symbolic_trace=PACT_symbolic_trace))
-        passes.append(PactifyLinearPass(linearArgs, symbolic_trace=PACT_symbolic_trace))
+        passes.append(HomogeneousFakeQuantConvPass(convArgs, symbolic_trace=symbolic_trace))
+        passes.append(HomogeneousFakeQuantReluPass(actArgs, symbolic_trace=symbolic_trace))
+        passes.append(HomogeneousFakeQuantLinearPass(linearArgs, symbolic_trace=symbolic_trace))
         super().__init__(*passes, name_prefix='')
