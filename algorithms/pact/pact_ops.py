@@ -74,6 +74,7 @@ __all__ = [
     'PACTGELU',
     'PACTLayerNorm',
     'PACTRMSNorm',
+    'PACTIntegerRMSNorm',
     'PACTIntegerEmbedding',
     'PACTEmbedding',
     'PACTWrapModule',
@@ -90,6 +91,7 @@ __all__ = [
     'PACTIntegerMean',
     'PACTDiv',
     'PACTIntegerDiv',
+    'PACTTrueIntegerDiv',
     'PACTExp',
     'PACTIntegerExp',
     'ChannelwiseThreshold'
@@ -582,11 +584,15 @@ class PACTIntegerConcat(torch.nn.Module):
         self.acts = torch.nn.ModuleList([])
         for i in range(num_args):
             self.acts.append(act_cls(**kwargs))
+        self.act_out = act_cls(**kwargs)
 
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
         self.n_levels = self.acts[0].n_levels
-        self.force_out_eps = force_out_eps
+        if "force_out_eps" in kwargs.keys():
+            self.force_out_eps = kwargs['force_out_eps']
+        else:
+            self.force_out_eps = True
 
     def reassign_epsilons(self):
         if not self.force_out_eps:
@@ -599,31 +605,21 @@ class PACTIntegerConcat(torch.nn.Module):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
-                    #print(diff)
-                    eps = diff/(self.n_levels-1)
+                    eps = diff/(self.n_levels_in-1)
 
-            # SCHEREMO: This is the part that I might have to think about a bit more...
-            for i in self.acts:
-                # Closer to unsigned than to signed -- Is this reasonable?
-                #if abs(i.clip_lo) < abs(i.clip_hi)/2:
-                # Make it unsigned if it is only really barely signed... 5 is really arbitrary, though
-                if abs(i.clip_lo) < i.get_eps():
-                    i.symm = False
-                    i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
-                    i.clip_lo.data.copy_(torch.Tensor((0.,)))
-                    # Closer to signed than unsigned
-                else:
-                    i.symm = True
-                    i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
-                    i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
-#                     i.clip_lo.data.copy_(lower_bound)
-#                     i.clip_hi.data.copy_(upper_bound)
         else:
             clip_hi = self.act_out.clip_hi.data.detach().clone()
             clip_lo = self.act_out.clip_lo.data.detach().clone()
-            for i in self.acts:
-                i.clip_hi.data.copy_(clip_hi)
-                i.clip_lo.data.copy_(clip_lo)
+            eps = (clip_hi - clip_lo) / (self.act_out.n_levels-1)
+
+        for i in self.acts:
+            if isinstance(i, PACTUnsignedAct):
+                i.clip_hi.data.copy_(torch.Tensor((eps * (self.n_levels-1),)))
+            else:
+                i.symm = True
+                i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
+                i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
+
 
     def forward(self, *x):
         if self.stack_flag:
@@ -634,7 +630,8 @@ class PACTIntegerConcat(torch.nn.Module):
         for idx, i in enumerate(z):
             z_act.append(self.acts[idx](i))
         y = torch.cat(z_act, dim=self.dim)
-        return y
+        out = self.act_out(y)
+        return out
 
 class PACTIntegerAdd(torch.nn.Module):
     r"""
@@ -1405,7 +1402,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
 class PACTHardswish(nn.Module):
     def __init__(self, eps_s : float):
         super(PACTHardswish, self).__init__()
-        self.eps_s = eps_s
+        self.eps_s = torch.Tensor([eps_s])
 
     def forward(self, x):
         inp = x
@@ -1433,8 +1430,27 @@ class PACTHardswish(nn.Module):
 
 
 class PACTIntegerHardswish(nn.Module):
-    def __init__(self, eps_in : float, eps_s : float):
+
+    class MyHardswish(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, three, six, one_over_six):
+            z = 0
+            inp = x
+            x = x + three
+            x = torch.clip(x, z, six)
+            x = x * one_over_six
+            return inp * x
+
+        @staticmethod
+        @parse_args('v', 'i', 'i', 'i')
+        def symbolic(g, x, three, six, one_over_six):
+            return g.op("PACTOps::iHardswish", x, three_i = three, six_i = six, one_over_six_i = one_over_six)
+
+    def __init__(self, eps_in : float, eps_s : float, export_node: bool = False):
         super(PACTIntegerHardswish, self).__init__()
+
+        self.export_node = export_node
         self.eps_in = eps_in
         self.eps_s = eps_s
         three = torch.tensor(3.)
@@ -1448,14 +1464,10 @@ class PACTIntegerHardswish(nn.Module):
         self.register_buffer("one_over_six", one_over_six_q)
 
     def forward(self, x):
-        z = torch.zeros.type_as(x)
-        inp = x
-        x = x + self.three
-        x = torch.clip(x, z, self.six)
-        x = x * self.one_over_six
-        return inp * x
-
-
+        if self.export_node:
+            return self.MyHardswish.apply(x, int(self.three.item()), int(self.six.item()), int(self.one_over_six.item()))
+        else:
+            return self.MyHardswish.forward(x, self.three, self.six, self.one_over_six)
 
 
 class PACTHardsigmoid(nn.Module):
@@ -2444,6 +2456,74 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         y = self.div(nom, denom) + b
         return y
 
+class PACTIntegerRMSNorm(torch.nn.Module):
+
+    class MyRMSNorm(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, weight, D, n_levels):
+            nom = x
+            denom = torch.floor(torch.sqrt(torch.floor(torch.mean(nom**2, len(x.shape)-1, keepdim=True))+1))
+
+            nom = nom * weight
+
+            y = (torch.div(nom,denom))
+
+            y = torch.floor(y/(D))
+            y = torch.clip(y, -n_levels//2, n_levels//2-1)
+            return y
+
+        @staticmethod
+        @parse_args('v','v','i','i')
+        def symbolic(g, x, weight, D, n_levels):
+
+            return g.op("PACTOps::iRMSNorm", x, weight, D_i=D, n_levels_i=n_levels)
+
+
+    def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), D=2**24, export_node=False, **kwargs):
+        super().__init__()
+
+        self.n_levels = torch.Tensor((n_levels,)).detach()
+
+        self.eps = torch.Tensor((eps_in,)).detach()
+        self.D = torch.Tensor((D,)).detach()
+
+        # dummyOne and dummyZero are there to have a comparison value on Multi-GPU systems to check if weight are used
+
+        self.floor = torch.Tensor((False,)).detach()
+        self.clip_gradient = torch.Tensor((True,)).detach()
+        self.noisy = torch.Tensor((False,)).detach()
+
+        # Maxval is used to track statistics
+        self.maxval = torch.Tensor((maxval,)).detach()
+
+        dummyOne =  torch.Tensor((1.,)).type_as(weight)
+
+        self.export_node = export_node
+
+        if not torch.equal(weight, dummyOne):
+            clip_lo = -torch.max(torch.abs(weight))
+            clip_hi = AlmostSymmQuantFunc.apply(clip_lo, n_levels)
+
+            eps_weights = (clip_hi-clip_lo)/(n_levels-1)
+
+            self.eps_weights =  eps_weights.detach()
+
+            self.register_buffer("weight", torch.Tensor(torch.round(PACTQuantize(weight, eps_weights, clip_lo, clip_hi, self.floor, self.clip_gradient, self.noisy) / eps_weights ).detach()))
+            self.register_buffer("totScaler", torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval * eps_weights ),)).detach())
+
+            self.weight *= self.totScaler
+
+        else:
+            self.register_buffer("totScaler",torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach())
+            self.register_buffer("weight",self.totScaler.clone().detach())
+
+    def forward(self, x):
+        if self.export_node:
+            return self.MyRMSNorm.apply(x, self.weight.type_as(x), int(self.D.item()), int(self.n_levels.item()))
+        else:
+            return self.MyRMSNorm.forward(None, x, self.weight.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+
 class PACTRMSNorm(_PACTEps, _PACTLinOp):
 
     def __init__(self, normalized_shape = None, weight = torch.Tensor((1.,)), eps=1e-3, *args, **kwargs):
@@ -3053,9 +3133,39 @@ class PACTIntegerDiv(nn.Module):
 
     def __init__(self, Delta, integer_node=True, eps=1., eta=1.):
         super().__init__()
-        self.register_buffer('Delta',torch.Tensor((Delta,)))
-        self.register_buffer('eps',torch.Tensor((eps,)))
-        self.register_buffer('eta', torch.Tensor((eta,)))
+        self.register_buffer('Delta',torch.Tensor((int(Delta),)))
+        self.register_buffer('eps',torch.Tensor((int(eps),)))
+        self.register_buffer('eta', torch.Tensor((int(eta),)))
+        self.integer_node = integer_node
+
+    def forward(self,x,y):
+
+        if not isinstance(y, torch.Tensor):
+            raise Exception("IntegerDiv trying to divide by const!")
+
+        if self.integer_node:
+            return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
+        else:
+            return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+
+class PACTTrueIntegerDiv(nn.Module):
+
+    class MyTrueIntegerDiv(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, y, Delta, eps, eta):
+            return torch.floor((x * Delta * eta / (y*eta + eps)) + 0.5)
+
+        @staticmethod
+        @parse_args('v','i','i', 'i', 'i')
+        def symbolic(g, x, y, Delta, eps, eta):
+            return g.op("PACTOps::TrueIntegerDiv", x, y_i = y, Delta_i = Delta, eps_i=eps, eta_i = eta)
+
+    def __init__(self, Delta, integer_node=True, eps=1., eta=1.):
+        super().__init__()
+        self.register_buffer('Delta',torch.Tensor((int(Delta),)))
+        self.register_buffer('eps',torch.Tensor((int(eps),)))
+        self.register_buffer('eta', torch.Tensor((int(eta),)))
         self.integer_node = integer_node
 
     def forward(self,x,y):
@@ -3066,10 +3176,15 @@ class PACTIntegerDiv(nn.Module):
         #         return x
         #     return x * self.Delta
 
+        if isinstance(y, torch.Tensor):
+            raise Exception("TrueIntegerDiv trying to divide by tensor!")
+
         if self.integer_node:
-            return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
+
+            return self.MyTrueIntegerDiv.apply(x,int(y),int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
         else:
-            return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+            return self.MyTrueIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+
 
 class PACTConstWrap(nn.Module):
     def __init__(self, eps=1.):
