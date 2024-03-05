@@ -2453,7 +2453,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         # clip it
         eps = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
         with torch.no_grad():
-            b = PACTQuantize(self.bias, eps, -2**16*self.get_eps_out(eps_in).flatten()*torch.ones_like(self.clip_lo), 2**16*self.get_eps_out(eps_in).flatten()q*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+            b = PACTQuantize(self.bias, eps, -2**16*self.get_eps_out(eps_in).flatten()*torch.ones_like(self.clip_lo), 2**16*self.get_eps_out(eps_in).flatten()*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
         return b
 
     # do not use in training!
