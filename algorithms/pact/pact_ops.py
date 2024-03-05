@@ -1051,7 +1051,7 @@ class PACTConv2d(nn.Conv2d, _PACTLinOp):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip it
         with torch.no_grad():
-            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -2**16*self.get_eps_out(eps_in)*torch.ones_like(self.clip_lo.flatten()), 2**16*self.get_eps_out(eps_in)*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
         return b
 
     # do not use in training!
@@ -1185,7 +1185,7 @@ class PACTConv1d(nn.Conv1d, _PACTLinOp):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip it
         with torch.no_grad():
-            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -2**16*self.get_eps_out(eps_in).*torch.ones_like(self.clip_lo.flatten()), 2**16*self.get_eps_out(eps_in)*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
         return b
 
     # do not use in training!
@@ -1309,7 +1309,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip itp
         with torch.no_grad():
-            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in).flatten(), -2**16*self.get_eps_out(eps_in).*torch.ones_like(self.clip_lo.flatten()), 2**16*self.get_eps_out(eps_in)*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
         return b
 
     # do not use in training!
@@ -1395,7 +1395,7 @@ class PACTLinear(nn.Linear, _PACTLinOp):
         # we assume that bias gets quantized to a really high bitwidth so don't
         # clip it
         with torch.no_grad():
-            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -1000.*torch.ones_like(self.clip_lo.flatten()), 1000.*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
+            b = PACTQuantize(self.bias, self.get_eps_out(eps_in), -2**16*self.get_eps_out(eps_in).*torch.ones_like(self.clip_lo.flatten()), 2**16*self.get_eps_out(eps_in).*torch.ones_like(self.clip_hi.flatten()), clip_gradient=self.clip_gradient, floor=False)
         return b
 
     # do not use in training!
@@ -2440,7 +2440,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         # clip it
         eps = self.div.get_eps_out(self.eps_in*self.get_eps_w(), self.eps_in)
         with torch.no_grad():
-            b = PACTQuantize(self.bias, eps, -1000.*torch.ones_like(self.clip_lo), 1000.*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
+            b = PACTQuantize(self.bias, eps, -2**16*self.get_eps_out(eps_in).*torch.ones_like(self.clip_lo), 2**16*self.get_eps_out(eps_in).*torch.ones_like(self.clip_hi), clip_gradient=self.clip_gradient)
         return b
 
     # do not use in training!

@@ -307,19 +307,9 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
         # DORY wants HWC tensors
         acts.append((lname, outp[0]))
 
-    int_acts_cnn = []
-    int_acts_tcn = []
-    def dump_hook_dbg(self, inp, outp, lname):
-        # DORY wants HWC tensors
-        int_acts_cnn.append((lname, outp[0]))
-
     for n, m in int_net_cnn.named_modules():
         if isinstance(m, (RequantShift, nn.MaxPool1d, nn.MaxPool2d, ChannelwiseThreshold)):
             hook = partial(dump_hook, lname=n)
-            m.register_forward_hook(hook)
-    for n, m in int_net_cnn.named_modules():
-        if isinstance(m, (nn.Conv2d)):
-            hook = partial(dump_hook_dbg, lname=n)
             m.register_forward_hook(hook)
     for n, m in int_net_tcn.named_modules():
         if isinstance(m, (RequantShift, nn.MaxPool1d, nn.MaxPool2d, nn.Linear, ChannelwiseThreshold)):
@@ -352,10 +342,7 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
         save_beautiful_text(cnn_win_out, f"output_{idx}", f"output_{idx}", out_path_cnn)
         for jdx, (lname, t) in enumerate(acts):
             save_beautiful_text(t, lname, f"out_{idx}_layer{jdx}", out_path_cnn)
-        for jdx, (lname, t) in enumerate(int_acts_cnn):
-            save_beautiful_text(t, lname, f"out_{idx}_layer{jdx}_dbg", out_path_cnn)
         acts = []
-        int_acts_cnn = []
     cnn_dory_config = {"BNRelu_bits": 32,
                        "onnx_file": str(onnx_path_cnn.resolve()),
                        "code reserved space": code_size,
@@ -364,6 +351,7 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
                        "input_signed": True,
                        "input_shape": list(shape_in_cnn[-3:]),
                        "output_shape": list(cnn_outs[0].shape[-2:])}
+
     with open(out_path_cnn.joinpath(f"config_{name}_cnn.json"), "w") as fp:
         json.dump(cnn_dory_config, fp, indent=4)
 
@@ -384,25 +372,14 @@ def export_dvsnet(net_cnn : nn.Module, net_tcn : nn.Module, name : str, out_dir 
     # finally, save the annotated ONNX model
     onnx.save(onnx_model_tcn, str(onnx_path_tcn))
     int_net_tcn = int_net_tcn.to(torch.float64)
-    int_acts_tcn = []
     acts = []
 
-    def dump_hook_dbg_tcn(self, inp, outp, lname):
-        # DORY wants HWC tensors
-        int_acts_tcn.append((lname, outp[0]))
-
-    for n, m in int_net_tcn.named_modules():
-        if isinstance(m, (nn.Conv1d)):
-            hook = partial(dump_hook_dbg_tcn, lname=n)
-            m.register_forward_hook(hook)
     output = int_net_tcn(tcn_input.to(dtype=torch.float64))
 
     save_beautiful_text(tcn_input, "input", "input", out_path_tcn)
     save_beautiful_text(output, "output", "output", out_path_tcn)
     for jdx, (lname, t) in enumerate(acts):
         save_beautiful_text(t, lname, f"out_layer{jdx}", out_path_tcn)
-    for jdx, (lname, t) in enumerate(int_acts_tcn):
-        save_beautiful_text(t, lname, f"out_layer{jdx}_dbg", out_path_tcn)
 
 
     int_net_tcn = int_net_tcn.to(torch.float64)
