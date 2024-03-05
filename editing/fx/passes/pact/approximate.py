@@ -6,7 +6,9 @@
 #
 # Copyright (C) 2021, ETH Zurich and University of Bologna.
 #
-# Author: Moritz Scherer, ETH Zurich
+# Authors: 
+# - Moritz Scherer, ETH Zurich
+# - Victor Jung, ETH Zurich
 #
 # ----------------------------------------------------------------------
 # SPDX-License-Identifier: Apache-2.0
@@ -23,55 +25,55 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union, Optional, Tuple, List, Literal
-from dataclasses import dataclass
+from typing import Literal, Callable, Union
 from functools import partial
-
-import numpy as np
-
 import torch
 from torch import fx, nn
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
+from .. import ReplaceSequentialPatternPass, SequentialPass
+from ...util import gm_modules
+from .pact_util import PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
-from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass
-from .. import AnnotateEpsPass, extract_eps
-from .. import MergeConvBNPass, RetracePass
-from ...util import gm_modules, module_of_node
-from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace, PACT_symbolic_trace_inclusive
+def replSoftmax(gm : fx.GraphModule, match : Match, mode: str):
+    if mode == "I-BERT":
+        replacement_class = PACTSoftmax()
+    elif mode=='ITA':
+        replacement_class = PACTITAMax()
+    elif mode=='ITA-Partial':
+        replacement_class = PACTITAPartialMax()
+
+    return replacement_class
 
 class ApproximateSoftmaxPass(SequentialPass):
-    def __init__(self, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):
+
+    modes = ["I-BERT", "ITA", 'ITA-Partial']
+
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
-
-        if mode=='I-BERT':
-            replacement_class = PACTSoftmax()
-        elif mode=='ITA':
-            replacement_class = PACTITAMax()
-        elif mode=='ITA-Partial':
-            replacement_class = PACTITAPartialMax()
-        else:
-            assert False, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
-    
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: replacement_class, f'_APPROXIMATE_SOFTMAX_PASS'))
-
+        assert mode in self.modes, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(replSoftmax, mode=mode), f'_APPROXIMATE_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_SOFTMAX_PASS')
 
 class ApproximateGELUPass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.GELU())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
+
+class ApproximateSiLUPass(SequentialPass):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, n_levels: int = 255, **kwargs):
+        passes = []
+        pattern = nn.Sequential(nn.SiLU())
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, lambda x,y: PACTHardswish(eps_s=1/n_levels), f'_APPROXIMATE_SILU_PASS'))
+        super().__init__(*passes, name_prefix='_APPROXIMATE_SILU_PASS')
 
 def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
     modules = gm_modules(gm)
-    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    layernorm_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     layernorm = matched_modules[0]
     assert isinstance(layernorm, nn.LayerNorm), f"layernorm_replacement_fun got bad match - expected LayerNorm, got {type(layernorm)}"
@@ -84,12 +86,11 @@ def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwarg
     return new_layernorm
 
 class CanonicalizeLayerNormPass(SequentialPass):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, *args, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.LayerNorm(1))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(layernorm_replacement_fun, *args, **kwargs), f'_CANONICALIZE_LAYERNORM_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(layernorm_replacement_fun, *args, **kwargs), f'_CANONICALIZE_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_CANONICALIZE_LAYERNORM_PASS')
-
 
 def embedding_replacement_fun(gm : fx.GraphModule, match : Match, n_levels: int = 256):
     modules = gm_modules(gm)
@@ -109,6 +110,26 @@ def embedding_replacement_fun(gm : fx.GraphModule, match : Match, n_levels: int 
     new_embedding = PACTEmbedding(n_levels, bias)
 
     return new_embedding
+
+def rmsnorm_replacement_fun(custom_module, gm : fx.GraphModule, match : Match, *args, **kwargs):
+    modules = gm_modules(gm)
+    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    rmsnorm = matched_modules[0]
+
+    assert isinstance(rmsnorm, type(custom_module)), f"rmsnorm_replacement_fun got bad match - expected LayerNorm, got {type(rmsnorm)}"
+
+    weight = rmsnorm._parameters['weight'].clone() if rmsnorm._parameters['weight'] is not None  else torch.Tensor((1.,))
+
+    new_rmsnorm = PACTRMSNorm(rmsnorm.weight.shape, weight, rmsnorm.variance_epsilon)
+
+    return new_rmsnorm
+
+class CanonicalizeRMSNormPass(SequentialPass):
+    def __init__(self, symbolic_trace: callable, custom_module, *args, **kwargs):
+        passes = []
+        pattern = nn.Sequential(custom_module)
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(rmsnorm_replacement_fun, custom_module, *args, **kwargs), f'_CANONICALIZE_RMSNORM_PASS'))
+        super().__init__(*passes, name_prefix='_CANONICALIZE_RMSNORM_PASS')
 
 class ProtoPACTEmbedding(torch.nn.Module):
 

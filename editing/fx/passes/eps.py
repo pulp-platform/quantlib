@@ -21,7 +21,7 @@
 #
 
 import copy
-from typing import Union, Optional
+from typing import Union, Optional, List
 from dataclasses import dataclass
 
 from collections.abc import Iterable
@@ -136,6 +136,7 @@ _EPS_CONVERSIONS = {
     PACTITAMax: eps_conversion_pact_softmax,
     PACTITAPartialMax: eps_conversion_pact_softmax,
     PACTLayerNorm : eps_conversion_pact_layernorm,
+    PACTRMSNorm : eps_conversion_pact_layernorm,
     PACTMean: eps_conversion_pact_mean,
     PACTSoftmax : eps_conversion_pact_softmax,
     PACTUnsignedAct : eps_conversion_pact_acts,
@@ -143,6 +144,7 @@ _EPS_CONVERSIONS = {
     PACTLinear : eps_conversion_pact_linears,
 
     PACTIntegerAdd : eps_conversion_pact_integeradd,
+    PACTIntegerConcat : eps_conversion_pact_integeradd,
     PACTIntegerGELU : eps_conversion_pact_gelu,
     PACTIntegerITAMax: eps_conversion_pact_softmax,
     PACTIntegerITAPartialMax: eps_conversion_pact_softmax,
@@ -201,12 +203,13 @@ _N_LEVELS_OUT_PROP = {
     PACTITAMax: n_levels_out_pact_acts,
     PACTITAPartialMax: n_levels_out_pact_acts,
     PACTLayerNorm : n_levels_out_pact_acts,
+    PACTRMSNorm : n_levels_out_pact_acts,
     PACTLinear : n_levels_out_pact_linears,
     PACTMean: n_levels_out_first_in,
     PACTSoftmax : n_levels_out_pact_acts,
     PACTUnsignedAct : n_levels_out_pact_acts,
     PACTWrapModule : n_levels_out_pact_acts,
-    
+
     PACTIntegerGELU : n_levels_out_pact_acts,
     PACTIntegerITAMax: n_levels_out_pact_acts,
     PACTIntegerITAPartialMax: n_levels_out_pact_acts,
@@ -333,6 +336,18 @@ class AnnotateEpsPass(FxPass):
         self.prop_n_levels = prop_n_levels
         self.prop_sign = prop_sign
 
+    @staticmethod
+    def _get_parents_eps_out(node: fx.node.Node) -> List:
+        return [i.meta['quant'].eps_out[0] for i in node.args[0]]
+    
+    @staticmethod
+    def _get_parents_n_levels_out(node: fx.node.Node) -> List:
+        return [i.meta['quant'].n_levels_out for i in node.args[0]]
+    
+    @staticmethod
+    def _get_parents_signed_out(node: fx.node.Node) -> List:
+        return [inp.meta['quant'].signed_out for inp in node.args[0]]
+
     def run_pass(self, gm : fx.GraphModule):
         modules = gm_modules(gm)
         placeHolderIdx = 0
@@ -389,6 +404,10 @@ class AnnotateEpsPass(FxPass):
                             print("[AnnotateEpsPass] Mismatching input epsilons in node with no eps propagation function! Eps propagation will likely be wrong!")
                             print(f"                    -> Node: {node.name}, Key: {k}, eps_in: {all_eps}")
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
+
+                        if node.op == "call_function" and node.target == torch.cat:
+                            all_eps = self._get_parents_eps_out(node)
+
                         eps_out = all_eps[0]
                 else:
                     eps_in = None
@@ -406,6 +425,10 @@ class AnnotateEpsPass(FxPass):
                             print("[AnnotateEpsPass] Mismatching input n_levels in node with no n_levels_out propagation function! n_levels propagation will likely be wrong!")
                             print(f"                    -> Node: {node.name}, Key: {k}, n_levels_in: {node_in_levels}")
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity n_level propagation on node with op {node.op}, target {node.target}!")
+
+                        if node.op == "call_function" and node.target == torch.cat:
+                            node_in_levels = self._get_parents_n_levels_out(node)
+
                         node_out_levels = node_in_levels[0]
                 else:
                     node_in_levels = None
@@ -424,6 +447,10 @@ class AnnotateEpsPass(FxPass):
                             print("[AnnotateEpsPass] Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!")
                             print(f"                    -> Node: {node.name}, Key: : {k}, signed_in: {node_in_signed}")
                             if (self.verbose): print(f"[AnnotateEpsPass] Using identity signed propagation on node with op {node.op}, target {node.target}!")
+
+                        if node.op == "call_function" and node.target == torch.cat:
+                            node_in_signed = self._get_parents_signed_out(node)
+
                         node_out_signed = node_in_signed[0]
                 else:
                     node_in_signed = None
