@@ -21,4 +21,4 @@
 
 from . import cutie
 from . import dory
-from . import deeploy
+#from . import deeploy #FIXME breaks due to onnxruntime being iffy - debug
