@@ -6,6 +6,8 @@ import torch
 from torch import nn, fx
 from torch.fx.subgraph_rewriter import Match
 from torch.nn.modules.utils import _single, _pair, _triple
+from torch.onnx.symbolic_helper import parse_args
+
 
 from quantlib.algorithms.pact import RequantShift
 from quantlib.editing.fx.passes import SequentialPass, ReplaceSequentialPatternPass, ShapePropPass
@@ -29,7 +31,7 @@ class RemoveRedundantGlobalPoolingPass(SequentialPass):
                        nn.AdaptiveMaxPool2d,
                        nn.AdaptiveMaxPool3d,)
 
-    # global avg/max pooling layers that don't do anything 
+    # global avg/max pooling layers that don't do anything
     @staticmethod
     def remove_redundant_pool(gm : fx.GraphModule, match : Match):
         n = get_ordered_active_nodes(match)
@@ -116,49 +118,37 @@ class AlignAvgPoolPass(SequentialPass):
 class DORYAdder(nn.Module):
     class DORYAdderFun(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x1, rq1, x2, rq2, rq_out):
-            if rq1:
-                x1 = rq1(x1)
-            if rq2:
-                x2 = rq2(x2)
+        def forward(ctx, x1, x2, params):
+            # 'params' should contain requantization parameters for both inputs
+            # and the outputs in a dict. input 1/2 parameters' keys start with
+            # 'in1_'/'in2_', output parameters' keys start with 'out_' expected
+            # parameter keys for each requantization are the respective prefix
+            # plus 'mul_i', 'add_i', 'shift_i', 'signed_i' and 'n_levels_i' -
+            # the 'i' stands for 'integer', it is used in ONNX export (see
+            # symbolic function) to indicate that the respective parameter is
+            # in fact an integer. In the exported graph, the '_i' suffix is
+            # discarded. 
+            params_x1 = {k[4:]:torch.tensor(v) for k,v in params.items() if k.startswith('in1')}
+            if params_x1['rq_i']:
+                x1 = RequantShift.MyRequantShift.forward(None, x1, params_x1['mul_i'], params_x1['add_i'], int(2**params_x1['shift_i']), params_x1['signed_i'], params_x1['n_levels_i'], False)
 
+            params_x2 = {k[4:]:torch.tensor(v) for k,v in params.items() if k.startswith('in2')}
+            if params_x2['rq_i']:
+                x2 = RequantShift.MyRequantShift.forward(None, x2, params_x2['mul_i'], params_x2['add_i'], int(2**params_x2['shift_i']), params_x2['signed_i'], params_x2['n_levels_i'], False)
             x_sum = x1 + x2
 
-            if rq_out:
-                x_sum = rq_out(x_sum)
+            #if rq_out:
+                #x_sum = rq_out(x_sum)
+            params_x_sum = {k[4:]:torch.tensor(v) for k,v in params.items() if k.startswith('out')}
+            if params_x_sum['rq_i']:
+                x_sum = RequantShift.MyRequantShift.forward(None, x_sum, params_x_sum['mul_i'], params_x_sum['add_i'], int(2**params_x_sum['shift_i']), params_x_sum['signed_i'], params_x_sum['n_levels_i'], False)
 
             return x_sum
 
         @staticmethod
-        def symbolic(g, x1, rq1, x2, rq2, rq_out):
-
-            params = {}
-            out_signed_inferred = False
-            for module, name in [(rq1, "in1"), (rq2, "in2"), (rq_out, "out")]:
-                if module:
-                    mul = int(module.mul.item())
-                    add = int(module.add.item())
-                    shift = int(np.log2(module.div.item()))
-                    n_l = int(module.n_levels_out.item())
-                    requant = 1
-                    out_signed_inferred |= module.signed
-                else:
-                    mul = 1
-                    add = 0
-                    shift = 0
-                    n_l = 256
-                    requant = 0
-                if name == "out":
-                    if module:
-                        params["out_signed_i"] = int(module.signed)
-                    else:
-                        params["out_signed_i"] = int(out_signed_inferred)
-                
-                params[f"{name}_mul_i"] = mul
-                params[f"{name}_add_i"] = add
-                params[f"{name}_shift_i"] = shift
-                params[f"{name}_n_levels_i"] = n_l
-                params[f"{name}_rq_i"] = requant
+        def symbolic(g, x1, x2, params):
+            # 'in{1/2}_signed' are inferred automatically by DORY
+            params = {k:v for k,v in params.items() if k not in ['in1_signed', 'in2_signed']}
             ret = g.op("Add", x1, x2, **params)
             ret.setType(x1.type())
             return ret
@@ -175,7 +165,33 @@ class DORYAdder(nn.Module):
 
 
     def forward(self, x1, x2):
-        return self.DORYAdderFun.apply(x1, self.in1_requant, x2, self.in2_requant, self.out_requant)
+        params = {}
+        out_signed_inferred = False
+        for module, name in [(self.in1_requant, "in1"), (self.in2_requant, "in2"), (self.out_requant, "out")]:
+            if module:
+                mul = int(module.mul.item())
+                add = int(module.add.item())
+                shift = int(np.log2(module.div.item()))
+                n_l = int(module.n_levels_out.item())
+                requant = 1
+                signed = int(module.signed)
+                out_signed_inferred |= module.signed
+            else:
+                mul = 1
+                add = 0
+                shift = 0
+                n_l = 256
+                requant = 0
+                signed = False
+
+            params[f"{name}_signed_i"] = signed if (name != 'out' or module) else out_signed_inferred
+            params[f"{name}_mul_i"] = mul
+            params[f"{name}_add_i"] = add
+            params[f"{name}_shift_i"] = shift
+            params[f"{name}_n_levels_i"] = n_l
+            params[f"{name}_rq_i"] = requant
+
+        return self.DORYAdderFun.apply(x1, x2, params)
 
 
 class DORYReplaceAddersPass(OpTreeReplacementPass):
@@ -252,8 +268,9 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
     def run_pass(self, gm : fx.GraphModule):
         gm = super(DORYReplaceAddersPass, self).run_pass(gm)
         def remove_node_and_module(gm : fx.GraphModule, n : fx.Node):
-            assert len(n.all_input_nodes) == 1, "DORYReplaceAddersPass: Can't remove node with multiple inputs!"
-            n.replace_all_uses_with(n.all_input_nodes[0])
+            assert len(n.all_input_nodes) <= 1, "DORYReplaceAddersPass: Can't remove node with multiple inputs!"
+            if len(n.all_input_nodes) == 1:
+                n.replace_all_uses_with(n.all_input_nodes[0])
             gm.graph.erase_node(n)
             if n.op == 'call_module':
                 gm.delete_submodule(n.target)
@@ -281,5 +298,3 @@ class DORYHarmonizePass(SequentialPass):
         passes.append(AlignAvgPoolPass())
         passes.append(RemoveRedundantGlobalPoolingPass())
         super(DORYHarmonizePass, self).__init__(*passes)
-
-

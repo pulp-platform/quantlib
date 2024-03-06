@@ -37,6 +37,11 @@ from ...util import gm_modules, module_of_node, get_ordered_active_nodes
 from .. import FxPass, ReplaceSequentialPatternPass, SequentialPass, ShapePropPass, ModularizePass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
+from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBNBetweenBiasedConvAndActsPass, RQSMergePass
+from ...util import gm_modules, module_of_node, get_ordered_active_nodes, modules_of_match
+from ...util.tracing import LeafTracer, custom_symbolic_trace
+
+from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold
 
 
 __all__ = ['IntegerizePACTConvPass',
@@ -219,10 +224,14 @@ class IntegerizeHardswishPass(SequentialPass):
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
+    matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
+    conv_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    eps_in = extract_eps(conv_node.meta['quant'].eps_in)
     conv = matched_modules[0]
     assert isinstance(conv, (PACTConv1d, PACTConv2d)), f"integerize_pact_conv_fun got bad match - expected PACTConv, got {type(conv)}"
-    assert conv.bias is None, "integerize_pact_conv_fun: Conv layer has bias"
+    if conv.bias is not None:
+        print(f"integerize_pact_conv_fun: WARNING - FOUND CONV LAYER WITH BIAS; MAKE SURE THIS IS INTENDED!\nLAYER NAME: {conv_node.target}")
     conv_type = nn.Conv2d if isinstance(conv, PACTConv2d) else nn.Conv1d
     pm = 'zeros' if conv.padding_mode == 'eps' else conv.padding_mode
     new_conv = conv_type(in_channels=conv.in_channels,
@@ -232,13 +241,15 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
                          padding=conv.padding,
                          dilation=conv.dilation,
                          groups=conv.groups,
-                         bias=None,
+                         bias=conv.bias is not None,
                          padding_mode=pm)
     try:
         new_conv.weight.data.copy_(conv.weight_int)
     except RuntimeError as e:
         import ipdb; ipdb.set_trace()
 
+    if conv.bias is not None:
+        new_conv.bias.data.copy_(conv.get_bias_int(eps_in))
     # annotate the new conv with the number of levels
     new_conv.n_levels = conv.n_levels
 
@@ -453,11 +464,12 @@ class IntegerizeBNActPass(SequentialPass):
 def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_style_threshs=False):
     modules = dict(gm.named_modules())
     matched_nodes = [n for n in match.nodes_map.values()][-2:0:-1]
-    matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
+    matched_modules = modules_of_match(gm, match)
     assert len(matched_nodes) == len(matched_modules), "conv_bn_act_to_conv_threshold_fun got unexpected non-'call_module' nodes!"
     conv = matched_modules[0]
     conv_node = matched_nodes[0]
     assert isinstance(conv, (nn.Conv1d, nn.Conv2d)), f"conv_bn_act_to_conv_threshold_fun called on incompatible Conv layer {type(conv)}"
+    conv_type = nn.Conv1d if isinstance(conv, nn.Conv1d) else nn.Conv2d
     if len(matched_modules) == 2:
         act = matched_modules[1]
         act_node = matched_nodes[1]
@@ -469,32 +481,25 @@ def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_
         bn = matched_modules[1]
         bn_node = matched_nodes[1]
         assert isinstance(bn, (nn.BatchNorm1d, nn.BatchNorm2d)), f"conv_bn_act_to_conv_threshold_fun called on incompatible BN layer {type(bn)}"
-    assert isinstance(act, (PACTUnsignedAct)), f"conv_bn_act_to_conv_threshold_fun called on incompatible activation {type(act)}"
-
-    eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze() # todo: ist this correct for the first activation (eps_in=1*eps_w)?
+    assert isinstance(act, (PACTUnsignedAct, PACTAsymmetricAct)), f"conv_bn_act_to_conv_threshold_fun called on incompatible activation {type(act)}"
+    signed_out = not isinstance(act, PACTUnsignedAct)
+    prev_node = conv_node.args[0]
+    eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze() 
     eps_out = act_node.meta['quant'].eps_out.cpu().clone().detach().squeeze()
-    prev_eps_out = eps_in[0] / conv.get_eps_w()[0].squeeze() # TODO: is this correct?
-    # TODO: what should I do if there is no BN and/or an identity operation?
-    # if the requant node would perform an identity operation, don't insert it.
-    if eps_in.numel() == eps_out.numel() == 1 and eps_in == eps_out and bn is None:
-        return None
+    prev_eps_out = prev_node.meta['quant'].eps_out
 
     if conv.bias is None:
         bias = torch.zeros(conv.out_channels)
     else:
         bias = conv.bias.data
 
-    for pos, node in enumerate(gm.graph.nodes):
-        if node == conv_node or pos > 1:
-            break
-    assert node.op == 'call_module'
-
-    # Is this too hacky?
-    if pos == 1: # if the position of the node in the graph is 1, then it is the first node
+    # if the last layer had an unsigned (PACTUnsignedAct) output, we need to
+    # compensate for this
+    unsigned_indicator = int(not signed_out)
+    if prev_node.meta['quant'].signed_out: # if the position of the node in the graph is 1, then it is the first node
         bias_hat = bias
     else:
-        bias_add = conv.weight_q.sum(dim=(1,2,3)) \
-            if len(conv.weight_q.shape)==4 else conv.weight_q.sum(dim=(1,2))
+        bias_add = conv.weight_q.sum(dim=(1,2,3)) if len(conv.weight_q.shape)==4 else conv.weight_q.sum(dim=(1,2))
         bias_add *= prev_eps_out
         bias_hat = bias + bias_add
 
@@ -505,8 +510,8 @@ def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_
         beta_hat += bn.bias.data
         gamma_hat *= bn.weight.data
 
-    thresh_lo = (0.5*eps_out-beta_hat)/(gamma_hat*eps_in)
-    thresh_hi = (1.5*eps_out-beta_hat)/(gamma_hat*eps_in)
+    thresh_lo = ((-0.5 + unsigned_indicator)*eps_out-beta_hat)/(gamma_hat*eps_in)
+    thresh_hi = ((0.5 + unsigned_indicator)*eps_out-beta_hat)/(gamma_hat*eps_in)
     # if some gamma_hats/gammas are negative, the smaller than/larger than relationships are flipped there.
     # the weights in the convolution preceding the BN will be flipped for those channels, so we can simply flip the
     # thresholds. Important: flip BEFORE rounding otherwise they will be off by one :)
@@ -533,7 +538,7 @@ def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_
                         dilation=conv.dilation,
                         groups=conv.groups,
                         bias=None,
-                        padding_mode=conv.padding_mode)
+                        padding_mode='zeros')
     new_conv.weight.data.copy_(conv.weight_int)
 
     new_conv.n_levels = conv.n_levels
@@ -542,7 +547,7 @@ def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_
         n_d = 1
     else:
         n_d = 2
-    threshold_module = ChannelwiseThreshold(thresh_lo, thresh_hi, n_dim=n_d)
+    threshold_module = ChannelwiseThreshold(thresh_lo, thresh_hi, n_dim=n_d, signed_out=signed_out)
     replacement_sequence = nn.Sequential(new_conv, threshold_module)
 
     return replacement_sequence
@@ -556,11 +561,12 @@ class TernarizeConvBNActPass(SequentialPass):
             for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
                 for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d)]:
                     pattern = nn.Sequential(conv_type(1,1,1), bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-                    passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, ternarize_conv_bn_act_fun, f"_{bn_name}_{act_name}_TO_THRESHOLD_PASS"))
+                    passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, conv_bn_act_to_conv_threshold_fun, f"_{bn_name}_{act_name}_TO_THRESHOLD_PASS"))
 
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
             pattern = nn.Sequential(conv_type(1,1,1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-            passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, ternarize_conv_bn_act_fun, f"_{act_name}_TO_THRESHOLD_PASS"))
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, conv_bn_act_to_conv_threshold_fun, f"_{act_name}_TO_THRESHOLD_PASS"))
+
 
         super(TernarizeConvBNActPass, self).__init__(*passes, name_prefix="_BN_ACT_TO_THRESHOLD_PASS")
 
@@ -589,16 +595,21 @@ class IntegerizeEmbeddingsPass(SequentialPass):
 
 class FixChannelNumbersPass(FxPass):
 
-    def __init__(self, word_align : bool=False):
+    def __init__(self, word_align : bool=False, compressed : bool=False):
         super(FixChannelNumbersPass, self).__init__()
         self.word_align = word_align
+        self.compressed = compressed
+
     def retarget(self, gm : fx.GraphModule):
         self.visited_nodes = set()
 
-    def fix_conv_channels(self, gm : fx.GraphModule, node : fx.Node, force_out_channels : int):
+    def fix_conv_channels(self, gm : fx.GraphModule, node : fx.Node, force_out_channels : int, bw_out : int = 0):
         if node.op == 'call_module' and node not in self.visited_nodes:
             module = module_of_node(gm, node)
-            alignment = 32 if self.word_align else 8
+            if not self.compressed:
+                alignment = 32 if self.word_align else 8
+            else:
+                alignment = 40 if self.word_align else 10
             if isinstance(module, (PACTConv1d, PACTConv2d)):
                 conv_levels = module.n_levels
                 bw_in = int(np.ceil(np.log2(node.meta['quant'].n_levels_in)))
@@ -621,6 +632,16 @@ class FixChannelNumbersPass(FxPass):
                 new_weights = torch.zeros(tuple([new_out_ch, (new_in_ch//new_groups)]+[k for k in module.kernel_size])).type_as(module.weight.data)
                 new_weights[:out_ch, :in_ch, ...] = module.weight.data
                 module.weight.data = new_weights
+                # [out_ch, 1, 1, 1] for 2d, [out_ch, 1, 1] for 1d
+                clip_size = [new_out_ch] + [1] * (len(module.weight.data.shape) -1)
+
+                new_clip_lo = -torch.ones(tuple(clip_size))
+                new_clip_hi = torch.ones(tuple(clip_size))
+                new_clip_lo[:out_ch] = module.clip_lo.data
+                new_clip_hi[:out_ch] = module.clip_hi.data
+                module.clip_lo.data = new_clip_lo
+                module.clip_hi.data = new_clip_hi
+
                 if module.bias is not None and force_out_channels > 0:
                     new_bias = torch.zeros([new_out_ch]).type_as(module.bias.data)
                     new_bias[:out_ch] = module.bias.data
@@ -632,22 +653,33 @@ class FixChannelNumbersPass(FxPass):
                 self.visited_nodes.add(node)
                 self.fix_conv_channels(gm, node.all_input_nodes[0], new_in_ch)
             elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                n_ch = module.num_features
+                new_out_ch = n_ch
                 if force_out_channels > 0:
-                    n_ch = module.num_features
+                    new_out_ch = force_out_channels
+                elif bw_out > 0:
+                    extra_out_channels = (-n_ch) % int(np.ceil(alignment/bw_out))
+                    new_out_ch = n_ch + extra_out_channels
+                if new_out_ch > n_ch:
                     def pad_bn_param(t : torch.Tensor, val : float):
-                        new_param = torch.full([force_out_channels], val).type_as(module.bias.data)
+                        new_param = torch.full([new_out_ch], val).type_as(module.bias.data)
                         new_param[:n_ch] = t
                         return new_param
                     module.bias.data = pad_bn_param(module.bias.data, 0.)
                     module.weight.data = pad_bn_param(module.weight.data, 1.)
                     module.running_mean = pad_bn_param(module.running_mean, 0.)
                     module.running_var = pad_bn_param(module.running_var, 1.)
-                    print(f"Adjusting BN {node.target}'s channels: {module.num_features} ==> {force_out_channels}")
-                    module.num_features = force_out_channels
+                    print(f"Adjusting BN {node.target}'s channels: {module.num_features} ==> {new_out_ch}")
+                    module.num_features = new_out_ch
                 self.visited_nodes.add(node)
-                self.fix_conv_channels(gm, node.all_input_nodes[0], force_out_channels)
+                self.fix_conv_channels(gm, node.all_input_nodes[0], new_out_ch)
             # naively assume that number of channels is propagated through any
-            # other module type
+            # other module type; if we have a quantized activation at the end of the
+            # network, perform output channel alignment
+            elif isinstance(module, (_PACTActivation,)):
+                self.visited_nodes.add(node)
+                for inp in node.all_input_nodes:
+                    self.fix_conv_channels(gm, inp, force_out_channels, np.ceil(np.log2(node.meta['quant'].n_levels_out)))
             else:
                 self.visited_nodes.add(node)
                 for inp in node.all_input_nodes:
@@ -816,7 +848,8 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
 
 
 class IntegerizePACTNetPass(SequentialPass):
-    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, D : float = 2**24, enable_add_first=False,
+    def __init__(self, shape_in, eps_in : Optional[Union[torch.Tensor, float]] = None, signed_in : bool = True,
+                 D : float = 2**24, enable_add_first=False,
                  requant_node=False, n_levels_in : int = 256, fix_channel_numbers=False,
                  convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12,
                  ternarize : bool = False, word_align_channels : bool = False,
@@ -848,14 +881,14 @@ class IntegerizePACTNetPass(SequentialPass):
         # convolutions with biases into batch norms
         passes.append(MergeConvBNPass(symbolic_trace))
         # second step: annotate epsilons and n_levels
-
-
+        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, signed_in=signed_in, verbose=verbose))
         # JUNGVI: RetracePass destroy the activation after the first PACTRMSNorm!!!
-        passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
         passes.append(IntegerizeRMSNormPass(D=D, symbolic_trace=symbolic_trace, export_rmsnorm_node=export_rmsnorm_node))
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
-            passes.append(FixChannelNumbersPass(word_align=word_align_channels))
+            passes.append(FixChannelNumbersPass(word_align=word_align_channels, compressed=ternarize))
+        # second step: annotate epsilons and n_levels
+        #passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
         # with epsilons annotated everywhere, we can integerize linear
         # functions (conv and FC)
         if ternarize:

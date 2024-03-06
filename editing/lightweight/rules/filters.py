@@ -112,7 +112,6 @@ class AndFilter(Filter):
 class VariadicOrFilter(Filter):
 
     def __init__(self, *filters: Filter):
-        assert len(filters) >= 2
         super(VariadicOrFilter, self).__init__()
         self._filters = filters
 
@@ -138,7 +137,7 @@ class VariadicAndFilter(Filter):
         filtered_nodes = nodes_list
         for f in self._filters:
             filtered_nodes = f(filtered_nodes)
-        return filtTypeFilterered_nodes
+        return filtered_nodes
 
     def __repr__(self):
         return "".join(["("] + [repr(f) + " & " for f in self._filters[:-1]] + [repr(self._filters[-1]), ")"])

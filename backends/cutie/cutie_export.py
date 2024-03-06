@@ -1,24 +1,24 @@
-# 
+#
 # export_tnn.py
-# 
+#
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Joan Mihali
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 import os
 
 import torch
@@ -157,7 +157,7 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
         prev_act_eps = prev_act_node.get_eps()
     else:
         prev_act_eps = torch.ones([])
-    
+
     unsigned_indicator = 1. if isinstance(act_node, PACTUnsignedAct) else 0.
     prev_unsigned = isinstance(prev_act_node, PACTUnsignedAct)
     if not first_layer and prev_unsigned:
@@ -172,11 +172,11 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
         dims_to_sum = (1,2,3)
     else:
         dims_to_sum = (1,2)
-        
+
     bias_add = weights_to_sum.sum(dim=dims_to_sum)
-    bias_add *= torch.tensor(prev_act_eps * eps_w).squeeze() 
+    bias_add *= torch.tensor(prev_act_eps * eps_w).squeeze()
     bias_hat = bias + bias_add
-    
+
 
     beta_hat = (bias_hat - bn_node.running_mean.data)/torch.sqrt(bn_node.running_var.data+bn_node.eps)
     gamma_hat = 1/torch.sqrt(bn_node.running_var.data+bn_node.eps)
@@ -294,7 +294,7 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
             else:
                 bias = torch.zeros(conv_node.module.out_channels)
 
-            
+
             weights_sum = weights_to_sum.sum(dim=(1,2))
             argmax_offsets = bias/(prev_activation_eps*eps_w.reshape((-1)))
             if isinstance(prev_s[-1].module, PACTUnsignedAct):
@@ -315,11 +315,11 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
                 conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_frozen)
             else:
                 assert False, f"Classifier of unknown class {type(conv_node.module)}"
-            
+
 
             conv_node.module.bias = None
 
-            
+
             # .. and we are done - move back to GPU!
             dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             net.to(device=dev)
